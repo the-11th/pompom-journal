@@ -17,6 +17,7 @@ from flask import Flask, flash, jsonify, redirect, render_template, request, url
 import fitbit
 import integrations
 import journal
+import rescuetime
 import todo
 
 app = Flask(__name__)
@@ -977,6 +978,66 @@ def fitbit_disconnect():
     integrations.save(integrations_file(), data)
     flash("Fitbit disconnected.")
     return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/rescuetime/key", methods=["POST"])
+def rescuetime_key():
+    data = integrations.load(integrations_file())
+    integrations.set_api_key(data, "rescuetime", request.form.get("api_key", "").strip())
+    integrations.save(integrations_file(), data)
+    flash("RescueTime API key saved.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/rescuetime/disconnect", methods=["POST"])
+def rescuetime_disconnect():
+    data = integrations.load(integrations_file())
+    integrations.clear_provider(data, "rescuetime")
+    integrations.save(integrations_file(), data)
+    flash("RescueTime disconnected.")
+    return redirect(url_for("integrations_page"))
+
+
+def _rescuetime_sync(force=False, focus_date=None, now=None):
+    istore = integrations.load(integrations_file())
+    if not integrations.is_connected(istore, "rescuetime"):
+        return {"connected": False, "synced": [], "errors": []}
+    key = integrations.get_provider(istore, "rescuetime").get("api_key")
+    jdata = journal.load(journal_file())
+    synced, errors = [], []
+    try:
+        rows = rescuetime.fetch_daily_summary(key)
+    except Exception as exc:  # noqa: BLE001
+        return {"connected": True, "synced": [], "errors": [str(exc)]}
+    for row in rows:
+        try:
+            day = rescuetime.parse_day(row, now=now)
+            date = day.get("date")
+            if not date:
+                continue
+            existing = journal.get_entry_by_date(jdata, date)
+            if not force and existing is not None and existing.get("rescuetime"):
+                continue
+            journal.set_entry_rescuetime(jdata, date, day)
+            synced.append(date)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{row.get('date')}: {exc}")
+    journal.save(journal_file(), jdata)
+    integrations.set_last_sync(istore, "rescuetime",
+                               (now or datetime.now()).replace(microsecond=0).isoformat())
+    integrations.save(integrations_file(), istore)
+    return {"connected": True, "synced": synced, "errors": errors}
+
+
+@app.route("/integrations/rescuetime/sync", methods=["POST"])
+def rescuetime_sync_route():
+    focus = request.args.get("date")
+    result = _rescuetime_sync(focus_date=focus)
+    data = {}
+    if focus and result["connected"]:
+        entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
+        data = {focus: (entry or {}).get("rescuetime")}
+    return jsonify({"ok": True, **result, "data": data})
 
 
 if __name__ == "__main__":

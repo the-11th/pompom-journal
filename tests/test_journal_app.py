@@ -873,3 +873,44 @@ def test_entry_shows_no_sleep_data_when_connected_empty(client, app):
     resp = client.get("/journal")
     assert resp.status_code == 200
     assert b"No sleep data" in resp.data
+
+
+# --------------------------------------------------------------------------- #
+# Task 5: RescueTime routes
+# --------------------------------------------------------------------------- #
+
+def test_rescuetime_save_key(client, app):
+    client.post("/integrations/rescuetime/key", data={"api_key": "KEY123"})
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    assert d["rescuetime"]["api_key"] == "KEY123"
+    assert I.is_connected(d, "rescuetime")
+
+
+def test_rescuetime_sync_writes_entries(client, app, monkeypatch):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_api_key(d, "rescuetime", "KEY123")
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+        lambda key, transport=None: [
+            {"date": "2026-06-28", "productivity_pulse": 70,
+             "all_productive_hours": 2.0, "total_hours": 3.0}])
+    r = client.post("/integrations/rescuetime/sync?date=2026-06-28")
+    body = r.get_json()
+    assert body["ok"] and body["connected"]
+    assert "2026-06-28" in body["synced"]
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    assert journal.get_entry_by_date(jdata, "2026-06-28")["rescuetime"]["pulse"] == 70
+
+
+def test_rescuetime_sync_not_connected(client, app):
+    body = client.post("/integrations/rescuetime/sync").get_json()
+    assert body["ok"] and body["connected"] is False
+
+
+def test_rescuetime_disconnect(client, app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_api_key(d, "rescuetime", "KEY123")
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    client.post("/integrations/rescuetime/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "rescuetime")
