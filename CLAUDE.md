@@ -35,10 +35,18 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 - **`journal.py`** — all journal domain logic, zero Flask imports. Same pattern as
   `todo.py`. Imports only `todo.py`'s pure validators (`_HEX_COLOR_RE`,
   `_TAG_NAME_RE`) so hex/name validation has a single source of truth.
+- **`fitbit.py`** — pure Fitbit API client, zero Flask imports. Network access is
+  isolated behind an injectable `transport(method, url, headers, body) -> (status,
+  json)` callable (default `_urllib_transport`, stdlib urllib); tests pass a fake
+  so no test hits the network. See the Integrations section below.
+- **`integrations.py`** — third-party credential/token store, zero Flask imports.
+  Same forgiving-load/atomic-save pattern as `journal.py`/`todo.py`. See the
+  Integrations section below.
 - **`app.py`** — thin HTTP layer only: parse request, call domain module, render
   template, redirect. All state-changing routes use **Post/Redirect/Get** and
-  `flash()` for validation errors. Config keys `DATA_FILE` and `JOURNAL_FILE` let
-  tests point at temp files. Also owns the auto-quit watchdog (see below).
+  `flash()` for validation errors. Config keys `DATA_FILE`, `JOURNAL_FILE`, and
+  `INTEGRATIONS_FILE` let tests point at temp files. Also owns the auto-quit
+  watchdog (see below).
 - **`start_server.py`** — double-fork daemon launcher used by `TodoPup.command`
   and the Automator dock app. Starts Flask detached from the calling process so
   macOS Shortcuts/Automator exits immediately rather than waiting for Flask.
@@ -49,11 +57,17 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   tasks), `tags` (name → hex color registry).
 - **`data/journal.json`** — journal store: `sections` (list), `entries` (list),
   `dismissed_suggestions` (`{word: "YYYY-MM-DD"}` — when each Manage-page tag
-  suggestion was dismissed; words are suppressed for a 30-day cooldown).
+  suggestion was dismissed; words are suppressed for a 30-day cooldown). Each
+  entry also has a `sleep` field (structured dict or null, defaulted by `load()`).
+- **`data/integrations.json`** — third-party credential/token store (gitignored
+  via the existing `data/*` rule). Top-level keys: `fitbit`, `rescuetime`,
+  `spotify` (rescuetime/spotify are deferred; the store is shaped for them).
 
-Both use forgiving `load()` (missing keys defaulted, corrupt files backed up to
-`.bak`) and atomic `save()` (temp file + `os.replace`). Extend `load()` and
-`_empty()` whenever you add a new top-level key or field.
+All three stores use forgiving `load()` (missing keys defaulted, corrupt files
+backed up to `.bak`) and atomic `save()` (temp file + `os.replace`). Extend
+`load()` and `_empty()` whenever you add a new top-level key or field — including
+new entry fields like `sleep` (handled via `e.setdefault("sleep", None)` in
+`journal.load()`).
 
 - **`data/server.log`** — Flask stdout/stderr when launched via the dock app.
 
@@ -111,7 +125,8 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
 One entry per calendar date (date is the unique key). Fields: `id` (uuid4 hex),
 `date` (YYYY-MM-DD), `title`, `body`, `created`, `updated`,
 `tags` (`{section_id: [tag names]}`), `numbers` (`{section_id: float}`),
-`mood` (integer 1–7, or null).
+`mood` (integer 1–7, or null), `sleep` (structured dict or null — see the
+Integrations section for the full model; defaults to null via `load()`).
 
 ### Section model
 
@@ -220,7 +235,9 @@ health, work.
 
 `journal_entry.html` (entry form with calendar, tag chips, numeric inputs, action
 row), `journal_search.html` (live search), `journal_sections.html` (section
-management), `journal_sections_archive.html` (archived sections & tags).
+management), `journal_sections_archive.html` (archived sections & tags),
+`integrations.html` (Fitbit settings page: credentials form, connect/disconnect,
+sync status, "Sync now" button).
 
 ### Static JS / CSS notes
 
@@ -243,6 +260,13 @@ management), `journal_sections_archive.html` (archived sections & tags).
 - **`journal-richtext.js`**: click-to-edit body rendering (inline formatting +
   color-coded `@mentions`) and live mention→chip reflection.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
+- **`fitbit-sync.js`** (journal entry page only, loaded via `base.html` when
+  Fitbit is connected): auto-syncs the last 7 days of sleep in the background on
+  page load (throttled to once per hour via `data-last-sync` on the sleep panel);
+  re-renders the read-only **sleep panel** in place (builds via `textContent`, not
+  `innerHTML`). The "Sync now" buttons on both the entry page (`#fitbit-sync-entry`)
+  and the settings page (`#fitbit-sync-now`) call the same sync path; the settings
+  button additionally reloads the page afterward.
 - **`journal-sections.js`**: drag-and-drop tag reassignment on the manage page
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the
@@ -258,7 +282,10 @@ management), `journal_sections_archive.html` (archived sections & tags).
   `--panel`, `--text`, `--muted`, `--border`, `--accent` (#e0a955 amber),
   `--danger` (#e0524d red). All `<select>` elements use a custom SVG caret
   (`appearance: none`) matching the dark theme. The permanent/temporary tag kind
-  picker is a `.kind-toggle` segmented radio control (not a `<select>`).
+  picker is a `.kind-toggle` segmented radio control (not a `<select>`). Integrations
+  styles: `.integration-card`, `.integration-creds`, `.integration-status.on/.off`.
+  Sleep panel styles: `.sleep-panel`, `.sleep-times`, `.sleep-qual`,
+  `.sleep-stage-legend` (bedtime/wake consistency legend).
 - **Styling is mandatory for all new UI.** Every new feature MUST match the dark
   amber/monospace theme — no native/unstyled browser chrome. Concretely: use the
   `:root` CSS variables (never hardcode theme colors); route every `<select>`
@@ -381,6 +408,113 @@ Tag-detail `.deep-*`/`.callout*`/`.cooc-*`).
 
 ---
 
+## Integrations
+
+Third-party data providers fill structured fields on journal entries automatically.
+The integration layer follows the same pure-logic/thin-HTTP split as the rest of
+the app: all provider logic lives in dedicated pure modules; `app.py` only routes.
+
+### `fitbit.py` — Fitbit client (zero Flask)
+
+Injectable `transport(method, url, headers, body) -> (status, json)` seam; default
+`_urllib_transport` uses stdlib `urllib`. Tests pass a fake — no test hits the
+network.
+
+- `build_authorize_url(client_id, redirect_uri, state, scope="sleep")` → URL.
+  Authorization Code Grant at `https://www.fitbit.com/oauth2/authorize`.
+- `exchange_code(client_id, client_secret, code, redirect_uri, transport=None, now=None)` — POST to `https://api.fitbit.com/oauth2/token` with HTTP Basic auth (`client_id:client_secret`), `grant_type=authorization_code`.
+- `refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None)` — same endpoint, `grant_type=refresh_token`.
+- `token_expired(tokens, now=None)` → bool. 60-second skew margin against `expires_at`.
+- `fetch_sleep(access_token, date, transport=None)` → raw API JSON. Calls `GET https://api.fitbit.com/1.2/user/-/sleep/date/<YYYY-MM-DD>.json`; raises `PermissionError` on 401.
+- `parse_sleep(api_json, now=None)` → sleep dict or `None`. Pure. Picks the record with `isMainSleep == true`, falls back to the longest by `minutesAsleep`; naps are ignored. `quality = score if score is not None else efficiency`. `stages` (`{deep, light, rem, wake}` minutes) is `None` for classic (non-staged) sleep.
+- `normalize_token_response(raw, now=None)` → `{access_token, refresh_token, scope, expires_at, fetched}`.
+
+### `integrations.py` — credential/token store (zero Flask)
+
+Same forgiving-load/atomic-save pattern as `journal.py`.
+
+- `_empty()` → `{"fitbit": {}, "rescuetime": {}, "spotify": {}}` (rescuetime/spotify deferred; store is shaped for them).
+- `load(path)` / `save(path, data)` — forgiving read (missing → empty; corrupt → `.bak` + empty), atomic write.
+- Accessors: `get_provider`, `set_credentials`, `set_tokens`, `clear_provider`
+  (removes `tokens`, `last_sync`, `oauth_state`), `is_connected`, `last_sync`,
+  `set_last_sync`.
+
+Stored in `data/integrations.json` (covered by the existing `data/*` gitignore).
+
+### Entry `sleep` field
+
+Added by auto-sync; `None` when no Fitbit data. `journal.load()` defaults every
+entry's `sleep` to `None` (`e.setdefault("sleep", None)`). Read-only on the form;
+a re-sync overwrites it.
+
+```json
+"sleep": {
+  "start": "23:14",
+  "end": "06:58",
+  "duration_min": 431,
+  "efficiency": 92,
+  "score": 84,
+  "quality": 84,
+  "stages": {"deep": 71, "light": 240, "rem": 90, "wake": 30},
+  "source": "fitbit",
+  "fetched": "2026-06-29T08:12:00"
+}
+```
+
+`score` is `null` when the API does not expose it; `stages` is `null` for classic
+sleep. **Date attribution:** Fitbit's `dateOfSleep` (morning of waking) maps to
+the journal date — last night's sleep lands on today's entry.
+
+Writer: `journal.set_entry_sleep(data, date, sleep, now=None)` — get-or-creates
+the entry, sets `entry["sleep"]`, bumps `updated`. `sleep=None` clears it.
+
+### Integrations routes (in `app.py`)
+
+`app.config["INTEGRATIONS_FILE"]` (default `data/integrations.json`) + `integrations_file()` helper, mirroring `data_file()` / `journal_file()`.
+
+| Route | Method | Purpose |
+|---|---|---|
+| `GET /integrations` | GET | Settings page: credentials form, connect/disconnect, last-synced, "Sync now". |
+| `POST /integrations/fitbit/credentials` | POST | Save Client ID/Secret (PRG + flash). |
+| `GET /integrations/fitbit/connect` | GET | Generate random `state`, build authorize URL, redirect to Fitbit. |
+| `GET /integrations/fitbit/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick 30-day backfill, redirect to `/integrations`. |
+| `POST /integrations/fitbit/disconnect` | POST | Clear Fitbit tokens + state (confirmModal-guarded). |
+| `POST /integrations/fitbit/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], sleep:{<date>: sleep\|null}}`. |
+
+**Sync internals**: for each target date lacking `entry.sleep`, calls
+`fitbit.fetch_sleep` → `fitbit.parse_sleep` → `journal.set_entry_sleep`. On a
+401, calls `refresh_tokens` once and retries. Network/parse exceptions are caught
+per-day and reported in `errors` without aborting the rest. Sets `last_sync` on
+completion.
+
+### Sleep analytics (`journal.py` + `analytics.js`)
+
+Pure helpers (all injectable date bounds; ignore entries without usable sleep;
+degrade gracefully on too few points):
+
+- `sleep_series(entries, start=None, end=None)` → `[{date, hours}]`.
+- `sleep_quality_series(entries, ...)` → `[{date, quality}]`.
+- `sleep_stage_averages(entries, ...)` → `{deep, light, rem, wake}` mean minutes over staged nights.
+- `sleep_dow_averages(entries, ...)` → 7 mean-duration values Mon–Sun.
+- `bedtime_series(entries, ...)` → `[{date, bed_min, wake_min}]` in minutes-from-midnight; pre-midnight bedtimes wrap to negative so the consistency band reads naturally.
+- `sleep_coverage(entries, ...)` → `{nights, span_days, pct}`.
+- `sleep_mood_pairs(entries, ...)` → `[{hours, mood}]` same-day pairs for sleep↔mood correlation (ignores null moods / missing sleep).
+- `sleep_stats(entries, ...)` → `{avg_hours, avg_quality, avg_bedtime, avg_waketime, nights}`.
+- `_entry_sleep(entry)` — returns the sleep dict if it has a usable `duration_min > 0`, else `None`.
+
+`analytics_payload` carries each entry's `sleep` (structured dict or `null`) so
+the client can render without a new endpoint.
+
+**Sleep tab** in `static/analytics.js` (`lens: ["journal"]`, gated on `hasSleep`,
+placed after Mood in the Journal lens): stat cards (avg duration, avg quality, avg
+bedtime/waketime, nights tracked); duration over time with 7-night rolling avg;
+quality over time; bedtime & wake-time consistency; avg duration by day of week;
+stage composition stacked bar; sleep↔mood correlation scatter with Pearson `r`;
+nights-tracked coverage. Mirrors the Mood tab pattern via `sleepOf(e)` (the
+JS-side `_entry_sleep` mirror).
+
+---
+
 ## Testing convention
 
 Tests are written first (TDD). Unit tests use a fixed `now` and pytest's
@@ -497,7 +631,8 @@ What exists today:
   them directly.
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
-  recorded mood via `hasMood`), Consistency (entry calendar, words/entry, gaps,
+  recorded mood via `hasMood`), **Sleep** (gated on `hasSleep`, Journal lens
+  only — see Integrations below), Consistency (entry calendar, words/entry, gaps,
   time-of-day), the cross-domain **Tags** tab (journal frequency, trend, per-tag
   heatmap, co-occurrence, then task-tag frequency — shown in both lenses),
   the expanded **Numeric** tab (see below), Coverage, plus
@@ -510,6 +645,7 @@ What exists today:
   - **Mood tab**: mood-over-time (fixed 1–7 axis + 7-day rolling avg overlay),
     average mood by day of week, mood distribution histogram, and mood-vs-numeric
     scatter (one small-multiple per numeric section, with a Pearson `r`).
+  - **Sleep tab** (Journal lens, gated on `hasSleep`): see Integrations section.
   - **Numeric tab** (gated on `hasNumeric`) is a rich multi-chart tab reading
     top-to-bottom — overview → trends → shape → relationships → streaks/coverage:
     per-section **stat cards** (mean/median/std/min/max/latest/count); **values
@@ -589,6 +725,15 @@ helpers live in `todo.py` (e.g. `completion_throughput`, `difficulty_breakdown`)
 the analytics route merges a task payload into the data feed. Built on the same
 `CHARTS` registry + SVG utilities in `analytics.js`; no new dependencies.
 
+### Fitbit sleep integration — DONE
+
+Fitbit connects once via `/integrations`; sleep data (bedtime, wake, duration,
+quality, stage breakdown) is synced into `entry["sleep"]` automatically on each
+journal page load (throttled to once/hour) and on-demand via "Sync now". A
+dedicated **Sleep** tab on the analytics page (Journal lens, gated on `hasSleep`)
+provides duration/quality trends, bedtime consistency, DOW bars, stage composition,
+sleep↔mood correlation, and coverage. See the Integrations section for full detail.
+
 ### Shipped quality-of-life features
 
 Each was spec'd first under `docs/superpowers/specs/` (brainstorm → spec →
@@ -597,11 +742,14 @@ subagent implementation, TDD). See the feature sections above for detail:
 - **Task notes + subtasks** (inline dropdown on the active list).
 - **Rich journal entries** — Discord-style inline formatting + `@mention` tagging.
 - **Mood quick-pick** — optional 1–7 per-entry mood via 7 Pompompurin GIFs.
+- **Fitbit sleep** — auto-filled `entry["sleep"]` + dedicated analytics tab.
 
 ### Future features
 
 Planned additions, in priority order (specs to be written first, as above):
 
+- **RescueTime + Spotify integrations** — the `integrations.py` store is already
+  shaped for both (`rescuetime` and `spotify` provider keys). Not yet implemented.
 - **Today dashboard** — a combined landing view: tasks due today (with subtask
   progress), today's journal entry + mood, and streak/stat tidbits. Cross-domain;
   reuses `entry_streak`, `today_iso`, and due-date filtering. Likely a new
