@@ -50,3 +50,14 @@ def test_last_sync_roundtrip():
     assert I.last_sync(d, "fitbit") is None
     I.set_last_sync(d, "fitbit", "2026-06-29T08:00:00")
     assert I.last_sync(d, "fitbit") == "2026-06-29T08:00:00"
+
+
+def test_clear_provider_removes_oauth_state():
+    """clear_provider must pop oauth_state so no ghost CSRF token remains."""
+    d = I._empty()
+    p = I.get_provider(d, "fitbit")
+    p["oauth_state"] = "some-csrf-token"
+    I.set_tokens(d, "fitbit", {"access_token": "A", "refresh_token": "R"})
+    I.clear_provider(d, "fitbit")
+    assert "oauth_state" not in d["fitbit"]
+    assert I.is_connected(d, "fitbit") is False

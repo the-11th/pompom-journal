@@ -753,3 +753,23 @@ def test_disconnect_clears_tokens(client, app):
     I.save(app.config["INTEGRATIONS_FILE"], d)
     client.post("/integrations/fitbit/disconnect")
     assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+
+
+def test_callback_rejects_state_mismatch(client, app):
+    """Callback with a wrong state must redirect (not 500) and stay disconnected."""
+    # Save credentials so the route gets past the no-credentials guard.
+    client.post("/integrations/fitbit/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    # Initiate connect to store a real oauth_state.
+    client.get("/integrations/fitbit/connect")
+    # Now hit callback with a deliberately wrong state.
+    r = client.get("/integrations/fitbit/callback?code=X&state=WRONG")
+    assert r.status_code == 302
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+
+
+def test_callback_handles_fitbit_error(client, app):
+    """Callback with ?error= must redirect (not 500) and stay disconnected."""
+    r = client.get("/integrations/fitbit/callback?error=access_denied")
+    assert r.status_code == 302
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")

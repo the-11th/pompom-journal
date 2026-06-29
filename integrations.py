@@ -77,6 +77,7 @@ def clear_provider(data, name):
     p = get_provider(data, name)
     p.pop("tokens", None)
     p.pop("last_sync", None)
+    p.pop("oauth_state", None)
     return data
 
 
