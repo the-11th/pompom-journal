@@ -939,3 +939,19 @@ def test_payload_includes_sleep_for_sleep_tab():
     })
     p = journal.analytics_payload(data)
     assert p["entries"][0]["sleep"]["stages"]["deep"] == 60
+
+
+# RescueTime analytics tab — payload regression test
+# --------------------------------------------------------------------------- #
+
+def test_payload_includes_rescuetime():
+    """analytics_payload entries carry a rescuetime dict for the Productivity tab."""
+    import journal
+    data = journal._seeded()
+    journal.set_entry_rescuetime(data, "2026-06-28",
+        {"pulse": 70, "productive_min": 120, "distracting_min": 20,
+         "neutral_min": 10, "total_min": 150,
+         "top_categories": [{"name": "Software Development", "min": 100}],
+         "source": "rescuetime", "fetched": "x"})
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["rescuetime"]["pulse"] == 70

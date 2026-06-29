@@ -574,6 +574,20 @@ def test_analytics_data_entries_carry_sleep(client, app):
     assert s["stages"]["deep"] == 60
 
 
+def test_analytics_data_entries_carry_rescuetime(client, app):
+    """The analytics feed surfaces each entry's rescuetime dict so the
+    Productivity tab can render its charts."""
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_rescuetime(jdata, "2026-06-28",
+        {"pulse": 70, "productive_min": 120, "total_min": 150,
+         "distracting_min": 20, "neutral_min": 10, "top_categories": [],
+         "source": "rescuetime", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    body = client.get("/journal/analytics/data").get_json()
+    assert any(e.get("rescuetime") for e in body["entries"])
+
+
 def test_analytics_route_not_shadowed_by_date_route(client):
     """`/journal/analytics` must hit the analytics page, not be parsed as a
     date by /journal/<date>."""

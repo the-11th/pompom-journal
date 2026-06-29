@@ -30,6 +30,7 @@
     // Journal lens
     { id: "mood", label: "Mood", lens: ["journal"], needs: hasMood },
     { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
+    { id: "productivity", label: "Productivity", lens: ["journal"], needs: hasRescueTime },
     { id: "consistency", label: "Consistency", lens: ["journal"] },
     { id: "tags", label: "Tags", lens: ["journal", "task"] },
     { id: "numeric", label: "Numeric", lens: ["journal"], needs: hasNumeric },
@@ -62,6 +63,10 @@
     // Use the same usable-sleep guard the charts use (sleepOf requires a
     // truthy duration_min), so the tab never shows with all-empty charts.
     return _data.entries.some(function (e) { return sleepOf(e); });
+  }
+
+  function hasRescueTime() {
+    return _data.entries.some(function (e) { return rescueTimeOf(e); });
   }
 
   // Tasks completed within the active date range, by completed-day.
@@ -2734,6 +2739,279 @@
       U.text(svg, w / 2, 30, pct + "% (" + nights + " of " + total + " nights)",
              c.text, { anchor: "middle", size: 10 });
       container.appendChild(svg);
+    },
+  });
+
+  // ======================= Productivity tab charts ========================= //
+  // Mirrors the Sleep tab pattern.  All series derived from e.rescuetime
+  // (filtered by _entry_rescuetime logic: must have pulse or total_min).
+
+  // Return the rescuetime dict if it has usable data, else null.
+  // Mirrors journal._entry_rescuetime.
+  function rescueTimeOf(e) {
+    var r = e && e.rescuetime;
+    if (r && typeof r === "object" && (r.pulse != null || r.total_min)) return r;
+    return null;
+  }
+
+  // Format productive minutes as "Xh Ym" for display.
+  function fmtProdTime(min) {
+    var m = Math.round(min);
+    var h = Math.floor(m / 60), rem = m % 60;
+    if (h === 0) return rem + "m";
+    return h + "h " + rem + "m";
+  }
+
+  // Stat cards: avg pulse, avg productive time, days tracked.
+  // Mirrors journal.rescuetime_stats.
+  CHARTS.push({
+    id: "productivity-stat-cards", panel: "productivity", title: "Productivity at a glance",
+    render: function (container, entries, sections, c) {
+      var rtEntries = entries.filter(function (e) { return rescueTimeOf(e); });
+      if (!rtEntries.length) {
+        U.empty(container, "No RescueTime data in this range."); return;
+      }
+      var pulses = rtEntries
+        .map(function (e) { return rescueTimeOf(e).pulse; })
+        .filter(function (p) { return p != null; });
+      var avgPulse = pulses.length
+        ? pulses.reduce(function (a, b) { return a + b; }, 0) / pulses.length : null;
+      var prods = rtEntries.map(function (e) {
+        return rescueTimeOf(e).productive_min || 0;
+      });
+      var avgProd = prods.reduce(function (a, b) { return a + b; }, 0) / prods.length;
+
+      var grid = document.createElement("div");
+      grid.className = "stat-cards";
+      statCard(grid, avgPulse != null ? Math.round(avgPulse) : null, "avg pulse", null);
+      statCard(grid, fmtProdTime(avgProd), "avg productive time", null);
+      statCard(grid, rtEntries.length, "days tracked", null);
+      container.appendChild(grid);
+    },
+  });
+
+  // Pulse over time with 7-day rolling average. Fixed 0–100 y-axis.
+  // Mirrors sleep-duration chart.
+  CHARTS.push({
+    id: "productivity-pulse", panel: "productivity", title: "Productivity pulse over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return rescueTimeOf(e) && rescueTimeOf(e).pulse != null; })
+        .map(function (e) { return { date: e.date, pulse: rescueTimeOf(e).pulse }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No pulse data in this range."); return; }
+      var vals = series.map(function (s) { return s.pulse; });
+      var min = 0, max = 100, span = 100;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
+        return { x: x, y: y };
+      }
+      var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+      var pts = series.map(function (s, i) { return ptAt(i, s.pulse); });
+      U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
+      U.drawLine(svg, pts, c.accent, 1.5);
+      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      U.text(svg, 0, 14, "100", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", Math.round(d.mean)], ["median", Math.round(d.median)],
+        ["min", Math.round(d.min)], ["max", Math.round(d.max)],
+        ["days", d.count],
+      ]);
+    },
+  });
+
+  // Productive vs distracting vs neutral per-day stacked bars.
+  // Reuses the sleep-stages stacked bar pattern.
+  CHARTS.push({
+    id: "productivity-time-breakdown", panel: "productivity",
+    title: "Productive vs distracting vs neutral time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return rescueTimeOf(e); })
+        .map(function (e) {
+          var r = rescueTimeOf(e);
+          return {
+            date: e.date,
+            productive_min: r.productive_min || 0,
+            distracting_min: r.distracting_min || 0,
+            neutral_min: r.neutral_min || 0,
+          };
+        })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No time breakdown data in this range."); return; }
+
+      var CAT_KEYS = ["productive_min", "distracting_min", "neutral_min"];
+      var CAT_LABELS = ["Productive", "Distracting", "Neutral"];
+      var CAT_COLORS = [c.accent, c.danger, U.colorMix(c.muted, 60)];
+
+      // Stacked bar: one bar per day, stack the three categories.
+      var maxTotal = Math.max.apply(null, series.map(function (s) {
+        return s.productive_min + s.distracting_min + s.neutral_min;
+      })) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var bw = (w - pad - 10) / series.length;
+      series.forEach(function (s, i) {
+        var stackBottom = h - pad - 10 + 10;  // bottom of chart area (y=10 is top)
+        var remaining = stackBottom;
+        CAT_KEYS.forEach(function (k, ki) {
+          var v = s[k];
+          if (!v) return;
+          var bh = (h - pad - 10) * (v / maxTotal);
+          remaining -= bh;
+          U.drawBar(svg, pad + i * bw + 1, remaining, bw - 2, bh, CAT_COLORS[ki]);
+        });
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 series.length > 1 ? [series[0].date, series[series.length - 1].date] : [series[0].date], c);
+      container.appendChild(svg);
+
+      // Legend.
+      var legend = document.createElement("div");
+      legend.className = "sleep-stage-legend";
+      CAT_KEYS.forEach(function (k, i) {
+        var item = document.createElement("span");
+        item.className = "sleep-legend-item";
+        item.style.setProperty("--sl-color", CAT_COLORS[i]);
+        item.textContent = CAT_LABELS[i];
+        legend.appendChild(item);
+      });
+      container.appendChild(legend);
+
+      // Averages row.
+      var totals = CAT_KEYS.map(function (k) {
+        return series.reduce(function (acc, s) { return acc + s[k]; }, 0) / series.length;
+      });
+      U.statsRow(container, CAT_LABELS.map(function (l, i) {
+        return [l.toLowerCase() + " avg", fmtProdTime(totals[i])];
+      }));
+    },
+  });
+
+  // Time by category: top 8 categories aggregated across the range.
+  // Mirrors rescuetime_category_totals.
+  CHARTS.push({
+    id: "productivity-categories", panel: "productivity", title: "Time by category",
+    render: function (container, entries, sections, c) {
+      var totals = {};
+      entries.forEach(function (e) {
+        var r = rescueTimeOf(e);
+        if (!r) return;
+        (r.top_categories || []).forEach(function (cat) {
+          totals[cat.name] = (totals[cat.name] || 0) + (cat.min || 0);
+        });
+      });
+      var rows = Object.keys(totals).map(function (k) { return { name: k, min: totals[k] }; });
+      rows.sort(function (a, b) { return b.min - a.min; });
+      rows = rows.slice(0, 8);
+      if (!rows.length) { U.empty(container, "No category data in this range."); return; }
+
+      var maxV = rows[0].min || 1;
+      var w = 600, h = Math.max(120, rows.length * 28 + 20), pad = 0;
+      var svg = U.svg(w, h);
+      var barW = w - 160;
+      rows.forEach(function (row, i) {
+        var y = i * 28 + 10;
+        var bw = barW * (row.min / maxV);
+        U.drawBar(svg, 150, y, bw, 18, c.accent);
+        U.text(svg, 144, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, 150 + bw + 4, y + 13, fmtProdTime(row.min), c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
+    },
+  });
+
+  // Average productive minutes by day of week. Mirrors rescuetime_dow_averages.
+  CHARTS.push({
+    id: "productivity-dow", panel: "productivity",
+    title: "Average productive time by day of week",
+    render: function (container, entries, sections, c) {
+      var buckets = [[], [], [], [], [], [], []];
+      entries.forEach(function (e) {
+        var r = rescueTimeOf(e);
+        if (!r) return;
+        var dow = (new Date(e.date + "T00:00:00").getDay() + 6) % 7;  // Mon=0
+        buckets[dow].push(r.productive_min || 0);
+      });
+      var avgs = buckets.map(function (b) {
+        return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
+      });
+      if (avgs.every(function (a) { return a == null; })) {
+        U.empty(container, "No productivity data in this range."); return;
+      }
+      var nonNull = avgs.filter(function (a) { return a != null; });
+      var max = Math.max.apply(null, nonNull) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var bw = (w - pad - 10) / 7;
+      avgs.forEach(function (a, i) {
+        if (a == null) return;
+        var bh = (h - pad - 10) * (a / max);
+        U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      container.appendChild(svg);
+      var ranked = DOW_NAMES
+        .map(function (n, i) { return [n, avgs[i]]; })
+        .filter(function (p) { return p[1] != null; })
+        .sort(function (a, b) { return b[1] - a[1]; });
+      U.statsRow(container, [
+        ["most productive", ranked[0][0] + " (" + fmtProdTime(ranked[0][1]) + ")"],
+        ["least productive", ranked[ranked.length - 1][0] + " (" + fmtProdTime(ranked[ranked.length - 1][1]) + ")"],
+      ]);
+    },
+  });
+
+  // Productivity (pulse) ↔ mood scatter with Pearson r.
+  // Mirrors sleep-mood-scatter pattern. Gated on both present.
+  CHARTS.push({
+    id: "productivity-mood-scatter", panel: "productivity",
+    title: "Productivity pulse vs. mood",
+    render: function (container, entries, sections, c) {
+      var pairs = entries.filter(function (e) {
+        return rescueTimeOf(e) && rescueTimeOf(e).pulse != null && e.mood != null;
+      }).map(function (e) {
+        return { x: rescueTimeOf(e).pulse, y: Number(e.mood) };
+      });
+      if (pairs.length < 2) {
+        U.empty(container, "Need 2+ days with both pulse and mood data."); return;
+      }
+      var xs = pairs.map(function (p) { return p.x; });
+      var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+      var xSpan = xMax - xMin || 1;
+      var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+      var w = 600, h = 240, pad = 36;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      pairs.forEach(function (p) {
+        var x = (xMax - xMin) === 0
+          ? pad + (w - pad - 10) / 2
+          : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
+        var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
+        U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
+      });
+      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, w / 2, h - 2, "pulse (x)  vs  mood (y)", c.muted,
+             { anchor: "middle", size: 9 });
+      container.appendChild(svg);
+      var r = pearson(xs, pairs.map(function (p) { return p.y; }));
+      U.statsRow(container, [
+        ["pairs", pairs.length],
+        ["correlation r", r == null ? null : U.fmt(r)],
+      ]);
     },
   });
 
