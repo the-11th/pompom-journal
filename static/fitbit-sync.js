@@ -4,15 +4,24 @@
   if (!panel) return;
   const connected = panel.dataset.connected === "1";
 
+  function span(cls, text) {
+    const el = document.createElement("span");
+    el.className = cls;
+    el.textContent = text;
+    return el;
+  }
+
   function renderSleep(s) {
     if (!s) return;  // leave the server-rendered "No sleep data" line
     const dur = `${Math.floor(s.duration_min / 60)}h ${s.duration_min % 60}m`;
     const label = s.score != null ? "Quality" : "Quality (efficiency)";
-    panel.innerHTML =
-      `<span class="sleep-icon">🛌</span>` +
-      `<span class="sleep-times">${s.start} → ${s.end}</span>` +
-      `<span class="sleep-dur">${dur}</span>` +
-      `<span class="sleep-qual">${label} ${s.quality}</span>`;
+    // Build via textContent (not innerHTML) so values are never parsed as markup.
+    panel.replaceChildren(
+      span("sleep-icon", "🛌"),
+      span("sleep-times", `${s.start} → ${s.end}`),
+      span("sleep-dur", dur),
+      span("sleep-qual", `${label} ${s.quality}`),
+    );
   }
 
   function sync(days) {
