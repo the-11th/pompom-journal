@@ -1,18 +1,37 @@
 """Fitbit Web API client. Zero Flask imports.
 
-Network access is isolated behind an injectable `transport` callable; tests
-pass a fake transport so no test hits the network.
+OAuth is delegated to oauth.py; only the sleep-specific fetch/parse live here.
+Network is behind oauth.urllib_transport (tests pass a fake transport).
 """
-import base64
-import json
-import time
-import urllib.parse
-import urllib.request
 from datetime import datetime
+
+import oauth
 
 _AUTHORIZE = "https://www.fitbit.com/oauth2/authorize"
 _TOKEN = "https://api.fitbit.com/oauth2/token"
 _API = "https://api.fitbit.com"
+
+
+def build_authorize_url(client_id, redirect_uri, state, scope="sleep"):
+    return oauth.build_authorize_url(_AUTHORIZE, client_id, redirect_uri, state, scope)
+
+
+def exchange_code(client_id, client_secret, code, redirect_uri, transport=None, now=None):
+    return oauth.exchange_code(_TOKEN, client_id, client_secret, code, redirect_uri,
+                               transport=transport, now=now)
+
+
+def refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None):
+    return oauth.refresh_tokens(_TOKEN, client_id, client_secret, refresh_token,
+                                transport=transport, now=now)
+
+
+def normalize_token_response(raw, now=None):
+    return oauth.normalize_token_response(raw, now=now)
+
+
+def token_expired(tokens, now=None):
+    return oauth.token_expired(tokens, now=now)
 
 
 def _clock(iso):
@@ -67,84 +86,9 @@ def parse_sleep(api_json, now=None):
     }
 
 
-def normalize_token_response(raw, now=None):
-    """Fitbit token JSON -> our tokens dict with an absolute `expires_at`."""
-    t = now if now is not None else time.time()
-    return {
-        "access_token": raw.get("access_token"),
-        "refresh_token": raw.get("refresh_token"),
-        "scope": raw.get("scope"),
-        "expires_at": t + float(raw.get("expires_in", 0)),
-        "fetched": datetime.now().replace(microsecond=0).isoformat(),
-    }
-
-
-def token_expired(tokens, now=None):
-    """True when the access token is at/within 60 s of expiry."""
-    t = now if now is not None else time.time()
-    return t >= float((tokens or {}).get("expires_at", 0)) - 60
-
-
-def build_authorize_url(client_id, redirect_uri, state, scope="sleep"):
-    """Build the Fitbit OAuth2 authorization URL."""
-    q = urllib.parse.urlencode({
-        "client_id": client_id,
-        "response_type": "code",
-        "scope": scope,
-        "redirect_uri": redirect_uri,
-        "state": state,
-    })
-    return f"{_AUTHORIZE}?{q}"
-
-
-def _urllib_transport(method, url, headers, body):
-    """Default real transport using urllib. Tests replace this with a fake."""
-    data = body.encode("utf-8") if isinstance(body, str) else body
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return resp.status, json.loads(resp.read().decode("utf-8"))
-
-
-def _basic_auth(client_id, client_secret):
-    raw = f"{client_id}:{client_secret}".encode("utf-8")
-    return "Basic " + base64.b64encode(raw).decode("ascii")
-
-
-def _post_token(client_id, client_secret, form, transport, now):
-    transport = transport or _urllib_transport
-    headers = {
-        "Authorization": _basic_auth(client_id, client_secret),
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    body = urllib.parse.urlencode(form)
-    status, payload = transport("POST", _TOKEN, headers, body)
-    if status != 200:
-        raise RuntimeError(f"Fitbit token error {status}: {payload}")
-    return normalize_token_response(payload, now=now)
-
-
-def exchange_code(client_id, client_secret, code, redirect_uri,
-                  transport=None, now=None):
-    """Exchange an authorization code for tokens."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": redirect_uri,
-    }, transport, now)
-
-
-def refresh_tokens(client_id, client_secret, refresh_token,
-                   transport=None, now=None):
-    """Refresh an access token using a refresh token."""
-    return _post_token(client_id, client_secret, {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }, transport, now)
-
-
 def fetch_sleep(access_token, date, transport=None):
     """Fetch raw sleep data from the Fitbit API for the given date (YYYY-MM-DD)."""
-    transport = transport or _urllib_transport
+    transport = transport or oauth.urllib_transport
     url = f"{_API}/1.2/user/-/sleep/date/{date}.json"
     headers = {"Authorization": f"Bearer {access_token}"}
     status, payload = transport("GET", url, headers, None)
