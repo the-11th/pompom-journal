@@ -5,7 +5,7 @@ is behind the injectable transport (default oauth.urllib_transport); tests pass
 a fake so no test hits the network.
 """
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import oauth
 
@@ -73,3 +73,94 @@ def fetch_audio_features(access_token, ids, transport=None):
     if status != 200:
         raise RuntimeError(f"Spotify audio-features error {status}: {payload}")
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Pure parse / merge / summarize / taste helpers (no network, no clock except
+# injectable now=None)
+# ---------------------------------------------------------------------------
+
+def parse_recently_played(payload):
+    out = []
+    for item in (payload or {}).get("items") or []:
+        track = item.get("track") or {}
+        played_at = item.get("played_at", "")
+        out.append({
+            "played_at": played_at,
+            "date": played_at[:10],
+            "track_id": track.get("id"),
+            "name": track.get("name"),
+            "artists": [a.get("name") for a in (track.get("artists") or []) if a.get("name")],
+            "duration_ms": track.get("duration_ms", 0),
+        })
+    return out
+
+
+def merge_plays(buffer, new_plays, now=None, keep_days=3):
+    buf = {d: dict(plays) for d, plays in (buffer or {}).items()}
+    for p in new_plays:
+        date = p.get("date")
+        if not date:
+            continue
+        buf.setdefault(date, {})[p["played_at"]] = p
+    cutoff = ((now or datetime.now()).date() - timedelta(days=keep_days - 1)).isoformat()
+    return {d: plays for d, plays in buf.items() if d >= cutoff}
+
+
+def _feature_means(features_payload, track_ids):
+    rows = (features_payload or {}).get("audio_features") if isinstance(features_payload, dict) else None
+    if not rows:
+        return {"valence": None, "energy": None, "danceability": None, "tempo": None}
+    wanted = set(track_ids)
+    picked = [f for f in rows if f and f.get("id") in wanted]
+    if not picked:
+        return {"valence": None, "energy": None, "danceability": None, "tempo": None}
+    def mean(key, ndigits):
+        vals = [f[key] for f in picked if f.get(key) is not None]
+        return round(sum(vals) / len(vals), ndigits) if vals else None
+    return {"valence": mean("valence", 3), "energy": mean("energy", 3),
+            "danceability": mean("danceability", 3), "tempo": mean("tempo", 1)}
+
+
+def summarize_day(plays, audio_features=None, now=None):
+    track_ids = [p["track_id"] for p in plays if p.get("track_id")]
+    minutes = round(sum(p.get("duration_ms", 0) for p in plays) / 60000)
+    artist_counts = {}
+    for p in plays:
+        for a in p.get("artists") or []:
+            artist_counts[a] = artist_counts.get(a, 0) + 1
+    top = [{"name": n, "count": c} for n, c in artist_counts.items()]
+    top.sort(key=lambda d: d["count"], reverse=True)
+    feats = _feature_means(audio_features, track_ids)
+    fetched = (now or datetime.now()).replace(microsecond=0).isoformat()
+    return {
+        "tracks": len(plays),
+        "minutes": minutes,
+        "distinct": len(set(track_ids)),
+        "top_artists": top[:5],
+        "valence": feats["valence"],
+        "energy": feats["energy"],
+        "danceability": feats["danceability"],
+        "tempo": feats["tempo"],
+        "source": "spotify",
+        "fetched": fetched,
+    }
+
+
+_TERMS = ("short_term", "medium_term", "long_term")
+
+
+def build_taste(tops, now=None):
+    def names(payload):
+        return [it.get("name") for it in (payload or {}).get("items") or [] if it.get("name")]
+    tracks = {t: names((tops.get("tracks") or {}).get(t)) for t in _TERMS}
+    artists = {t: names((tops.get("artists") or {}).get(t)) for t in _TERMS}
+    genres = {}
+    for t in _TERMS:
+        counts = {}
+        for art in ((tops.get("artists") or {}).get(t) or {}).get("items") or []:
+            for g in art.get("genres") or []:
+                counts[g] = counts.get(g, 0) + 1
+        genres[t] = [g for g, _ in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)][:10]
+    return {"tracks": tracks, "artists": artists, "genres": genres,
+            "fetched": (now or datetime.now()).replace(microsecond=0).isoformat()}
