@@ -73,6 +73,48 @@ browser automatically. Close the Terminal window (or press `Ctrl+C`) to stop.
 (First time: right-click → Open → Open to get past the unidentified-developer
 warning.)
 
+## Fitbit sleep integration
+
+Connect a Fitbit account once and each night's sleep (bedtime, wake time,
+duration, and quality) auto-fills onto the matching journal day, with a
+dedicated **Sleep** tab in analytics. No data is entered by hand. Everything
+runs locally — your Fitbit credentials and tokens live only in
+`data/integrations.json`, which is gitignored.
+
+### One-time setup
+
+1. **Register a personal Fitbit app.** Sign in at
+   [dev.fitbit.com](https://dev.fitbit.com/apps/new) and create an app with:
+   - **OAuth 2.0 Application Type:** `Personal`
+   - **Callback URL:** `http://127.0.0.1:5001/integrations/fitbit/callback`
+   - **Default Access Type:** `Read-Only`
+
+   After saving, copy the app's **OAuth 2.0 Client ID** and **Client Secret**.
+
+2. **Connect from the app.** Start todo·pup (`flask --app app run --port 5001`),
+   open http://127.0.0.1:5001/, and click **Integrations** in the nav. Paste the
+   Client ID and Client Secret, click **Save credentials**, then
+   **Connect to Fitbit**. Approve the `sleep` permission on Fitbit's page.
+
+3. You're done. On connect, the last **30 days** of sleep are backfilled.
+
+### Day-to-day
+
+- Opening the journal auto-syncs the last 7 days of sleep in the background
+  (throttled to once an hour); last night's sleep lands on today's entry.
+- The **Sync now** button on the Integrations page forces an immediate refresh.
+- The **Sleep** analytics tab (under the *Journal* lens) appears once any sleep
+  data exists — duration and quality trends, bedtime/wake consistency, sleep
+  stages, a sleep-vs-mood comparison, and coverage.
+
+> **Note on "quality":** Fitbit's public API exposes sleep **efficiency**
+> (0–100) and the stage breakdown, but not the in-app Sleep Score for most apps.
+> Quality shows efficiency (labeled accordingly), and uses the Score
+> automatically if your app does return it.
+
+The Fitbit **Client Secret** is never displayed back in the page or written to
+logs. Use **Disconnect** on the Integrations page to remove the stored tokens.
+
 ## Test
 
 ```bash
