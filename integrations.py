@@ -73,17 +73,26 @@ def set_tokens(data, name, tokens):
     return data
 
 
+def set_api_key(data, name, key):
+    get_provider(data, name)["api_key"] = key
+    return data
+
+
 def clear_provider(data, name):
     p = get_provider(data, name)
     p.pop("tokens", None)
     p.pop("last_sync", None)
     p.pop("oauth_state", None)
+    p.pop("api_key", None)
     return data
 
 
 def is_connected(data, name):
-    tokens = get_provider(data, name).get("tokens")
-    return bool(tokens and tokens.get("access_token"))
+    p = get_provider(data, name)
+    tokens = p.get("tokens")
+    if tokens and tokens.get("access_token"):
+        return True
+    return bool(p.get("api_key"))
 
 
 def last_sync(data, name):

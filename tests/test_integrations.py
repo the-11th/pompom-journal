@@ -61,3 +61,19 @@ def test_clear_provider_removes_oauth_state():
     I.clear_provider(d, "fitbit")
     assert "oauth_state" not in d["fitbit"]
     assert I.is_connected(d, "fitbit") is False
+
+
+def test_set_api_key_and_is_connected():
+    d = I._empty()
+    assert I.is_connected(d, "rescuetime") is False
+    I.set_api_key(d, "rescuetime", "KEY123")
+    assert I.get_provider(d, "rescuetime")["api_key"] == "KEY123"
+    assert I.is_connected(d, "rescuetime") is True
+
+
+def test_clear_provider_removes_key():
+    d = I._empty()
+    I.set_api_key(d, "rescuetime", "KEY123")
+    I.clear_provider(d, "rescuetime")
+    assert I.is_connected(d, "rescuetime") is False
+    assert "api_key" not in I.get_provider(d, "rescuetime")
