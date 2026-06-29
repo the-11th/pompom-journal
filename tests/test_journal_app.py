@@ -773,3 +773,53 @@ def test_callback_handles_fitbit_error(client, app):
     r = client.get("/integrations/fitbit/callback?error=access_denied")
     assert r.status_code == 302
     assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+
+
+def test_sync_writes_sleep(client, app, monkeypatch):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_tokens(d, "fitbit", {"access_token": "A", "refresh_token": "R",
+                               "expires_at": 9e9})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    monkeypatch.setattr("fitbit.fetch_sleep",
+        lambda token, date, transport=None: {"sleep": [{
+            "isMainSleep": True, "startTime": f"{date}T23:00:00.000",
+            "endTime": f"{date}T06:00:00.000", "minutesAsleep": 420,
+            "efficiency": 90, "type": "classic", "levels": {"summary": {}}}]})
+    r = client.post("/integrations/fitbit/sync?days=1")
+    body = r.get_json()
+    assert body["ok"] and body["connected"]
+    assert len(body["synced"]) == 1
+    # entry got the sleep
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    assert any(e.get("sleep") for e in jdata["entries"])
+
+
+def test_sync_not_connected(client, app):
+    r = client.post("/integrations/fitbit/sync")
+    body = r.get_json()
+    assert body["ok"] and body["connected"] is False
+
+
+def test_sync_refreshes_on_401(client, app, monkeypatch):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_credentials(d, "fitbit", "CID", "SEC")
+    I.set_tokens(d, "fitbit", {"access_token": "OLD", "refresh_token": "R",
+                               "expires_at": 9e9})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    calls = {"n": 0}
+    def fake_fetch(token, date, transport=None):
+        calls["n"] += 1
+        if token == "OLD":
+            raise PermissionError("401")
+        return {"sleep": [{"isMainSleep": True,
+            "startTime": f"{date}T23:00:00.000", "endTime": f"{date}T06:00:00.000",
+            "minutesAsleep": 420, "efficiency": 90, "type": "classic",
+            "levels": {"summary": {}}}]}
+    monkeypatch.setattr("fitbit.fetch_sleep", fake_fetch)
+    monkeypatch.setattr("fitbit.refresh_tokens",
+        lambda *a, **k: {"access_token": "NEW", "refresh_token": "R2",
+                         "scope": "sleep", "expires_at": 9e9})
+    r = client.post("/integrations/fitbit/sync?days=1")
+    assert r.get_json()["synced"]
+    assert I.load(app.config["INTEGRATIONS_FILE"])["fitbit"]["tokens"]["access_token"] == "NEW"

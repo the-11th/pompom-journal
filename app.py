@@ -10,6 +10,7 @@ import secrets
 import signal
 import threading
 import time
+from datetime import datetime, timedelta
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
@@ -832,9 +833,66 @@ def journal_section_tag_archive_temp(section_id, tag):
     return redirect(url_for("journal_sections"))
 
 
+def _recent_dates(days, now=None):
+    today = (now or datetime.now()).date()
+    return [(today - timedelta(days=i)).isoformat() for i in range(days)]
+
+
 def _fitbit_sync(days=7, force=False, focus_date=None, now=None):
-    """Placeholder; fully implemented in the sync task."""
-    return {"connected": False, "synced": [], "errors": []}
+    istore = integrations.load(integrations_file())
+    if not integrations.is_connected(istore, "fitbit"):
+        return {"connected": False, "synced": [], "errors": []}
+    fb = integrations.get_provider(istore, "fitbit")
+    tokens = fb["tokens"]
+    cid, secret = fb.get("client_id"), fb.get("client_secret")
+
+    if fitbit.token_expired(tokens) and tokens.get("refresh_token") and cid:
+        try:
+            tokens = fitbit.refresh_tokens(cid, secret, tokens["refresh_token"])
+            integrations.set_tokens(istore, "fitbit", tokens)
+        except Exception:  # noqa: BLE001
+            pass
+
+    jdata = journal.load(journal_file())
+    synced, errors = [], []
+    for date in _recent_dates(days, now=now):
+        existing = journal.get_entry_by_date(jdata, date)
+        if not force and existing is not None and existing.get("sleep"):
+            continue
+        try:
+            try:
+                raw = fitbit.fetch_sleep(tokens["access_token"], date)
+            except PermissionError:
+                if cid and tokens.get("refresh_token"):
+                    tokens = fitbit.refresh_tokens(cid, secret, tokens["refresh_token"])
+                    integrations.set_tokens(istore, "fitbit", tokens)
+                    raw = fitbit.fetch_sleep(tokens["access_token"], date)
+                else:
+                    raise
+            sleep = fitbit.parse_sleep(raw)
+            if sleep:
+                journal.set_entry_sleep(jdata, date, sleep)
+                synced.append(date)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{date}: {exc}")
+
+    journal.save(journal_file(), jdata)
+    integrations.set_last_sync(istore, "fitbit",
+                               (now or datetime.now()).replace(microsecond=0).isoformat())
+    integrations.save(integrations_file(), istore)
+    return {"connected": True, "synced": synced, "errors": errors}
+
+
+@app.route("/integrations/fitbit/sync", methods=["POST"])
+def fitbit_sync_route():
+    days = request.args.get("days", type=int) or 7
+    focus = request.args.get("date")
+    result = _fitbit_sync(days=days, focus_date=focus)
+    sleep = {}
+    if focus and result["connected"]:
+        entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
+        sleep = {focus: (entry or {}).get("sleep")}
+    return jsonify({"ok": True, **result, "sleep": sleep})
 
 
 def _fitbit_redirect_uri():
