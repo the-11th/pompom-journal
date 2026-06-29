@@ -75,3 +75,57 @@ def test_token_expired():
     t = {"expires_at": 1000.0}
     assert fitbit.token_expired(t, now=2000.0) is True
     assert fitbit.token_expired(t, now=900.0) is False
+
+
+import json as _json
+from urllib.parse import urlparse, parse_qs
+
+
+def test_build_authorize_url():
+    url = fitbit.build_authorize_url("CID", "http://127.0.0.1:5001/cb", "xyz")
+    q = parse_qs(urlparse(url).query)
+    assert url.startswith("https://www.fitbit.com/oauth2/authorize")
+    assert q["client_id"] == ["CID"] and q["scope"] == ["sleep"]
+    assert q["state"] == ["xyz"] and q["response_type"] == ["code"]
+    assert q["redirect_uri"] == ["http://127.0.0.1:5001/cb"]
+
+
+def _fake_transport(expect_url_contains, response, status=200, sink=None):
+    def t(method, url, headers, body):
+        if sink is not None:
+            sink.append((method, url, headers, body))
+        assert expect_url_contains in url
+        return status, response
+    return t
+
+
+def test_exchange_code_returns_tokens():
+    resp = {"access_token": "A", "refresh_token": "R",
+            "scope": "sleep", "expires_in": 28800}
+    sink = []
+    t = _fake_transport("oauth2/token", resp, sink=sink)
+    tokens = fitbit.exchange_code("CID", "SEC", "CODE",
+                                  "http://127.0.0.1:5001/cb", transport=t, now=1000.0)
+    assert tokens["access_token"] == "A" and tokens["expires_at"] == 1000.0 + 28800
+    # HTTP Basic auth header present
+    _, _, headers, body = sink[0]
+    assert headers["Authorization"].startswith("Basic ")
+    assert "grant_type=authorization_code" in body
+
+
+def test_refresh_tokens():
+    resp = {"access_token": "A2", "refresh_token": "R2",
+            "scope": "sleep", "expires_in": 28800}
+    t = _fake_transport("oauth2/token", resp)
+    tokens = fitbit.refresh_tokens("CID", "SEC", "R", transport=t, now=5.0)
+    assert tokens["access_token"] == "A2" and tokens["refresh_token"] == "R2"
+
+
+def test_fetch_sleep_calls_dated_endpoint():
+    sink = []
+    t = _fake_transport("/sleep/date/2026-06-29.json", STAGED, sink=sink)
+    raw = fitbit.fetch_sleep("ACCESS", "2026-06-29", transport=t)
+    assert raw == STAGED
+    _, url, headers, _ = sink[0]
+    assert headers["Authorization"] == "Bearer ACCESS"
+    assert url.endswith("/1.2/user/-/sleep/date/2026-06-29.json")
