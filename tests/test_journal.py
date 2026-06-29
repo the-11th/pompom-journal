@@ -1084,6 +1084,35 @@ def test_sleep_stats_empty():
     assert s["nights"] == 0 and s["avg_hours"] is None
 
 
+def _entry_no_clock(date, dur_min):
+    """An entry whose sleep dict has duration_min but no start/end."""
+    return {
+        "date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+        "sleep": {"duration_min": dur_min},
+    }
+
+
+def test_bedtime_series_skips_entry_without_clock_times():
+    """bedtime_series must not raise KeyError when sleep has no start/end."""
+    entries = [_entry_no_clock("2026-06-29", 400)]
+    result = journal.bedtime_series(entries)
+    assert result == []
+
+
+def test_sleep_stats_no_clock_times_returns_none_avg_times():
+    """sleep_stats must not raise when sleep has no start/end.
+
+    nights and avg_hours must still reflect the usable-duration row;
+    avg_bedtime and avg_waketime must be None (no clock data).
+    """
+    entries = [_entry_no_clock("2026-06-29", 400)]
+    s = journal.sleep_stats(entries)
+    assert s["nights"] == 1
+    assert s["avg_hours"] == round(400 / 60, 2)
+    assert s["avg_bedtime"] is None
+    assert s["avg_waketime"] is None
+
+
 def test_payload_carries_sleep():
     data = journal._seeded()
     journal.set_entry_sleep(data, "2026-06-29", {"duration_min": 420,

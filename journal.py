@@ -1123,6 +1123,8 @@ def bedtime_series(entries, start=None, end=None):
         s = _entry_sleep(e)
         if not s:
             continue
+        if not (s.get("start") and s.get("end")):
+            continue
         bed = _clock_to_min(s["start"])
         if bed >= 12 * 60:           # evening bedtime -> negative (pre-midnight)
             bed -= 1440
@@ -1171,16 +1173,17 @@ def sleep_stats(entries, start=None, end=None):
                 "avg_waketime": None, "nights": 0}
     hours = [s["duration_min"] / 60 for s in rows]
     quals = [s["quality"] for s in rows if s.get("quality") is not None]
+    clock_rows = [s for s in rows if s.get("start") and s.get("end")]
     beds = []
-    for s in rows:
+    for s in clock_rows:
         b = _clock_to_min(s["start"])
         beds.append(b - 1440 if b >= 12 * 60 else b)
-    wakes = [_clock_to_min(s["end"]) for s in rows]
+    wakes = [_clock_to_min(s["end"]) for s in clock_rows]
     return {
         "avg_hours": round(sum(hours) / len(hours), 2),
         "avg_quality": round(sum(quals) / len(quals), 1) if quals else None,
-        "avg_bedtime": _min_to_clock(sum(beds) / len(beds)),
-        "avg_waketime": _min_to_clock(sum(wakes) / len(wakes)),
+        "avg_bedtime": _min_to_clock(sum(beds) / len(beds)) if beds else None,
+        "avg_waketime": _min_to_clock(sum(wakes) / len(wakes)) if wakes else None,
         "nights": len(rows),
     }
 
