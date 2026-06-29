@@ -6,20 +6,27 @@ import pytest
 import app as app_module
 import journal
 import todo
+import integrations as I
 
 
 @pytest.fixture
-def client(tmp_path):
-    journal_file = tmp_path / "journal.json"
+def app(tmp_path):
     flask_app = app_module.app
     flask_app.config["TESTING"] = True
+    journal_file = tmp_path / "journal.json"
     flask_app.config["JOURNAL_FILE"] = str(journal_file)
     flask_app.config["DATA_FILE"] = str(tmp_path / "tasks.json")
+    flask_app.config["INTEGRATIONS_FILE"] = str(tmp_path / "integrations.json")
     # Seeded store (six default sections), mirroring first run.
     journal.save(str(journal_file), journal._seeded())
     # Empty task store so the analytics route never touches the real one.
     todo.save(str(tmp_path / "tasks.json"), todo._empty())
-    with flask_app.test_client() as c:
+    yield flask_app
+
+
+@pytest.fixture
+def client(app):
+    with app.test_client() as c:
         yield c
 
 
@@ -700,3 +707,49 @@ def test_suggestion_dismiss_records_dismissal(client):
     assert resp.status_code == 200 and resp.get_json()["ok"] is True
     data = journal.load(_journal_path())
     assert "running" in data["dismissed_suggestions"]
+
+
+# --------------------------------------------------------------------------- #
+# Task 6: Integrations page + Fitbit OAuth routes
+# --------------------------------------------------------------------------- #
+
+def test_integrations_page_renders(client):
+    r = client.get("/integrations")
+    assert r.status_code == 200
+    assert b"Fitbit" in r.data
+
+
+def test_save_credentials_then_connect_redirects_to_fitbit(client, app):
+    client.post("/integrations/fitbit/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    assert d["fitbit"]["client_id"] == "CID"
+    r = client.get("/integrations/fitbit/connect")
+    assert r.status_code == 302
+    assert "www.fitbit.com/oauth2/authorize" in r.headers["Location"]
+    assert "state=" in r.headers["Location"]
+
+
+def test_callback_exchanges_code(client, app, monkeypatch):
+    client.post("/integrations/fitbit/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    # capture the state the connect route stored
+    client.get("/integrations/fitbit/connect")
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    state = d["fitbit"]["oauth_state"]
+    monkeypatch.setattr("fitbit.exchange_code",
+        lambda *a, **k: {"access_token": "A", "refresh_token": "R",
+                         "scope": "sleep", "expires_at": 9e9})
+    # avoid network on the post-connect backfill
+    monkeypatch.setattr("app._fitbit_sync", lambda *a, **k: {"synced": [], "errors": []})
+    r = client.get(f"/integrations/fitbit/callback?code=CODE&state={state}")
+    assert r.status_code == 302
+    assert I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+
+
+def test_disconnect_clears_tokens(client, app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_tokens(d, "fitbit", {"access_token": "A", "refresh_token": "R"})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    client.post("/integrations/fitbit/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")

@@ -6,12 +6,15 @@ Post/Redirect/Get pattern so a browser refresh never re-submits a form.
 """
 
 import os
+import secrets
 import signal
 import threading
 import time
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
+import fitbit
+import integrations
 import journal
 import todo
 
@@ -42,6 +45,16 @@ app.config["JOURNAL_FILE"] = os.path.join(
 
 def journal_file():
     return app.config["JOURNAL_FILE"]
+
+
+# Integrations store lives alongside tasks/journal; tests override via INTEGRATIONS_FILE.
+app.config["INTEGRATIONS_FILE"] = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "integrations.json"
+)
+
+
+def integrations_file():
+    return app.config["INTEGRATIONS_FILE"]
 
 
 # Local single-user dev app: pick up template edits without restarting the
@@ -817,6 +830,90 @@ def journal_section_tag_archive_temp(section_id, tag):
     journal.archive_temporary_tag(data, section_id, tag)
     journal.save(journal_file(), data)
     return redirect(url_for("journal_sections"))
+
+
+def _fitbit_sync(days=7, force=False, focus_date=None, now=None):
+    """Placeholder; fully implemented in the sync task."""
+    return {"connected": False, "synced": [], "errors": []}
+
+
+def _fitbit_redirect_uri():
+    return url_for("fitbit_callback", _external=True)
+
+
+@app.route("/integrations")
+def integrations_page():
+    data = integrations.load(integrations_file())
+    fb = integrations.get_provider(data, "fitbit")
+    return render_template(
+        "integrations.html",
+        connected=integrations.is_connected(data, "fitbit"),
+        has_creds=bool(fb.get("client_id") and fb.get("client_secret")),
+        client_id=fb.get("client_id", ""),
+        last_sync=integrations.last_sync(data, "fitbit"),
+        redirect_uri=_fitbit_redirect_uri(),
+    )
+
+
+@app.route("/integrations/fitbit/credentials", methods=["POST"])
+def fitbit_credentials():
+    data = integrations.load(integrations_file())
+    integrations.set_credentials(
+        data, "fitbit",
+        request.form.get("client_id", "").strip(),
+        request.form.get("client_secret", "").strip())
+    integrations.save(integrations_file(), data)
+    flash("Fitbit credentials saved.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/fitbit/connect")
+def fitbit_connect():
+    data = integrations.load(integrations_file())
+    fb = integrations.get_provider(data, "fitbit")
+    if not (fb.get("client_id") and fb.get("client_secret")):
+        flash("Enter your Fitbit Client ID and Secret first.")
+        return redirect(url_for("integrations_page"))
+    state = secrets.token_urlsafe(16)
+    fb["oauth_state"] = state
+    integrations.save(integrations_file(), data)
+    url = fitbit.build_authorize_url(
+        fb["client_id"], _fitbit_redirect_uri(), state)
+    return redirect(url)
+
+
+@app.route("/integrations/fitbit/callback")
+def fitbit_callback():
+    data = integrations.load(integrations_file())
+    fb = integrations.get_provider(data, "fitbit")
+    if request.args.get("error"):
+        flash(f"Fitbit authorization failed: {request.args.get('error')}")
+        return redirect(url_for("integrations_page"))
+    if not request.args.get("state") or request.args.get("state") != fb.get("oauth_state"):
+        flash("Fitbit authorization state mismatch; please try again.")
+        return redirect(url_for("integrations_page"))
+    try:
+        tokens = fitbit.exchange_code(
+            fb["client_id"], fb["client_secret"],
+            request.args.get("code"), _fitbit_redirect_uri())
+    except Exception as exc:  # noqa: BLE001 - surface as a flash, never 500
+        flash(f"Fitbit connection failed: {exc}")
+        return redirect(url_for("integrations_page"))
+    integrations.set_tokens(data, "fitbit", tokens)
+    fb.pop("oauth_state", None)
+    integrations.save(integrations_file(), data)
+    _fitbit_sync(days=30)  # one-time backfill
+    flash("Fitbit connected. Sleep data backfilled.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/fitbit/disconnect", methods=["POST"])
+def fitbit_disconnect():
+    data = integrations.load(integrations_file())
+    integrations.clear_provider(data, "fitbit")
+    integrations.save(integrations_file(), data)
+    flash("Fitbit disconnected.")
+    return redirect(url_for("integrations_page"))
 
 
 if __name__ == "__main__":

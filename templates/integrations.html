@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="integrations-wrap">
+  <h1>Integrations</h1>
+  <section class="integration-card">
+    <h2>Fitbit <span class="integration-status {{ 'on' if connected else 'off' }}">
+      {{ 'Connected' if connected else 'Not connected' }}</span></h2>
+    <p class="muted">Auto-fills nightly sleep (bedtime, wake, duration, quality,
+      stages) into your journal. Register a personal app at
+      <code>dev.fitbit.com</code> with redirect URL
+      <code>{{ redirect_uri }}</code> and scope <code>sleep</code>.</p>
+
+    <form method="post" action="{{ url_for('fitbit_credentials') }}" class="integration-creds">
+      <label>Client ID <input name="client_id" value="{{ client_id }}"></label>
+      <label>Client Secret <input name="client_secret" type="password"></label>
+      <button type="submit">Save credentials</button>
+    </form>
+
+    {% if has_creds and not connected %}
+      <a class="btn" href="{{ url_for('fitbit_connect') }}">Connect to Fitbit</a>
+    {% elif connected %}
+      <p class="muted">Last synced: {{ last_sync or 'never' }}</p>
+      <button type="button" id="fitbit-sync-now" class="btn">Sync now</button>
+      <form method="post" action="{{ url_for('fitbit_disconnect') }}" style="display:inline">
+        <button type="submit" class="btn danger"
+                data-confirm="Disconnect Fitbit and remove stored tokens?">Disconnect</button>
+      </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
