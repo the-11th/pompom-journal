@@ -260,13 +260,16 @@ sync status, "Sync now" button).
 - **`journal-richtext.js`**: click-to-edit body rendering (inline formatting +
   color-coded `@mentions`) and live mention→chip reflection.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
-- **`fitbit-sync.js`** (journal entry page only, loaded via `base.html` when
-  Fitbit is connected): auto-syncs the last 7 days of sleep in the background on
-  page load (throttled to once per hour via `data-last-sync` on the sleep panel);
-  re-renders the read-only **sleep panel** in place (builds via `textContent`, not
-  `innerHTML`). The "Sync now" buttons on both the entry page (`#fitbit-sync-entry`)
-  and the settings page (`#fitbit-sync-now`) call the same sync path; the settings
-  button additionally reloads the page afterward.
+- **`fitbit-sync.js`** (loaded via each template's `{% block scripts %}` on the
+  journal entry page and the `/integrations` settings page; it no-ops where its
+  hooks are absent): on the entry page, when the sleep panel reports connected, it
+  auto-syncs the last 7 days of sleep in the background on page load (throttled to
+  once per hour via `data-last-sync` on the panel) and re-renders the read-only
+  **sleep panel** in place (builds via `textContent`, not `innerHTML`). The "Sync
+  now" buttons — settings page (`#fitbit-sync-now`, reloads afterward) and the
+  optional entry-page (`#fitbit-sync-entry`, in-place) — call the same sync path;
+  button wiring works with or without a panel, so the settings-page button syncs
+  even though that page has no sleep panel.
 - **`journal-sections.js`**: drag-and-drop tag reassignment on the manage page
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the

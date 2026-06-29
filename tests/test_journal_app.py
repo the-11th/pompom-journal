@@ -741,6 +741,12 @@ def test_integrations_page_renders(client):
     assert b"Fitbit" in r.data
 
 
+def test_integrations_page_loads_sync_script(client):
+    # The "Sync now" button needs fitbit-sync.js loaded on this page to work.
+    r = client.get("/integrations")
+    assert b"fitbit-sync.js" in r.data
+
+
 def test_save_credentials_then_connect_redirects_to_fitbit(client, app):
     client.post("/integrations/fitbit/credentials",
                 data={"client_id": "CID", "client_secret": "SEC"})
