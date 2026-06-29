@@ -2156,6 +2156,12 @@ a.tl-date:hover { color: var(--accent); }
 .sleep-panel .sleep-times { color: var(--text); }
 .sleep-panel .sleep-qual { color: var(--accent); }
 
+/* ----- RescueTime panel (journal entry form) ----- */
+.rt-row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+  font-size:.85rem; color:var(--muted); margin:.4rem 0; }
+.rt-row .rt-pulse { color:var(--text); }
+.rt-row .rt-prod { color:var(--accent); }
+
 /* ----- Sleep analytics tab ----- */
 /* Stage legend: a row of color-swatch + label items */
 .sleep-stage-legend {

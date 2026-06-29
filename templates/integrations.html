@@ -27,6 +27,26 @@
       </form>
     {% endif %}
   </section>
+
+  <section class="integration-card">
+    <h2>RescueTime <span class="integration-status {{ 'on' if rescuetime_connected else 'off' }}">
+      {{ 'Connected' if rescuetime_connected else 'Not connected' }}</span></h2>
+    <p class="muted">Auto-fills daily productivity (pulse, productive/distracting
+      time, top categories) into your journal. Get a key at
+      <code>rescuetime.com/anapi/manage</code>.</p>
+    <form method="post" action="{{ url_for('rescuetime_key') }}" class="integration-creds">
+      <label>API key <input name="api_key" type="password"></label>
+      <button type="submit">Save key</button>
+    </form>
+    {% if rescuetime_connected %}
+      <p class="muted">Last synced: {{ rescuetime_last_sync or 'never' }}</p>
+      <button type="button" id="rescuetime-sync-now" class="btn">Sync now</button>
+      <form method="post" action="{{ url_for('rescuetime_disconnect') }}" style="display:inline">
+        <button type="submit" class="btn danger"
+                data-confirm="Disconnect RescueTime and remove the stored key?">Disconnect</button>
+      </form>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}
 

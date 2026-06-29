@@ -914,3 +914,18 @@ def test_rescuetime_disconnect(client, app):
     I.save(app.config["INTEGRATIONS_FILE"], d)
     client.post("/integrations/rescuetime/disconnect")
     assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "rescuetime")
+
+
+# --------------------------------------------------------------------------- #
+# Task 7: RescueTime UI — settings card + entry panel row
+# --------------------------------------------------------------------------- #
+
+def test_integrations_page_has_rescuetime_card(client):
+    r = client.get("/integrations")
+    assert b"RescueTime" in r.data
+    assert b'name="api_key"' in r.data
+
+
+def test_entry_shows_rescuetime_connect_when_not_connected(client):
+    r = client.get("/journal")
+    assert b"Connect RescueTime" in r.data

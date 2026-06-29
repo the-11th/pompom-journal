@@ -508,6 +508,9 @@ def _render_entry(data, date):
         fitbit_connected=integrations.is_connected(istore, "fitbit"),
         fitbit_last_sync=integrations.last_sync(istore, "fitbit"),
         sleep=(entry or {}).get("sleep"),
+        rescuetime_connected=integrations.is_connected(istore, "rescuetime"),
+        rescuetime_last_sync=integrations.last_sync(istore, "rescuetime"),
+        rescuetime=(entry or {}).get("rescuetime"),
     )
 
 
@@ -916,6 +919,8 @@ def integrations_page():
         client_id=fb.get("client_id", ""),
         last_sync=integrations.last_sync(data, "fitbit"),
         redirect_uri=_fitbit_redirect_uri(),
+        rescuetime_connected=integrations.is_connected(data, "rescuetime"),
+        rescuetime_last_sync=integrations.last_sync(data, "rescuetime"),
     )
 
 

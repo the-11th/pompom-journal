@@ -58,6 +58,20 @@
         <a class="muted" href="{{ url_for('integrations_page') }}">Connect Fitbit to auto-fill sleep →</a>
       {% endif %}
     </div>
+    <div class="integ-row rt-row" id="rescuetime-panel"
+         data-date="{{ date }}"
+         data-connected="{{ '1' if rescuetime_connected else '0' }}"
+         data-last-sync="{{ rescuetime_last_sync or '' }}">
+      {% if rescuetime %}
+        <span class="rt-icon">⏱</span>
+        <span class="rt-pulse">Pulse {{ rescuetime.pulse }}</span>
+        <span class="rt-prod">{{ (rescuetime.productive_min // 60) }}h {{ (rescuetime.productive_min % 60) }}m productive</span>
+      {% elif rescuetime_connected %}
+        <span class="muted">No RescueTime data for this day</span>
+      {% else %}
+        <a class="muted" href="{{ url_for('integrations_page') }}">Connect RescueTime →</a>
+      {% endif %}
+    </div>
     <div class="body-field">
       <textarea name="body" class="body-input" placeholder="the day's events…">{{ entry.body if entry else '' }}</textarea>
       <div class="body-rendered" hidden></div>
