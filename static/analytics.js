@@ -681,9 +681,6 @@
         container.appendChild(box);
       }
 
-      // ----- suggestions (range-independent: from the server payload) -----
-      renderSuggestions(container, c);
-
       // ----- compact secondary stats (kept from the original summary) -----
       var words = entries.map(function (e) {
         return (e.body || "").split(/\s+/).filter(Boolean).length;
@@ -831,57 +828,6 @@
       list.appendChild(row);
     });
     section.appendChild(list);
-    container.appendChild(section);
-  }
-
-  // Suggestions: server-computed (range-independent) suggested tags + dormant
-  // people. Both render gracefully empty. Suggested-tag chips and dormant rows
-  // open the Tags tab pre-searched.
-  function renderSuggestions(container, c) {
-    var sug = _data.suggestions || [];
-    var dorm = _data.dormant || [];
-    if (!sug.length && !dorm.length) return;
-
-    var section = document.createElement("div");
-    section.className = "ov-section";
-    var h = document.createElement("div");
-    h.className = "ov-section-title";
-    h.textContent = "Suggestions";
-    section.appendChild(h);
-
-    if (sug.length) {
-      var lbl = document.createElement("div");
-      lbl.className = "suggest-label";
-      lbl.textContent = "Frequent words you don't tag yet:";
-      section.appendChild(lbl);
-      var chips = document.createElement("div");
-      chips.className = "suggest-chips";
-      sug.forEach(function (s) {
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "suggest-chip";
-        chip.textContent = s.word + " ·" + s.count;
-        chip.addEventListener("click", function () { gotoTag(s.word); });
-        chips.appendChild(chip);
-      });
-      section.appendChild(chips);
-    }
-
-    if (dorm.length) {
-      var ul = document.createElement("ul");
-      ul.className = "dormant-list";
-      dorm.slice(0, 5).forEach(function (d) {
-        var li = document.createElement("li");
-        li.className = "dormant-row";
-        makeClickable(li, function () { gotoTag(d.name); });
-        li.appendChild(originDot(sectionColorOf(d.section_id)));
-        var tx = document.createElement("span");
-        tx.textContent = " Haven't tagged " + d.name + " in " + d.days_since + " days";
-        li.appendChild(tx);
-        ul.appendChild(li);
-      });
-      section.appendChild(ul);
-    }
     container.appendChild(section);
   }
 
@@ -1141,7 +1087,7 @@
 
   CHARTS.push({
     id: "tag-frequency",
-    panel: "tags",
+    panel: "tags", lens: "journal",
     title: "Tag frequency",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1180,7 +1126,7 @@
 
   CHARTS.push({
     id: "tag-trend",
-    panel: "tags",
+    panel: "tags", lens: "journal",
     title: "Top-tag trend (per ISO week)",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1239,7 +1185,7 @@
 
   CHARTS.push({
     id: "tag-heatmap",
-    panel: "tags",
+    panel: "tags", lens: "journal",
     title: "Per-tag activity",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1284,7 +1230,7 @@
 
   CHARTS.push({
     id: "tag-cooccurrence",
-    panel: "tags",
+    panel: "tags", lens: "journal",
     title: "Tag co-occurrence",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -2078,7 +2024,7 @@
   // Lives in the merged cross-domain "Tags" tab (panel "tags"), after the
   // journal tag charts. Renders its U.empty(...) state when there are no tasks.
   CHARTS.push({
-    id: "task-tag-frequency", panel: "tags", title: "Task tag frequency",
+    id: "task-tag-frequency", panel: "tags", lens: "task", title: "Task tag frequency",
     render: function (container, entries, sections, c) {
       var t = _data.tasks || { archive: [], active: [], expired: [], tags: {} };
       function inR(d) { return !d || ((!_from || d >= _from) && (!_to || d <= _to)); }
@@ -2788,11 +2734,17 @@
       resultsHost.innerHTML = "";
       var entries = filterEntries();
       var c = colors();
-      // Tag-section scope filter (narrows the per-section tag charts). The
-      // task-tag-frequency chart isn't section-based, so it always shows.
-      renderSectionFilter(resultsHost, "tag", renderAggregateTags);
-      var sectionsArg = filteredSections("tag");
-      var charts = CHARTS.filter(function (ch) { return ch.panel === "tags"; });
+      // Lens-scope the aggregate charts: journal tags in the Journal lens, task
+      // tags in the Task lens. Only the journal charts are section-based, so the
+      // tag-section scope filter only shows in the Journal lens.
+      var sectionsArg = _data.sections;
+      if (_lens === "journal") {
+        renderSectionFilter(resultsHost, "tag", renderAggregateTags);
+        sectionsArg = filteredSections("tag");
+      }
+      var charts = CHARTS.filter(function (ch) {
+        return ch.panel === "tags" && (!ch.lens || ch.lens === _lens);
+      });
       if (!charts.length) { U.empty(resultsHost, "No tag charts available."); return; }
       charts.forEach(function (ch) {
         var panel = document.createElement("div");

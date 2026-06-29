@@ -16,6 +16,15 @@
   box-sizing: border-box;
 }
 
+/* Tell the UA to draw all native chrome (scrollbars, focus rings, any residual
+   form control, autofill) in dark mode, and tint any control we don't fully
+   replace (e.g. range sliders, stray checkboxes) with the theme accent rather
+   than the OS default blue. */
+html {
+  color-scheme: dark;
+  accent-color: var(--accent);
+}
+
 body {
   font-family: "Courier New", ui-monospace, "SF Mono", Menlo, monospace;
   max-width: 780px;
@@ -25,6 +34,38 @@ body {
   color: var(--text);
   line-height: 1.5;
 }
+
+/* Themed text selection — amber wash instead of the OS default blue. */
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--text);
+}
+
+/* Themed placeholder color app-wide (was only set on .tag-search before, so
+   every other input fell back to the UA's default placeholder grey). */
+::placeholder { color: var(--muted); opacity: 1; }
+
+/* Dark scrollbars for the dark panels, popovers, dropdowns and overlays — the
+   native light scrollbar otherwise clashes on every scrollable themed surface
+   (tag dropdown, custom-select popover, suggestion day-list, tag preview, etc).
+   Firefox uses the scrollbar-* properties; WebKit/Chromium the pseudo-elements.*/
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-dim);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ----- header / brand ----- */
 header {
@@ -626,6 +667,14 @@ h2 {
 .entry-title { color: var(--text); }
 
 /* ----- manage sections ----- */
+/* Manage page: jump nav + grouped subheadings (Tags / Numbers / Add). */
+/* Inline in the title row, right after "Manage"; margin-right:auto keeps the
+   Archive link pushed to the far right. */
+.section-jump { display: inline-flex; align-items: baseline; gap: 0.8rem; margin: 0 auto 0 1rem; font-size: 0.85rem; flex-wrap: wrap; }
+.section-jump-label { color: var(--muted); }
+.section-jump a { color: var(--accent); text-decoration: none; }
+.section-jump a:hover { text-decoration: underline; }
+.manage-subhead { margin-top: 1.6rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); scroll-margin-top: 0.8rem; }
 .manage-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; }
 .manage-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .unit-input { width: 130px; }
@@ -1311,6 +1360,10 @@ h2 {
   flex-direction: column;
   gap: 1px;
   white-space: nowrap;
+  /* Cap tall option lists (e.g. a section select with many sections) so the
+     dropdown scrolls (themed scrollbar) instead of growing unbounded. */
+  max-height: 280px;
+  overflow-y: auto;
 }
 /* display:flex above overrides the bare [hidden] UA rule, so hide explicitly. */
 .cs-popover[hidden] { display: none; }
@@ -1517,6 +1570,138 @@ input[type="number"]::-webkit-inner-spin-button {
   border-radius: 4px;
 }
 .dormant-row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+/* ----- Interactive suggestion chips (v2) ----- */
+.suggest-chip-v2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 0;
+  cursor: default;
+}
+.suggest-chip-body {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: none;
+  border: none;
+  border-radius: 999px 0 0 999px;
+  padding: 0.2rem 0.2rem 0.2rem 0.6rem;
+  cursor: pointer;
+}
+.suggest-chip-body:hover .suggest-word { color: var(--accent); }
+.suggest-days { color: var(--muted); font-size: 0.7rem; }
+.suggest-dismiss {
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: 0 999px 999px 0;
+  padding: 0.2rem 0.55rem 0.2rem 0.35rem;
+  cursor: pointer;
+}
+.suggest-dismiss:hover { color: var(--danger); }
+.suggest-dismiss:disabled { opacity: 0.4; cursor: default; }
+
+/* Active state for the suggest-popup kind toggle (class-based, no radio). */
+.suggest-kind .kind-opt.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+/* ----- Apply popup ----- */
+.suggest-popup-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.suggest-popup {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem;
+  width: min(460px, 92vw);
+  max-height: 86vh;
+  /* visible (not auto) so the themed Section dropdown isn't clipped; the day
+     list has its own max-height/scroll, so the popup stays compact anyway. */
+  overflow: visible;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.suggest-popup-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.7rem;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.suggest-popup-close:hover { color: var(--danger); }
+.suggest-popup-head {
+  font-size: 1rem;
+  color: var(--accent);
+  margin-bottom: 0.8rem;
+  padding-right: 1.5rem;
+}
+.suggest-popup-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.suggest-popup-rowlabel {
+  color: var(--muted);
+  font-size: 0.8rem;
+  width: 4.5rem;
+  flex: 0 0 auto;
+}
+.suggest-section-select { flex: 1; }
+.suggest-days-list {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 230px;
+  overflow-y: auto;
+  margin-bottom: 0.8rem;
+}
+.suggest-day-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.suggest-day-row:last-child { border-bottom: none; }
+.suggest-day-date { color: var(--accent); flex: 0 0 auto; }
+.suggest-day-snippet { color: var(--muted); overflow-wrap: anywhere; }
+.suggest-hl {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 3px;
+  padding: 0 0.15rem;
+}
+.suggest-popup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+.suggest-popup-actions .modal-confirm:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 
 /* Calendar / per-tag heatmap cells. */
 .heat-cell { stroke: var(--bg); stroke-width: 1; }

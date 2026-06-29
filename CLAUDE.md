@@ -47,7 +47,9 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 
 - **`data/tasks.json`** — task store: `active`, `archive`, `expired` (lists of
   tasks), `tags` (name → hex color registry).
-- **`data/journal.json`** — journal store: `sections` (list), `entries` (list).
+- **`data/journal.json`** — journal store: `sections` (list), `entries` (list),
+  `dismissed_suggestions` (`{word: "YYYY-MM-DD"}` — when each Manage-page tag
+  suggestion was dismissed; words are suppressed for a 30-day cooldown).
 
 Both use forgiving `load()` (missing keys defaulted, corrupt files backed up to
 `.bak`) and atomic `save()` (temp file + `os.replace`). Extend `load()` and
@@ -131,6 +133,9 @@ health, work.
 | `POST /journal/entry/<id>/move` | Move an entry to a different date |
 | `POST /journal/entry/<id>/delete` | Delete an entry |
 | `GET /journal/search` | Live search tab (text + tags + numeric range) |
+| `GET /journal/suggestions/<word>` | JSON: active tag sections + windowed occurrences (for the Manage-page apply popup) |
+| `POST /journal/suggestions/<word>/apply` | Apply a suggested tag (`section_id`, `kind`, repeated/`,`-joined `dates`) → `{ok}` |
+| `POST /journal/suggestions/<word>/dismiss` | Dismiss a suggestion for the 30-day cooldown → `{ok}` |
 | `GET /journal/sections` | Manage sections & tags |
 | `POST /journal/sections/add` | Add a new section |
 | `POST /journal/sections/<id>/edit` | Rename, recolor, or update unit |
@@ -179,6 +184,22 @@ health, work.
   **archives** the tag (`/tags/<tag>/archive-temp` → `archive_temporary_tag`, adds
   it to `archived_tags` so it stops being derived). Promotion of a temp tag is
   drag-only (drag it up into the Permanent zone) — there is no promote button.
+  The manage page also has a **Suggestions** jump-to section (`#sec-suggest`,
+  in the `Tags · Numbers · Suggestions · Add` jump nav, placed between Numbers
+  and Add). It hosts the (moved-from-analytics) tag-suggestions feature:
+  suggested tags (frequent untagged body words) render as `.suggest-chip-v2`
+  chips (word + `Nd` day-count hint + × dismiss) and dormant-people rows
+  ("Haven't tagged X in N days") below. The `journal_sections` route computes
+  `suggestions = tag_suggestions(data, limit=8)` + `dormant = dormant_tags(data)`
+  and the template embeds them as `<script type="application/json"
+  id="suggest-data">` (Jinja `tojson`); `static/tag-suggest.js` reads that blob
+  and renders into `#suggest-root`. × dismisses (POST
+  `/journal/suggestions/<word>/dismiss`); clicking a chip body opens the themed
+  apply popup (GET `/journal/suggestions/<word>` → permanent/temporary
+  `.kind-toggle`, section `<select>`, day-checklist with highlighted snippets,
+  Confirm → POST `/journal/suggestions/<word>/apply`; Cancel/×/outside/Escape
+  close; Confirm disabled when no days checked). After a successful **apply OR
+  dismiss** the page reloads (PRG-style) so the manage page reflects the change.
 - **Rich entry body** (`journal-richtext.js`): the body is a `<textarea>` while
   focused and renders formatted text in place on **blur** (click-to-edit). Discord-
   style inline markup: `**bold**`, `*italic*`, `__underline__`, `~~strike~~`
@@ -226,11 +247,30 @@ management), `journal_sections_archive.html` (archived sections & tags).
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the
   in-chip ↑/× button fallbacks. Drop-target highlights via `.tag-zone.drag-over`.
+- **`tag-suggest.js`** (manage page only): the self-contained tag-suggestions
+  subsystem (moved off the analytics Overview). Reads the `#suggest-data` JSON
+  blob (`{suggestions, dormant}`), renders suggestion chips + dormant rows into
+  `#suggest-root`, and drives the apply popup (GET/apply/dismiss against the
+  `/journal/suggestions/*` routes). Reuses the existing `.suggest-*`/`.dormant-*`
+  styles. Reloads the page after a successful apply/dismiss. No dependency on
+  `analytics.js`.
 - **`style.css`**: shared dark amber/monospace theme. CSS variables in `:root`:
   `--panel`, `--text`, `--muted`, `--border`, `--accent` (#e0a955 amber),
   `--danger` (#e0524d red). All `<select>` elements use a custom SVG caret
   (`appearance: none`) matching the dark theme. The permanent/temporary tag kind
   picker is a `.kind-toggle` segmented radio control (not a `<select>`).
+- **Styling is mandatory for all new UI.** Every new feature MUST match the dark
+  amber/monospace theme — no native/unstyled browser chrome. Concretely: use the
+  `:root` CSS variables (never hardcode theme colors); route every `<select>`
+  through the themed custom dropdown (`window.enhanceSelect(el)` for ones created
+  dynamically after load — never ship a raw native `<select>`); reuse existing
+  patterns (`.kind-toggle`, themed inputs/date pickers, `confirmModal`,
+  `.tag-pop*`/popover and `.suggest-popup*` modal styles, `.cal-*` calendars) and
+  add a matching `style.css` rule for any new class. Global polish is already in
+  place — `color-scheme: dark`, themed `::-webkit-scrollbar`, `::selection`,
+  `::placeholder`, and `accent-color: var(--accent)` — so inherit it rather than
+  re-introducing native widgets. Audit new elements for native fallbacks (raw
+  selects, range sliders, checkboxes, scrollbars, focus rings) before shipping.
 - **`confirmModal`** is a global Promise-based dark modal defined in `base.html`'s
   inline script. Any `button[data-confirm="message"]` is auto-wired to it.
   Available as `window.confirmModal(message, confirmLabel)` from any page script.
@@ -425,16 +465,36 @@ What exists today:
   `mood_by_date`, `mood_numeric_pairs` (same-day mood↔numeric pairs for
   correlation), and `_entry_mood` (the defensive 1..7-or-None reader).
   **Overview-suggestion helpers** (powering the upgraded Overview): `_STOPWORDS`
-  (+ `_MIN_WORD_LEN`), `word_frequency` ([{word, count}] over bodies, sorted
-  count desc then word), `tag_suggestions(data, entries=None, ...)` (frequent
-  words not already a known tag in `tags ∪ archived_tags`), `dormant_tags(data,
-  now=None, section_name="people", threshold_days=21)` ([{name, section_id,
-  last_date, days_since}], most-dormant first), and `mood_tag_uplift(entries,
-  ..., min_n=2)` ([{name, section_id, avg_mood, baseline, uplift, n}], tag-mean
-  − baseline, sorted |uplift| desc). `analytics_payload` now carries each
-  entry's `mood` (int 1–7 or null), plus two **range-independent** keys computed
-  as of `today_iso()`: `suggestions` (= `tag_suggestions(data, limit=8)`) and
-  `dormant` (= `dormant_tags(data, now=today)`).
+  (+ `_MIN_WORD_LEN`) — a **comprehensive** English stopword list (function words
+  + common-but-meaningless words like everything/something/really/going/want/
+  just/today/feel/thing — so they never suggest); `word_frequency` ([{word,
+  count}] over bodies, sorted count desc then word — the low-level primitive).
+  **Smarter tag suggestions (v2):** `tag_suggestions(data, now=None,
+  window_days=30, min_days=3, limit=None)` → `[{word, count, days}]` — body words
+  over the **last 30 days** (relative to `now`/today, independent of the
+  analytics date-range filter) that appear on **≥3 distinct days** (`days` =
+  distinct-day count), are **not** a known tag (`_known_tag_names`, `tags ∪
+  archived_tags`, case-insensitive), and are **not** dismissed within the 30-day
+  cooldown; sorted `days` desc → `count` desc → word; capped to `limit`.
+  `suggestion_occurrences(data, word, now=None, window_days=30,
+  snippet_radius=40)` → `[{date, snippet}]` (newest first) for windowed entries
+  whose body contains `word` as a whole word (case-insensitive); the snippet wraps
+  the matched word in `**...**` for client highlighting. `dismiss_suggestion(data,
+  word, now=None)` records `data["dismissed_suggestions"][word]=today` (idempotent;
+  suppressed while <30 days old, then resurfaces). `apply_tag_suggestion(data,
+  word, section_id, dates, permanent, now=None)` — validates the tag name, then
+  permanent: `add_section_tag` + tags each date's (get-or-created) entry;
+  temporary: tags the entries only (derives as a temporary tag); deduped,
+  case-insensitive; unknown section behaves like the sibling helpers. Also
+  `dormant_tags(data, now=None, section_name="people", threshold_days=21)`
+  ([{name, section_id, last_date, days_since}], most-dormant first) and
+  `mood_tag_uplift(entries, ..., min_n=2)` ([{name, section_id, avg_mood,
+  baseline, uplift, n}], tag-mean − baseline, sorted |uplift| desc).
+  `analytics_payload` carries each entry's `mood` (int 1–7 or null). The
+  `tag_suggestions` / `dormant_tags` helpers now power the **Manage page**
+  Suggestions section (see below), not the analytics Overview — `analytics_payload`
+  no longer carries `suggestions`/`dormant`; the `journal_sections` route computes
+  them directly.
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
   recorded mood via `hasMood`), Consistency (entry calendar, words/entry, gaps,
@@ -491,18 +551,18 @@ What exists today:
     section color) and clickable, thin rows dropped (`renderDriversBoard`);
     (d) the auto-generated **Insights** list (`buildInsights`: weekend-vs-
     weekday mood, best good-mood stretch, streak milestone, strongest mood↔
-    numeric correlation); (e) a **Suggestions** block (range-independent,
-    server-computed): suggested-tag chips from `_data.suggestions` +
-    dormant-people nudges from `_data.dormant` ("Haven't tagged X in N days"),
-    graceful when empty (`renderSuggestions`); (f) a compact secondary stats
-    row. **Clickable launchpad**: numeric card → Numeric tab
+    numeric correlation); and (e) a compact secondary stats row. (The
+    tag-suggestions feature — suggested tags + dormant people + apply popup —
+    used to live here; it now lives on the **Manage sections** page, see the
+    "Section management" Suggestions note above.) **Clickable launchpad**:
+    numeric card → Numeric tab
     (`_secSel.numeric=[id]`); mood card → Mood tab; tasks card → Task lens +
-    Throughput; any driver/suggestion naming a tag → Tags tab pre-searched
+    Throughput; any driver naming a tag → Tags tab pre-searched
     (set `_tagQuery`, `switchTab("tags")`). Wired via `makeClickable` +
     `switchLens`/`switchTab`/`gotoNumeric`/`gotoMood`/`gotoThroughput`/`gotoTag`.
     Styles: `.stat-cards`/`.stat-card*`, `.stat-delta.up/.down`, `.stat-spark`,
     `.insights*`, `.ov-section*`, `.ov-clickable`, `.drivers-list`/`.driver-*`,
-    `.heat-legend*`, `.suggest-*`/`.dormant-*` in `style.css`.
+    `.heat-legend*` in `style.css`.
 - **`templates/journal_analytics.html`** + analytics styles in `style.css`
   (`.analytics-*`, `.chart-svg`/`.chart-svg-fixed`). Tests in
   `tests/test_journal_analytics.py` and route tests in `test_journal_app.py`.

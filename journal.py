@@ -39,7 +39,7 @@ _MAX_UNIT_LEN = 12  # keep unit labels short for the section-card layout
 
 def _empty():
     """A fresh, truly empty store (used by tests)."""
-    return {"sections": [], "entries": []}
+    return {"sections": [], "entries": [], "dismissed_suggestions": {}}
 
 
 def _seeded():
@@ -84,6 +84,8 @@ def load(path):
             if not isinstance(e.get("numbers"), dict):
                 e["numbers"] = {}
             e.setdefault("mood", None)
+        if not isinstance(parsed.get("dismissed_suggestions"), dict):
+            parsed["dismissed_suggestions"] = {}
         return parsed
     _backup(path)
     return _seeded()
@@ -1189,18 +1191,57 @@ def section_coverage(entries, active_section_ids, start, end):
 # Common English stopwords stripped before counting body word frequency. Plus a
 # minimum token length (very short tokens are never meaningful suggestions).
 _STOPWORDS = {
+    # Articles / determiners / conjunctions / prepositions
     "the", "and", "a", "an", "to", "of", "in", "on", "at", "for", "with",
     "is", "it", "this", "that", "these", "those", "as", "by", "be", "been",
     "was", "were", "are", "am", "or", "but", "if", "so", "then", "than",
-    "from", "into", "out", "up", "down", "over", "under", "i", "im", "ive",
-    "you", "youre", "he", "she", "they", "them", "we", "us", "my", "me",
-    "your", "his", "her", "its", "our", "their", "do", "did", "does", "done",
-    "have", "has", "had", "will", "would", "can", "could", "should", "shall",
-    "may", "might", "must", "not", "no", "yes", "all", "any", "some", "more",
-    "most", "much", "very", "just", "about", "after", "before", "again",
-    "got", "get", "go", "going", "went", "day", "today", "really", "also",
-    "there", "here", "what", "when", "where", "which", "who", "how", "why",
-    "because", "while", "still", "too", "now", "one", "two",
+    "from", "into", "out", "up", "down", "over", "under", "off", "onto",
+    "through", "between", "during", "without", "within", "upon", "per",
+    "and", "nor", "yet", "and", "both", "either", "neither", "such",
+    # Pronouns / possessives
+    "i", "im", "ive", "id", "ill", "you", "youre", "youve", "youll",
+    "he", "hes", "she", "shes", "they", "theyre", "them", "we", "were",
+    "weve", "us", "my", "me", "mine", "your", "yours", "his", "her", "hers",
+    "its", "our", "ours", "their", "theirs", "myself", "yourself", "himself",
+    "herself", "itself", "ourselves", "themselves", "whom", "whose",
+    # Auxiliary / modal / common verbs
+    "do", "did", "does", "doing", "done", "have", "has", "had", "having",
+    "will", "would", "wont", "can", "cant", "cannot", "could", "couldnt",
+    "should", "shouldnt", "shall", "may", "might", "must", "mustnt",
+    "being", "isnt", "arent", "wasnt", "werent", "hasnt", "havent", "hadnt",
+    "didnt", "doesnt", "dont",
+    # Negation / quantifiers / intensifiers
+    "not", "no", "yes", "all", "any", "some", "more", "most", "much", "many",
+    "lot", "lots", "few", "less", "least", "very", "just", "quite", "rather",
+    "pretty", "almost", "enough", "only", "own", "same", "other", "another",
+    "each", "every", "none", "every",
+    # Common-but-meaningless words called out in the spec
+    "everything", "something", "anything", "nothing", "everyone", "someone",
+    "anyone", "everybody", "somebody", "anybody", "nobody", "really",
+    "going", "want", "wanted", "wants", "need", "needed", "needs", "like",
+    "liked", "likes", "today", "actually", "maybe", "still", "even", "thing",
+    "things", "feel", "felt", "feeling", "feels", "kind", "sort", "stuff",
+    "way", "ways", "bit", "guess", "though", "anyway", "anymore",
+    "basically", "literally", "honestly", "totally", "definitely", "probably",
+    "perhaps", "seem", "seems", "seemed", "look", "looks", "looked",
+    "make", "makes", "made", "making", "take", "takes", "took", "taken",
+    "come", "comes", "came", "coming", "say", "says", "said", "saying",
+    "think", "thinks", "thought", "thinking", "know", "knows", "knew",
+    "knowing", "see", "sees", "saw", "seen", "let", "lets", "put", "use",
+    "used", "uses", "tell", "told", "give", "gave", "given",
+    # Time / quantity fillers
+    "got", "get", "gets", "getting", "go", "goes", "gone", "went", "day",
+    "days", "week", "weeks", "time", "times", "year", "years", "hour",
+    "hours", "minute", "minutes", "also", "around", "soon", "later", "early",
+    "again", "ago", "always", "never", "often", "sometimes", "usually",
+    "about", "after", "before",
+    # Question / relative words
+    "there", "here", "what", "whats", "when", "where", "which", "who", "how",
+    "why", "because", "while", "until", "since", "whether",
+    # Misc connectives / fillers
+    "too", "now", "one", "two", "three", "first", "next", "last", "well",
+    "okay", "yeah", "oh", "hey", "etc", "via", "amongst",
+    "however", "therefore", "thus", "hence", "else", "ever",
 }
 _MIN_WORD_LEN = 3
 _WORD_RE = re.compile(r"[a-z0-9]+")
@@ -1233,20 +1274,194 @@ def _known_tag_names(data):
     return known
 
 
-def tag_suggestions(data, entries=None, start=None, end=None, limit=None):
-    """[{word, count}] of frequent body words that are NOT already a known tag.
+def _suggestion_window_bounds(now, window_days):
+    """The inclusive [start, end] YYYY-MM-DD window of the last `window_days`
+    days relative to `now` (today). `start` is `window_days - 1` days before
+    today, so today + the preceding `window_days - 1` days are in range."""
+    now = now or datetime.now()
+    today = now.date()
+    start = today - timedelta(days=window_days - 1)
+    return start.isoformat(), today.isoformat()
 
-    A word is "known" when it matches (case-insensitively) any section's
-    permanent or archived tag list. Uses `data["entries"]` when `entries` is
-    None. `limit` caps the result length (applied after the known-tag filter)."""
-    if entries is None:
-        entries = data.get("entries", [])
+
+def _word_days(entries, start, end):
+    """{word: set(dates)} — distinct entry-dates each non-stopword body token
+    appears on, over date-filtered entries. The day-tracking primitive behind
+    the ≥min_days suggestion threshold."""
+    days = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        date = e.get("date")
+        if not date:
+            continue
+        seen = set()
+        for tok in _WORD_RE.findall((e.get("body") or "").lower()):
+            if len(tok) >= _MIN_WORD_LEN and tok not in _STOPWORDS:
+                seen.add(tok)
+        for tok in seen:
+            days.setdefault(tok, set()).add(date)
+    return days
+
+
+def _dismissed_within(data, now, cooldown_days=30):
+    """Set of normalized words dismissed within the last `cooldown_days`
+    (relative to `now`). Words dismissed on/after the cooldown resurface."""
+    now = now or datetime.now()
+    today = now.date()
+    out = set()
+    for word, when in (data.get("dismissed_suggestions") or {}).items():
+        if not _valid_date(when):
+            continue
+        days_since = (today - datetime.strptime(when, "%Y-%m-%d").date()).days
+        if 0 <= days_since < cooldown_days:
+            out.add(_normalize_name(word))
+    return out
+
+
+def tag_suggestions(data, now=None, window_days=30, min_days=3, limit=None):
+    """[{word, count, days}] of recurrent body words worth tagging.
+
+    Pipeline (v2): take entries dated within the last `window_days` relative to
+    `now` (today) → tokenize bodies (lowercased alnum runs) → drop `_STOPWORDS`
+    and tokens shorter than `_MIN_WORD_LEN` → drop words already a known tag
+    (case-insensitively in any section's `tags ∪ archived_tags`) → keep words on
+    `>= min_days` distinct days → drop words dismissed within the 30-day cooldown
+    → sort by `days` desc, then `count` desc, then word → cap to `limit`.
+
+    `days` is the distinct-day count in the window; `count` is the total token
+    occurrences. The window is independent of the analytics date-range filter.
+    Degrades gracefully on missing bodies/dates."""
+    entries = data.get("entries", [])
+    start, end = _suggestion_window_bounds(now, window_days)
     known = _known_tag_names(data)
-    out = [w for w in word_frequency(entries, start, end)
-           if w["word"] not in known]
+    dismissed = _dismissed_within(data, now)
+
+    day_map = _word_days(entries, start, end)
+    counts = Counter()
+    for e in _filter_entries_by_date(entries, start, end):
+        if not e.get("date"):
+            continue
+        for tok in _WORD_RE.findall((e.get("body") or "").lower()):
+            if len(tok) >= _MIN_WORD_LEN and tok not in _STOPWORDS:
+                counts[tok] += 1
+
+    out = []
+    for word, dates in day_map.items():
+        if word in known or word in dismissed:
+            continue
+        if len(dates) < min_days:
+            continue
+        out.append({"word": word, "count": counts[word], "days": len(dates)})
+    out.sort(key=lambda s: (-s["days"], -s["count"], s["word"]))
     if limit is not None:
         out = out[:limit]
     return out
+
+
+_SNIPPET_DEFAULT_RADIUS = 40
+
+
+def _word_match_re(word):
+    """A compiled whole-word, case-insensitive regex for `word` (escaped)."""
+    return re.compile(r"(?<![a-z0-9])" + re.escape(word.lower()) + r"(?![a-z0-9])",
+                      re.IGNORECASE)
+
+
+def suggestion_occurrences(data, word, now=None, window_days=30,
+                           snippet_radius=_SNIPPET_DEFAULT_RADIUS):
+    """[{date, snippet}] (newest first) for windowed entries whose body contains
+    `word` as a whole word (case-insensitive).
+
+    One row per matching entry in the last `window_days` window. `snippet` is the
+    body text around the FIRST match (± `snippet_radius` chars, trimmed to word
+    boundaries, with leading/trailing "…" when truncated) with the matched word
+    wrapped in `**...**` so the client can highlight it. Defensive on empty
+    bodies — entries with no match are skipped."""
+    word = _normalize_name(word)
+    if not word:
+        return []
+    start, end = _suggestion_window_bounds(now, window_days)
+    pat = _word_match_re(word)
+    rows = []
+    for e in _filter_entries_by_date(data.get("entries", []), start, end):
+        if not e.get("date"):
+            continue
+        body = e.get("body") or ""
+        m = pat.search(body)
+        if not m:
+            continue
+        rows.append({"date": e["date"],
+                     "snippet": _build_snippet(body, m.start(), m.end(),
+                                               snippet_radius)})
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return rows
+
+
+def _build_snippet(body, ms, me, radius):
+    """A trimmed snippet of `body` around [ms, me) with the match wrapped in
+    `**...**`. Trims to word boundaries within ± `radius` chars and adds leading/
+    trailing "…" when text was cut off."""
+    lo = max(0, ms - radius)
+    hi = min(len(body), me + radius)
+    # Trim to word boundaries (avoid cutting a word in half) when we trimmed.
+    if lo > 0:
+        while lo < ms and not body[lo - 1].isspace():
+            lo += 1
+    if hi < len(body):
+        while hi > me and not body[hi].isspace():
+            hi -= 1
+    before = body[lo:ms]
+    matched = body[ms:me]
+    after = body[me:hi]
+    snippet = before + "**" + matched + "**" + after
+    snippet = snippet.strip()
+    if lo > 0:
+        snippet = "…" + snippet
+    if hi < len(body):
+        snippet = snippet + "…"
+    return snippet
+
+
+def dismiss_suggestion(data, word, now=None):
+    """Record that `word` was dismissed today (suppresses it for the cooldown).
+    Stored normalized in `data["dismissed_suggestions"]`. Idempotent."""
+    word = _normalize_name(word)
+    if not word:
+        return data
+    data.setdefault("dismissed_suggestions", {})[word] = today_iso(now)
+    return data
+
+
+def apply_tag_suggestion(data, word, section_id, dates, permanent, now=None):
+    """Apply tag `word` to the given `dates` under `section_id`.
+
+    `permanent=True`: add `word` to the section's master list via
+    `add_section_tag` AND tag each date's entry. `permanent=False`: tag each
+    date's entry only (it derives as a temporary tag). For each date, get-or-
+    create that day's entry and add `word` to `entry["tags"][section_id]`
+    (deduped, case-insensitively). Validates `word` via the tag-name validator
+    (raises on a bad name). Unknown section id behaves like the sibling helpers
+    (`add_section_tag` no-ops; entry tags for an unknown section are dropped by
+    `upsert_entry`, so nothing is tagged). Skips invalid dates. Returns `data`."""
+    word = _normalize_name(word)
+    if not _valid_name(word):
+        raise ValueError(f"Invalid tag name: {word!r}")
+    if permanent:
+        add_section_tag(data, section_id, word)  # may raise on numeric section
+    for date in dates or []:
+        if not _valid_date(date):
+            continue
+        existing = get_entry_by_date(data, date)
+        base_tags = dict(existing["tags"]) if existing else {}
+        merged = merge_entry_tags(base_tags, {section_id: [word]})
+        if existing is not None:
+            upsert_entry(data, date, existing.get("title") or "(untitled)",
+                         existing.get("body", ""), tags=merged,
+                         numbers=dict(existing.get("numbers") or {}),
+                         mood=existing.get("mood"), now=now)
+        else:
+            upsert_entry(data, date, "(untitled)", "", tags=merged,
+                         numbers={}, mood=None, now=now)
+    return data
 
 
 def dormant_tags(data, now=None, section_name="people", threshold_days=21):
@@ -1332,10 +1547,6 @@ def analytics_payload(data):
     `sections` lists active sections only (archived ones are dropped, but their
     historical values stay in `entries` keyed by section id — the JS simply
     never references an unknown id). `date_range` spans all entry dates.
-
-    `suggestions` (suggested tags) and `dormant` (dormant people) are
-    range-independent (computed as of `today_iso()`), so the front-end renders
-    them directly without a refetch on date-range change.
     """
     sections = [
         {
@@ -1362,13 +1573,10 @@ def analytics_payload(data):
     dates = sorted(e["date"] for e in entries if e.get("date"))
     date_range = ({"min": dates[0], "max": dates[-1]}
                   if dates else {"min": None, "max": None})
-    today = today_iso()
     return {
         "sections": sections,
         "entries": entries,
         "date_range": date_range,
-        "suggestions": tag_suggestions(data, limit=8),
-        "dormant": dormant_tags(data, now=datetime.fromisoformat(today + "T00:00:00")),
     }
 
 

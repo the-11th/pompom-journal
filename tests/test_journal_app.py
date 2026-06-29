@@ -282,6 +282,17 @@ def test_sections_page_lists_sections(client):
     assert b"work" in resp.data
 
 
+def test_sections_page_embeds_suggestion_data(client):
+    """The Manage page hosts the (moved) tag-suggestions feature: it embeds the
+    suggestion data blob and wires up tag-suggest.js."""
+    resp = client.get("/journal/sections")
+    assert resp.status_code == 200
+    assert b'id="suggest-data"' in resp.data
+    assert b'id="suggest-root"' in resp.data
+    assert b"tag-suggest.js" in resp.data
+    assert b"Suggestions" in resp.data
+
+
 def test_sections_page_shows_temporary_tags(client):
     """Tags that live only on entries (not permanent or archived) appear in a
     Temporary group on the manage page."""
@@ -513,11 +524,10 @@ def test_analytics_data_returns_json(client):
     assert resp.status_code == 200
     assert resp.is_json
     payload = resp.get_json()
-    assert {"sections", "entries", "date_range", "tasks",
-            "suggestions", "dormant"} <= set(payload)
-    # The range-independent Overview blocks ship as lists (empty on a fresh store).
-    assert isinstance(payload["suggestions"], list)
-    assert isinstance(payload["dormant"], list)
+    assert {"sections", "entries", "date_range", "tasks"} <= set(payload)
+    # Suggestion blocks moved to the Manage page; they are no longer in the feed.
+    assert "suggestions" not in payload
+    assert "dormant" not in payload
     # seeded store has the six default sections
     assert [s["name"] for s in payload["sections"]][0] == "people"
 
@@ -623,3 +633,70 @@ def test_entry_page_embeds_mention_index(client):
     assert b'id="mention-index"' in resp.data
     assert b"journal-richtext.js" in resp.data
     assert b"maya" in resp.data
+
+
+# --------------------------------------------------------------------------- #
+# Suggestions v2: detail / apply / dismiss routes
+# --------------------------------------------------------------------------- #
+
+def _people_sid():
+    return journal.load(_journal_path())["sections"][0]["id"]
+
+
+def test_suggestion_detail_shape(client):
+    sid = _people_sid()
+    client.post("/journal/save", data={
+        "date": "2026-06-20", "title": "t", "body": "went running today"})
+    resp = client.get("/journal/suggestions/running")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["word"] == "running"
+    assert isinstance(payload["sections"], list)
+    assert {"id", "name", "color"} <= set(payload["sections"][0])
+    # only tag sections (the seeded store is all tag sections)
+    assert sid in {s["id"] for s in payload["sections"]}
+    occ = payload["occurrences"]
+    assert occ and occ[0]["date"] == "2026-06-20"
+    assert "**running**" in occ[0]["snippet"]
+
+
+def test_suggestion_apply_permanent_mutates_store(client):
+    sid = _people_sid()
+    client.post("/journal/save", data={
+        "date": "2026-06-20", "title": "t", "body": "running"})
+    resp = client.post("/journal/suggestions/running/apply", data={
+        "section_id": sid, "kind": "permanent", "dates": "2026-06-20"})
+    assert resp.status_code == 200 and resp.get_json()["ok"] is True
+    data = journal.load(_journal_path())
+    assert "running" in journal.section_by_id(data, sid)["tags"]
+    assert journal.get_entry_by_date(data, "2026-06-20")["tags"][sid] \
+        == ["running"]
+
+
+def test_suggestion_apply_temporary_multiple_dates(client):
+    sid = _people_sid()
+    resp = client.post("/journal/suggestions/running/apply", data={
+        "section_id": sid, "kind": "temporary",
+        "dates": ["2026-06-20", "2026-06-21"]})
+    assert resp.get_json()["ok"] is True
+    data = journal.load(_journal_path())
+    assert "running" not in journal.section_by_id(data, sid)["tags"]
+    for d in ("2026-06-20", "2026-06-21"):
+        assert journal.get_entry_by_date(data, d)["tags"][sid] == ["running"]
+
+
+def test_suggestion_apply_rejects_empty_dates_and_bad_section(client):
+    sid = _people_sid()
+    bad = client.post("/journal/suggestions/running/apply", data={
+        "section_id": sid, "kind": "temporary", "dates": ""})
+    assert bad.status_code == 400 and bad.get_json()["ok"] is False
+    nosec = client.post("/journal/suggestions/running/apply", data={
+        "section_id": "nope", "kind": "temporary", "dates": "2026-06-20"})
+    assert nosec.status_code == 400 and nosec.get_json()["ok"] is False
+
+
+def test_suggestion_dismiss_records_dismissal(client):
+    resp = client.post("/journal/suggestions/running/dismiss")
+    assert resp.status_code == 200 and resp.get_json()["ok"] is True
+    data = journal.load(_journal_path())
+    assert "running" in data["dismissed_suggestions"]

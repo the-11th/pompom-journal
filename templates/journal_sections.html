@@ -15,10 +15,17 @@
 {% block content %}
   <div class="page-title-row">
     <h2>Manage</h2>
+    <nav class="section-jump" aria-label="Jump to section">
+      <span class="section-jump-label">Jump to:</span>
+      <a href="#sec-tags">Tags</a>
+      <a href="#sec-numbers">Numbers</a>
+      <a href="#sec-suggest">Suggestions</a>
+      <a href="#sec-add">Add</a>
+    </nav>
     <a class="archive-link" href="{{ url_for('journal_sections_archive') }}">Archive</a>
   </div>
 
-  {% for s in sections %}
+  {% macro render_section(s, temporary_tags) %}
     {% set fg = text_color_for(s.color) %}
     <section class="manage-section" style="--tag-bg: {{ s.color }}; --tag-fg: {{ fg }};">
 
@@ -92,13 +99,27 @@
       </form>
 
     </section>
+  {% endmacro %}
+
+  <h3 id="sec-tags" class="manage-subhead">Tags</h3>
+  {% for s in sections if s.type == "tag" %}
+    {{ render_section(s, temporary_tags) }}
+  {% else %}
+    <p class="empty">No tag sections yet.</p>
   {% endfor %}
 
-  {% if not sections %}
-    <p class="empty">No sections yet.</p>
-  {% endif %}
+  <h3 id="sec-numbers" class="manage-subhead">Numbers</h3>
+  {% for s in sections if s.type == "numeric" %}
+    {{ render_section(s, temporary_tags) }}
+  {% else %}
+    <p class="empty">No numeric sections yet.</p>
+  {% endfor %}
 
-  <h3>Add a section</h3>
+  <h3 id="sec-suggest" class="manage-subhead">Suggestions</h3>
+  <div id="suggest-root"></div>
+  <script type="application/json" id="suggest-data">{{ {"suggestions": suggestions, "dormant": dormant} | tojson }}</script>
+
+  <h3 id="sec-add" class="manage-subhead">Add a section</h3>
   <form class="addrow tag-preview-group" method="post"
         action="{{ url_for('journal_sections_add') }}">
     <input class="tag-name-input" type="text" name="name" placeholder="section name" required>
@@ -114,4 +135,20 @@
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='journal-sections.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='tag-suggest.js') }}" defer></script>
+  <script>
+    // Add-section form: show the unit box only when the "numeric" type is chosen.
+    // Anchor on the (unique) type select — there are other `.addrow` forms on
+    // this page (the per-section add-tag rows) that have no type select.
+    (function () {
+      var typeSel = document.querySelector('.addrow select[name="type"]');
+      if (!typeSel) return;
+      var form = typeSel.closest("form");
+      var unit = form && form.querySelector(".unit-input");
+      if (!unit) return;
+      function sync() { unit.hidden = typeSel.value !== "numeric"; }
+      typeSel.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
 {% endblock %}

@@ -495,8 +495,7 @@ def test_analytics_payload_shape():
     )
     payload = journal.analytics_payload(data)
 
-    assert set(payload) == {"sections", "entries", "date_range",
-                            "suggestions", "dormant"}
+    assert set(payload) == {"sections", "entries", "date_range"}
     s = payload["sections"][0]
     assert set(s) == {"id", "name", "type", "color", "tags", "unit"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
@@ -524,8 +523,9 @@ def test_analytics_payload_empty_date_range():
     assert payload["date_range"] == {"min": None, "max": None}
 
 
-def test_analytics_payload_carries_suggestions_and_dormant():
-    """The payload exposes range-independent suggestion blocks with sane shapes."""
+def test_analytics_payload_omits_suggestions_and_dormant():
+    """Suggestion blocks moved to the Manage page; the payload no longer carries
+    them (the Manage route computes its own)."""
     data = journal._empty()
     sec = journal.add_section(data, "people", "tag", "#e0a955")
     journal.add_section_tag(data, sec["id"], "alex")
@@ -536,15 +536,8 @@ def test_analytics_payload_carries_suggestions_and_dormant():
         now=datetime(2026, 6, 10, 9, 0, 0),
     )
     payload = journal.analytics_payload(data)
-    assert isinstance(payload["suggestions"], list)
-    assert isinstance(payload["dormant"], list)
-    # "running"/"mountains" recur and are not tags -> suggested.
-    sug_words = {s["word"] for s in payload["suggestions"]}
-    assert "running" in sug_words
-    for s in payload["suggestions"]:
-        assert set(s) == {"word", "count"}
-    for d in payload["dormant"]:
-        assert set(d) == {"name", "section_id", "last_date", "days_since"}
+    assert "suggestions" not in payload
+    assert "dormant" not in payload
 
 
 # --------------------------------------------------------------------------- #
@@ -594,43 +587,229 @@ def test_word_frequency_lowercases_alphanumeric():
 # tag_suggestions
 # --------------------------------------------------------------------------- #
 
-def test_tag_suggestions_excludes_known_tags():
+# A fixed "now" used across v2 suggestion tests; window = last 30 days.
+_NOW = datetime(2026, 6, 30, 9, 0, 0)
+
+
+def _sug_store(bodies_by_date, tags=None, archived=None, dismissed=None):
+    """Build a store with a single 'people' tag section, given {date: body}."""
     data = journal._empty()
     sec = journal.add_section(data, "people", "tag", "#e0a955")
-    journal.add_section_tag(data, sec["id"], "alex")
-    journal.upsert_entry(
-        data, "2026-06-10", "t", "alex alex running running",
-        now=datetime(2026, 6, 10, 9, 0, 0),
-    )
-    got = journal.tag_suggestions(data)
-    words = {s["word"] for s in got}
+    for t in tags or []:
+        journal.add_section_tag(data, sec["id"], t)
+    for t in archived or []:
+        journal.add_section_tag(data, sec["id"], t)
+        journal.remove_section_tag(data, sec["id"], t)
+    for date, body in bodies_by_date.items():
+        journal.upsert_entry(data, date, "t", body,
+                             now=datetime.strptime(date, "%Y-%m-%d"))
+    if dismissed:
+        data["dismissed_suggestions"].update(dismissed)
+    return data, sec
+
+
+def test_tag_suggestions_v2_shape_and_min_days():
+    # "running" appears on 3 distinct days -> qualifies; "swimming" on 2 -> not.
+    data, _ = _sug_store({
+        "2026-06-20": "running swimming",
+        "2026-06-22": "running swimming",
+        "2026-06-24": "running",
+    })
+    got = journal.tag_suggestions(data, now=_NOW)
+    by_word = {s["word"]: s for s in got}
+    assert "running" in by_word
+    assert by_word["running"] == {"word": "running", "count": 3, "days": 3}
+    assert "swimming" not in by_word   # only 2 distinct days
+
+
+def test_tag_suggestions_excludes_stopwords_including_everything():
+    data, _ = _sug_store({
+        "2026-06-20": "everything something really running",
+        "2026-06-22": "everything something running",
+        "2026-06-24": "everything running",
+    })
+    words = {s["word"] for s in journal.tag_suggestions(data, now=_NOW)}
     assert "running" in words
-    assert "alex" not in words   # already a registered tag
+    assert "everything" not in words and "something" not in words
+    assert "really" not in words
 
 
-def test_tag_suggestions_excludes_archived_tags_case_insensitive():
-    data = journal._empty()
-    sec = journal.add_section(data, "people", "tag", "#e0a955")
-    journal.add_section_tag(data, sec["id"], "alex")
-    journal.remove_section_tag(data, sec["id"], "alex")   # -> archived_tags
-    journal.upsert_entry(
-        data, "2026-06-10", "t", "Alex Alex jogging jogging",
-        now=datetime(2026, 6, 10, 9, 0, 0),
+def test_tag_suggestions_excludes_known_and_archived_tags():
+    data, _ = _sug_store(
+        {
+            "2026-06-20": "Alex Alex jogging",
+            "2026-06-22": "alex jogging",
+            "2026-06-24": "alex jogging",
+        },
+        archived=["alex"],
     )
-    words = {s["word"] for s in journal.tag_suggestions(data)}
-    assert "alex" not in words   # archived tag, still excluded
+    words = {s["word"] for s in journal.tag_suggestions(data, now=_NOW)}
+    assert "alex" not in words   # archived tag still excluded
     assert "jogging" in words
 
 
-def test_tag_suggestions_uses_data_entries_when_none():
+def test_tag_suggestions_window_excludes_old_entries():
+    # The 2026-05-01 entry is >30 days before now -> ignored even with 3 hits.
+    data, _ = _sug_store({
+        "2026-05-01": "running running running",
+        "2026-06-20": "running",
+        "2026-06-22": "running",
+    })
+    words = {s["word"] for s in journal.tag_suggestions(data, now=_NOW)}
+    # Only 2 in-window days remain for "running" -> below min_days.
+    assert "running" not in words
+
+
+def test_tag_suggestions_window_boundary_inclusive():
+    # 30-day window relative to 2026-06-30 => start 2026-06-01 inclusive.
+    data, _ = _sug_store({
+        "2026-06-01": "running",
+        "2026-06-15": "running",
+        "2026-06-30": "running",
+    })
+    words = {s["word"] for s in journal.tag_suggestions(data, now=_NOW)}
+    assert "running" in words
+
+
+def test_tag_suggestions_dismissed_within_cooldown_excluded_then_resurfaces():
+    bodies = {
+        "2026-06-20": "running",
+        "2026-06-22": "running",
+        "2026-06-24": "running",
+    }
+    # Dismissed 10 days ago -> within 30-day cooldown -> suppressed.
+    data, _ = _sug_store(bodies, dismissed={"running": "2026-06-20"})
+    words = {s["word"] for s in journal.tag_suggestions(data, now=_NOW)}
+    assert "running" not in words
+    # Dismissed 31 days ago -> cooldown expired -> resurfaces.
+    data2, _ = _sug_store(bodies, dismissed={"running": "2026-05-30"})
+    words2 = {s["word"] for s in journal.tag_suggestions(data2, now=_NOW)}
+    assert "running" in words2
+
+
+def test_tag_suggestions_ordering_and_limit():
+    data, _ = _sug_store({
+        "2026-06-18": "alpha beta gamma",
+        "2026-06-20": "alpha beta gamma",
+        "2026-06-22": "alpha beta",       # alpha:3d, beta:3d, gamma:2d
+        "2026-06-24": "alpha beta",        # alpha:4d, beta:4d
+        "2026-06-26": "alpha",             # alpha:5d
+    })
+    got = journal.tag_suggestions(data, now=_NOW)
+    # alpha (5 days) before beta (4 days); gamma drops (2 days < 3).
+    words = [s["word"] for s in got]
+    assert words[:2] == ["alpha", "beta"]
+    assert "gamma" not in words
+    limited = journal.tag_suggestions(data, now=_NOW, limit=1)
+    assert [s["word"] for s in limited] == ["alpha"]
+
+
+# --------------------------------------------------------------------------- #
+# suggestion_occurrences
+# --------------------------------------------------------------------------- #
+
+def test_suggestion_occurrences_whole_word_case_insensitive():
+    data, _ = _sug_store({
+        "2026-06-20": "I went Running today",
+        "2026-06-22": "rerunning is not a match",   # substring, not whole word
+        "2026-06-24": "running again",
+    })
+    occ = journal.suggestion_occurrences(data, "running", now=_NOW)
+    dates = [o["date"] for o in occ]
+    assert dates == ["2026-06-24", "2026-06-20"]   # newest first; 06-22 skipped
+    assert "**Running**" in occ[1]["snippet"]
+
+
+def test_suggestion_occurrences_snippet_truncation_and_ellipsis():
+    long_body = ("padding " * 20) + "running " + ("trailing " * 20)
+    data, _ = _sug_store({"2026-06-20": long_body})
+    occ = journal.suggestion_occurrences(data, "running", now=_NOW,
+                                         snippet_radius=20)
+    snip = occ[0]["snippet"]
+    assert "**running**" in snip
+    assert snip.startswith("…") and snip.endswith("…")
+    assert len(snip) < len(long_body)
+
+
+def test_suggestion_occurrences_window_and_empty_bodies():
+    data, _ = _sug_store({
+        "2026-05-01": "running",      # out of window
+        "2026-06-20": "",             # empty body
+        "2026-06-22": "running",
+    })
+    occ = journal.suggestion_occurrences(data, "running", now=_NOW)
+    assert [o["date"] for o in occ] == ["2026-06-22"]
+    assert journal.suggestion_occurrences(data, "", now=_NOW) == []
+
+
+# --------------------------------------------------------------------------- #
+# dismiss_suggestion
+# --------------------------------------------------------------------------- #
+
+def test_dismiss_suggestion_records_today_idempotent():
     data = journal._empty()
-    journal.add_section(data, "people", "tag", "#e0a955")
-    journal.upsert_entry(
-        data, "2026-06-10", "t", "swimming swimming",
-        now=datetime(2026, 6, 10, 9, 0, 0),
-    )
-    got = journal.tag_suggestions(data)
-    assert {"word": "swimming", "count": 2} in got
+    journal.dismiss_suggestion(data, "Running", now=_NOW)
+    assert data["dismissed_suggestions"] == {"running": "2026-06-30"}
+    journal.dismiss_suggestion(data, "running", now=_NOW)
+    assert data["dismissed_suggestions"] == {"running": "2026-06-30"}
+
+
+# --------------------------------------------------------------------------- #
+# apply_tag_suggestion
+# --------------------------------------------------------------------------- #
+
+def test_apply_tag_suggestion_permanent_adds_master_and_tags_days():
+    data, sec = _sug_store({"2026-06-20": "running", "2026-06-22": "running"})
+    journal.apply_tag_suggestion(
+        data, "running", sec["id"], ["2026-06-20", "2026-06-22"],
+        permanent=True, now=_NOW)
+    assert "running" in journal.section_by_id(data, sec["id"])["tags"]
+    for d in ("2026-06-20", "2026-06-22"):
+        e = journal.get_entry_by_date(data, d)
+        assert e["tags"][sec["id"]] == ["running"]
+
+
+def test_apply_tag_suggestion_temporary_tags_days_only():
+    data, sec = _sug_store({"2026-06-20": "running"})
+    journal.apply_tag_suggestion(
+        data, "running", sec["id"], ["2026-06-20"], permanent=False, now=_NOW)
+    assert "running" not in journal.section_by_id(data, sec["id"])["tags"]
+    assert journal.get_entry_by_date(data, "2026-06-20")["tags"][sec["id"]] \
+        == ["running"]
+    # Derives as a temporary tag.
+    assert "running" in journal.temporary_tags(data).get(sec["id"], [])
+
+
+def test_apply_tag_suggestion_creates_missing_entry_and_dedupes():
+    data, sec = _sug_store({})
+    # No entry on this date -> get-or-create.
+    journal.apply_tag_suggestion(
+        data, "running", sec["id"], ["2026-06-25"], permanent=False, now=_NOW)
+    e = journal.get_entry_by_date(data, "2026-06-25")
+    assert e is not None and e["tags"][sec["id"]] == ["running"]
+    # Applying again does not duplicate.
+    journal.apply_tag_suggestion(
+        data, "running", sec["id"], ["2026-06-25"], permanent=False, now=_NOW)
+    assert journal.get_entry_by_date(data, "2026-06-25")["tags"][sec["id"]] \
+        == ["running"]
+
+
+def test_apply_tag_suggestion_bad_section_no_crash():
+    data, _ = _sug_store({"2026-06-20": "running"})
+    # Unknown section -> add_section_tag no-ops, entry tag dropped by upsert.
+    journal.apply_tag_suggestion(
+        data, "running", "nope", ["2026-06-20"], permanent=True, now=_NOW)
+    e = journal.get_entry_by_date(data, "2026-06-20")
+    assert "nope" not in (e.get("tags") or {})
+
+
+def test_apply_tag_suggestion_invalid_word_raises():
+    data, sec = _sug_store({})
+    import pytest
+    with pytest.raises(ValueError):
+        journal.apply_tag_suggestion(
+            data, "bad!name", sec["id"], ["2026-06-20"], permanent=False,
+            now=_NOW)
 
 
 # --------------------------------------------------------------------------- #

@@ -97,6 +97,10 @@
     });
   }
 
+  // Exposed so selects created dynamically after load (e.g. inside a popup)
+  // can be themed on demand, not just those present at DOMContentLoaded.
+  window.enhanceSelect = enhance;
+
   document.addEventListener("click", closeOpen);
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") closeOpen();

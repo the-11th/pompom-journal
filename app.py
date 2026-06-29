@@ -528,6 +528,55 @@ def journal_analytics_data():
     return jsonify(payload)
 
 
+@app.route("/journal/suggestions/<word>")
+def journal_suggestion_detail(word):
+    """Feed the apply popup: active tag sections + windowed occurrences of a
+    suggested word. Returns 200 with empty lists for an unknown/known word."""
+    data = journal.load(journal_file())
+    sections = [
+        {"id": s["id"], "name": s["name"], "color": s["color"]}
+        for s in journal.active_sections(data) if s.get("type") == "tag"
+    ]
+    return jsonify({
+        "word": (word or "").strip().lower(),
+        "sections": sections,
+        "occurrences": journal.suggestion_occurrences(data, word),
+    })
+
+
+@app.route("/journal/suggestions/<word>/apply", methods=["POST"])
+def journal_suggestion_apply(word):
+    """Apply a suggested tag to selected days. JSON-driven (no PRG)."""
+    section_id = (request.form.get("section_id") or "").strip()
+    kind = (request.form.get("kind") or "").strip()
+    dates = request.form.getlist("dates")
+    if len(dates) == 1 and "," in dates[0]:
+        dates = [d.strip() for d in dates[0].split(",") if d.strip()]
+    dates = [d for d in (d.strip() for d in dates) if d]
+    if not section_id or journal.section_by_id(
+            journal.load(journal_file()), section_id) is None:
+        return jsonify({"ok": False, "error": "unknown section"}), 400
+    if not dates:
+        return jsonify({"ok": False, "error": "no dates selected"}), 400
+    data = journal.load(journal_file())
+    try:
+        journal.apply_tag_suggestion(
+            data, word, section_id, dates, permanent=(kind == "permanent"))
+        journal.save(journal_file(), data)
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/journal/suggestions/<word>/dismiss", methods=["POST"])
+def journal_suggestion_dismiss(word):
+    """Suppress a suggested word for the 30-day cooldown."""
+    data = journal.load(journal_file())
+    journal.dismiss_suggestion(data, word)
+    journal.save(journal_file(), data)
+    return jsonify({"ok": True})
+
+
 def _collect_entry_fields(form, data):
     """Build {section_id: [tags]} and {section_id: value} from the form.
 
@@ -640,7 +689,9 @@ def journal_sections():
     data = journal.load(journal_file())
     return render_template("journal_sections.html", data=data,
                            sections=journal.active_sections(data),
-                           temporary_tags=journal.temporary_tags(data))
+                           temporary_tags=journal.temporary_tags(data),
+                           suggestions=journal.tag_suggestions(data, limit=8),
+                           dormant=journal.dormant_tags(data))
 
 
 @app.route("/journal/sections/archive")

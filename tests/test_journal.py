@@ -15,7 +15,8 @@ NOW = datetime(2026, 6, 15, 9, 0, 0)
 
 
 def test_empty_store_shape():
-    assert journal._empty() == {"sections": [], "entries": []}
+    assert journal._empty() == {
+        "sections": [], "entries": [], "dismissed_suggestions": {}}
 
 
 def test_seeded_has_six_default_tag_sections():
@@ -60,6 +61,8 @@ def test_load_migrates_missing_fields(tmp_path):
     assert s["tags"] == [] and s["unit"] is None and s["archived"] is False
     e = data["entries"][0]
     assert e["tags"] == {} and e["numbers"] == {}
+    # New top-level key defaults to {} on a store written before it existed.
+    assert data["dismissed_suggestions"] == {}
 
 
 # --------------------------------------------------------------------------- #
