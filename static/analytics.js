@@ -18,6 +18,9 @@
   var _lastFetch = 0;
   var _tagQuery = "";       // current tag in the Tag detail tab
   var _tagCache = {};       // {name: payload} cache for /tag/<name>/overview
+  // Section scope filter for the Numeric & Tags tabs. null = all shown; else an
+  // array of selected section ids of that type. Keyed by section type.
+  var _secSel = { numeric: null, tag: null };
 
   // Panel definitions. `needs` optionally gates a tab's visibility.
   // `lens` scopes a tab to one lens; tabs with no lens are shared (Overview),
@@ -251,6 +254,11 @@
   }
   function dayDiff(a, b) {  // whole days between two YYYY-MM-DD strings
     return Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+  }
+  function isoShift(iso, days) {  // YYYY-MM-DD shifted by N days (UTC-safe)
+    var d = new Date(iso + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
   }
   function streaks(dates) {
     if (!dates.length) return { current: 0, longest: 0, runs: [] };
@@ -523,6 +531,51 @@
         dot.className = "cal-dot";
         cell.appendChild(dot);
       }
+      grid.appendChild(cell);
+    }
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
+  // A month grid whose cells are shaded by a numeric value (dark -> section
+  // color). `byDate` is {YYYY-MM-DD: value}; `min`/`span` normalize the value to
+  // a 0..1 fill fraction. Reuses the same .cal-* classes as buildMonthGrid.
+  function buildValueMonthGrid(year, month, byDate, min, span, color, todayIso) {
+    var wrap = document.createElement("div");
+    wrap.className = "cal-month";
+    var title = document.createElement("div");
+    title.className = "cal-month-title";
+    title.textContent = CAL_MONTHS[month] + " " + year;
+    wrap.appendChild(title);
+    var grid = document.createElement("div");
+    grid.className = "cal-grid";
+    CAL_DAYS.forEach(function (d) {
+      var wh = document.createElement("div");
+      wh.className = "cal-weekday"; wh.textContent = d;
+      grid.appendChild(wh);
+    });
+    var firstDow = new Date(year, month, 1).getDay();
+    for (var b = 0; b < firstDow; b++) {
+      var blank = document.createElement("div");
+      blank.className = "cal-day cal-day-blank";
+      grid.appendChild(blank);
+    }
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (var day = 1; day <= daysInMonth; day++) {
+      var iso = calIso(year, month, day);
+      var cell = document.createElement("div");
+      cell.className = "cal-day";
+      if (iso === todayIso) cell.classList.add("is-today");
+      if (byDate[iso] != null) {
+        var frac = (byDate[iso] - min) / span;  // 0..1
+        // Map to 15..100% so even the lowest value is faintly visible.
+        cell.style.background = U.colorMix(color, Math.round(15 + frac * 85));
+        cell.title = iso + ": " + U.fmt(byDate[iso]);
+      }
+      var num = document.createElement("span");
+      num.className = "cal-day-num";
+      num.textContent = String(day);
+      cell.appendChild(num);
       grid.appendChild(cell);
     }
     wrap.appendChild(grid);
@@ -881,6 +934,65 @@
       return slice.reduce(function (a, b) { return a + b; }, 0) / slice.length;
     });
   }
+  // Whole days from a date-sorted series' first date to series[i].date.
+  function dayIndex(series, i) {
+    return dayDiff(series[0].date, series[i].date);
+  }
+  // Least-squares fit of value vs day-index. Mirrors journal.numeric_regression.
+  // Returns {slope, intercept} (units/day) or null when undefined.
+  function linearRegression(series) {
+    var n = series.length;
+    if (n < 2) return null;
+    var xs = series.map(function (_, i) { return dayIndex(series, i); });
+    var ys = series.map(function (p) { return p.value; });
+    var mx = xs.reduce(function (a, b) { return a + b; }, 0) / n;
+    var my = ys.reduce(function (a, b) { return a + b; }, 0) / n;
+    var sxx = 0, sxy = 0;
+    for (var i = 0; i < n; i++) {
+      sxx += (xs[i] - mx) * (xs[i] - mx);
+      sxy += (xs[i] - mx) * (ys[i] - my);
+    }
+    if (sxx === 0) return null;
+    var slope = sxy / sxx;
+    return { slope: slope, intercept: my - slope * mx };
+  }
+
+  // Per-section overview stat cards: mean / median / std / min / max / latest /
+  // count. One labelled group per numeric section, using the shared .stat-cards.
+  CHARTS.push({
+    id: "numeric-stat-cards",
+    panel: "numeric",
+    title: "At a glance",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var rendered = false;
+      nums.forEach(function (s) {
+        var series = numericSeries(entries, s.id);
+        if (!series.length) return;
+        rendered = true;
+        var block = document.createElement("div");
+        block.className = "section-block";
+        var h4 = document.createElement("h4");
+        h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
+        block.appendChild(h4);
+        var vals = series.map(function (p) { return p.value; });
+        var d = U.describe(vals);
+        var grid = document.createElement("div");
+        grid.className = "stat-cards";
+        var unit = s.unit ? " " + s.unit : "";
+        statCard(grid, U.fmt(d.mean), "mean", "median " + U.fmt(d.median));
+        statCard(grid, U.fmt(d.stdev), "std dev", null);
+        statCard(grid, U.fmt(d.min), "min", "max " + U.fmt(d.max));
+        statCard(grid, U.fmt(series[series.length - 1].value) + unit, "latest",
+                 series[series.length - 1].date);
+        statCard(grid, d.count, "data points", null);
+        block.appendChild(grid);
+        container.appendChild(block);
+      });
+      if (!rendered) U.empty(container, "No numeric values in this range.");
+    },
+  });
 
   CHARTS.push({
     id: "numeric-line",
@@ -914,6 +1026,20 @@
         var pts = series.map(function (p, i) { return ptAt(i, p.value); });
         // 7-point rolling average overlay (muted).
         var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+        // Least-squares trend line over day-index (units/day), drawn dashed.
+        var reg = linearRegression(series);
+        if (reg && series.length >= 2) {
+          var firstDay = dayIndex(series, 0), lastDay = dayIndex(series, series.length - 1);
+          var y0 = reg.intercept + reg.slope * firstDay;
+          var y1 = reg.intercept + reg.slope * lastDay;
+          var trend = U.svgEl("line", {
+            x1: ptAt(0, y0).x, y1: ptAt(0, y0).y,
+            x2: ptAt(series.length - 1, y1).x, y2: ptAt(series.length - 1, y1).y,
+            stroke: U.colorMix(s.color, 55), "stroke-width": 1,
+            "stroke-dasharray": "4 3",
+          });
+          svg.appendChild(trend);
+        }
         U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
         U.drawLine(svg, pts, s.color, 1.5);
         pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, s.color); });
@@ -923,11 +1049,222 @@
         U.text(svg, 0, h - pad + 2, U.fmt(min), c.muted, { size: 9 });
         block.appendChild(svg);
         var d = U.describe(vals);
+        var trendLabel = null;
+        if (reg) {
+          var perDay = reg.slope;
+          var dir = Math.abs(perDay) < 1e-9 ? "flat"
+                    : (perDay > 0 ? "▲ rising" : "▼ falling");
+          trendLabel = dir + " " + U.fmt(Math.abs(perDay)) + "/day";
+        }
         U.statsRow(block, [
           ["mean", U.fmt(d.mean)], ["median", U.fmt(d.median)],
           ["mode", U.fmt(d.mode)], ["std dev", U.fmt(d.stdev)],
           ["min", U.fmt(d.min)], ["max", U.fmt(d.max)],
+          ["trend", trendLabel],
         ]);
+        container.appendChild(block);
+      });
+      if (!rendered) U.empty(container, "No numeric values in this range.");
+    },
+  });
+
+  // Cumulative total over time (running sum of date-sorted values).
+  CHARTS.push({
+    id: "numeric-cumulative",
+    panel: "numeric",
+    title: "Cumulative total",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var rendered = false;
+      nums.forEach(function (s) {
+        var series = numericSeries(entries, s.id);
+        if (series.length < 2) return;
+        rendered = true;
+        var cum = [], total = 0;
+        series.forEach(function (p) { total += p.value; cum.push(total); });
+        var block = document.createElement("div");
+        block.className = "section-block";
+        var h4 = document.createElement("h4");
+        h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
+        block.appendChild(h4);
+        var w = 600, h = 180, pad = 40;
+        var svg = U.svg(w, h);
+        var max = Math.max.apply(null, cum), min = Math.min.apply(null, cum.concat(0));
+        var span = max - min || 1;
+        U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+        var pts = cum.map(function (v, i) {
+          var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                      : pad + ((w - pad - 10) * i) / (series.length - 1);
+          var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
+          return { x: x, y: y };
+        });
+        U.drawLine(svg, pts, s.color, 1.5);
+        U.drawDot(svg, pts[pts.length - 1].x, pts[pts.length - 1].y, 2.5, s.color);
+        U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                   [series[0].date, series[series.length - 1].date], c);
+        U.text(svg, 0, 14, U.fmt(max), c.muted, { size: 9 });
+        block.appendChild(svg);
+        U.statsRow(block, [["total", U.fmt(total) + (s.unit ? " " + s.unit : "")]]);
+        container.appendChild(block);
+      });
+      if (!rendered) U.empty(container, "Need 2+ values per section for a cumulative line.");
+    },
+  });
+
+  // Period-over-period delta: this window vs the immediately preceding window
+  // of equal length. Mirrors journal.numeric_period_delta (JS-side compute).
+  CHARTS.push({
+    id: "numeric-period-delta",
+    panel: "numeric",
+    title: "This period vs. previous",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      if (!_from || !_to) {
+        U.empty(container, "Set a date range to compare against the previous period.");
+        return;
+      }
+      function meanIn(sid, a, b) {
+        var vs = _data.entries.filter(function (e) {
+          return e.date >= a && e.date <= b && (e.numbers || {})[sid] != null;
+        }).map(function (e) { return Number(e.numbers[sid]); });
+        return vs.length ? vs.reduce(function (x, y) { return x + y; }, 0) / vs.length : null;
+      }
+      var len = dayDiff(_from, _to);  // window length in days
+      var prevEnd = isoShift(_from, -1);
+      var prevStart = isoShift(prevEnd, -len);
+      var grid = document.createElement("div");
+      grid.className = "stat-cards";
+      var rendered = false;
+      nums.forEach(function (s) {
+        var cur = meanIn(s.id, _from, _to);
+        var prev = meanIn(s.id, prevStart, prevEnd);
+        if (cur == null && prev == null) return;
+        rendered = true;
+        var sub;
+        if (cur != null && prev != null) {
+          var delta = cur - prev;
+          var arrow = Math.abs(delta) < 1e-9 ? "→" : (delta > 0 ? "▲" : "▼");
+          var pct = prev ? "  " + (delta > 0 ? "+" : "") + U.fmt(delta / prev * 100) + "%" : "";
+          sub = arrow + " " + (delta > 0 ? "+" : "") + U.fmt(delta) + " vs prev" + pct;
+        } else {
+          sub = cur == null ? "no current data" : "no prior data";
+        }
+        statCard(grid, cur == null ? null : U.fmt(cur) + (s.unit ? " " + s.unit : ""),
+                 s.name, sub);
+      });
+      if (!rendered) { U.empty(container, "No values in this window or the previous one."); return; }
+      container.appendChild(grid);
+      U.statsRow(container, [["previous window", prevStart + " → " + prevEnd]]);
+    },
+  });
+
+  // Distribution histogram per section (mirrors journal.numeric_histogram).
+  CHARTS.push({
+    id: "numeric-histogram",
+    panel: "numeric",
+    title: "Distribution",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var rendered = false;
+      nums.forEach(function (s) {
+        var vals = numericSeries(entries, s.id).map(function (p) { return p.value; });
+        if (vals.length < 2) return;
+        var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+        rendered = true;
+        var block = document.createElement("div");
+        block.className = "section-block";
+        var h4 = document.createElement("h4");
+        h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
+        block.appendChild(h4);
+        // Bucket spanning min..max (single bucket when all values are equal).
+        var bins = Math.min(10, Math.max(4, Math.round(Math.sqrt(vals.length))));
+        var buckets;
+        if (max === min) {
+          buckets = [{ lo: min, hi: max, count: vals.length }];
+        } else {
+          var width = (max - min) / bins;
+          buckets = [];
+          for (var b = 0; b < bins; b++) {
+            buckets.push({ lo: min + b * width, hi: min + (b + 1) * width, count: 0 });
+          }
+          vals.forEach(function (v) {
+            var idx = Math.floor((v - min) / width);
+            if (idx >= bins) idx = bins - 1;
+            buckets[idx].count++;
+          });
+        }
+        var w = 600, h = 180, pad = 30;
+        var svg = U.svg(w, h);
+        var cmax = Math.max.apply(null, buckets.map(function (bk) { return bk.count; })) || 1;
+        var bw = (w - pad - 10) / buckets.length;
+        buckets.forEach(function (bk, i) {
+          var bh = (h - pad - 10) * (bk.count / cmax);
+          U.drawBar(svg, pad + i * bw + 2, 10 + (h - pad - 10) - bh, bw - 4, bh, s.color);
+          if (bk.count) {
+            U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
+                   String(bk.count), c.muted, { anchor: "middle", size: 9 });
+          }
+        });
+        U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                   [U.fmt(min), U.fmt(max)], c);
+        block.appendChild(svg);
+        container.appendChild(block);
+      });
+      if (!rendered) U.empty(container, "Need 2+ values per section for a distribution.");
+    },
+  });
+
+  // Calendar heatmap per section: each day shaded dark -> section color by value
+  // (reuses the month-grid pattern from the consistency/mood calendars).
+  CHARTS.push({
+    id: "numeric-calendar",
+    panel: "numeric",
+    title: "Calendar heatmap",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var now = new Date();
+      var todayIso = calIso(now.getFullYear(), now.getMonth(), now.getDate());
+      var rendered = false;
+      nums.forEach(function (s) {
+        var series = numericSeries(entries, s.id);
+        if (!series.length) return;
+        rendered = true;
+        var byDate = {};
+        series.forEach(function (p) { byDate[p.date] = p.value; });
+        var vals = series.map(function (p) { return p.value; });
+        var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+        var span = max - min || 1;
+        var block = document.createElement("div");
+        block.className = "section-block";
+        var h4 = document.createElement("h4");
+        h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
+        block.appendChild(h4);
+        var first = new Date(series[0].date + "T00:00:00");
+        var last = new Date(series[series.length - 1].date + "T00:00:00");
+        var wrap = document.createElement("div");
+        wrap.className = "analytics-cal";
+        var y = first.getFullYear(), m = first.getMonth();
+        while (y < last.getFullYear() || (y === last.getFullYear() && m <= last.getMonth())) {
+          wrap.appendChild(buildValueMonthGrid(y, m, byDate, min, span, s.color, todayIso));
+          m++;
+          if (m > 11) { m = 0; y++; }
+        }
+        block.appendChild(wrap);
+        // Legend: low -> high gradient.
+        var legend = U.svg(600, 24);
+        U.text(legend, 0, 14, "low", c.muted, { size: 9 });
+        [0.15, 0.4, 0.65, 0.9].forEach(function (frac, i) {
+          legend.appendChild(U.svgEl("rect", {
+            x: 28 + i * 18, y: 5, width: 16, height: 14, rx: 2,
+            fill: U.colorMix(s.color, Math.round(15 + frac * 85)),
+          }));
+        });
+        U.text(legend, 28 + 4 * 18 + 4, 14, "high", c.muted, { size: 9 });
+        block.appendChild(legend);
         container.appendChild(block);
       });
       if (!rendered) U.empty(container, "No numeric values in this range.");
@@ -1021,6 +1358,154 @@
              { anchor: "middle", size: 9 });
       container.appendChild(svg);
       U.statsRow(container, [["points", pairs.length]]);
+    },
+  });
+
+  // Pairwise Pearson r across all numeric sections, as a tinted grid (cells
+  // colored by sign/magnitude; r shown). Mirrors journal.numeric_correlation_matrix.
+  CHARTS.push({
+    id: "numeric-correlation-matrix",
+    panel: "numeric",
+    title: "Correlation matrix",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (nums.length < 2) {
+        U.empty(container, "Need 2+ numeric sections for a correlation matrix.");
+        return;
+      }
+      // r[a.id][b.id] over same-day overlapping pairs (n>=2).
+      var R = {};
+      nums.forEach(function (a) {
+        R[a.id] = {};
+        nums.forEach(function (b) {
+          if (a.id === b.id) { R[a.id][b.id] = 1; return; }
+          var xs = [], ys = [];
+          entries.forEach(function (e) {
+            var n = e.numbers || {};
+            if (n[a.id] != null && n[b.id] != null) {
+              xs.push(Number(n[a.id])); ys.push(Number(n[b.id]));
+            }
+          });
+          R[a.id][b.id] = pearson(xs, ys);  // null when undefined
+        });
+      });
+      var any = false;
+      nums.forEach(function (a) {
+        nums.forEach(function (b) {
+          if (a.id !== b.id && R[a.id][b.id] != null) any = true;
+        });
+      });
+      if (!any) { U.empty(container, "No section pairs share enough days."); return; }
+      var table = document.createElement("table");
+      table.className = "matrix-table";
+      var thead = document.createElement("tr");
+      thead.appendChild(document.createElement("th"));
+      nums.forEach(function (s) {
+        var th = document.createElement("th"); th.textContent = s.name; thead.appendChild(th);
+      });
+      table.appendChild(thead);
+      nums.forEach(function (a) {
+        var tr = document.createElement("tr");
+        var rh = document.createElement("th"); rh.textContent = a.name; tr.appendChild(rh);
+        nums.forEach(function (b) {
+          var td = document.createElement("td");
+          var r = R[a.id][b.id];
+          if (a.id === b.id) { td.textContent = "1"; td.style.color = c.muted; }
+          else if (r == null) { td.textContent = "·"; td.style.color = c.muted; }
+          else {
+            td.textContent = (r > 0 ? "+" : "") + U.fmt(r);
+            // Positive r -> accent tint, negative -> danger tint, by magnitude.
+            var tint = Math.min(80, 15 + Math.abs(r) * 70);
+            td.style.background = U.colorMix(r >= 0 ? c.accent : c.danger, tint);
+          }
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      });
+      container.appendChild(table);
+      U.statsRow(container, [["+ = move together", ""], ["− = move opposite", ""]]);
+    },
+  });
+
+  // Streaks relative to the section mean (longest above / below; current run).
+  // Mirrors journal.numeric_streaks (above means value >= mean).
+  CHARTS.push({
+    id: "numeric-streaks",
+    panel: "numeric",
+    title: "Above / below average streaks",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var rendered = false;
+      nums.forEach(function (s) {
+        var series = numericSeries(entries, s.id);
+        if (series.length < 2) return;
+        rendered = true;
+        var vals = series.map(function (p) { return p.value; });
+        var mean = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+        var flags = vals.map(function (v) { return v >= mean; });
+        var above = 0, below = 0, run = 0;
+        flags.forEach(function (f, i) {
+          run = (i && flags[i] === flags[i - 1]) ? run + 1 : 1;
+          if (f) above = Math.max(above, run); else below = Math.max(below, run);
+        });
+        var cur = 1;
+        for (var i = flags.length - 1; i > 0; i--) {
+          if (flags[i] === flags[i - 1]) cur++; else break;
+        }
+        var block = document.createElement("div");
+        block.className = "section-block";
+        var h4 = document.createElement("h4");
+        h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
+        block.appendChild(h4);
+        var box = document.createElement("div");
+        box.className = "callout";
+        var big = document.createElement("div");
+        big.className = "callout-big";
+        big.textContent = "Currently " + cur + " day" + (cur === 1 ? "" : "s") + " " +
+                          (flags[flags.length - 1] ? "above" : "below") + " average";
+        box.appendChild(big);
+        block.appendChild(box);
+        U.statsRow(block, [
+          ["mean", U.fmt(mean) + (s.unit ? " " + s.unit : "")],
+          ["longest above", above + "d"], ["longest below", below + "d"],
+        ]);
+        container.appendChild(block);
+      });
+      if (!rendered) U.empty(container, "Need 2+ values per section for streaks.");
+    },
+  });
+
+  // Coverage: how often each numeric value is recorded among entries in range.
+  // Mirrors journal.numeric_coverage.
+  CHARTS.push({
+    id: "numeric-coverage",
+    panel: "numeric",
+    title: "How often each number is logged",
+    render: function (container, entries, sections, c) {
+      var nums = U.numericSections(sections);
+      if (!nums.length) { U.empty(container, "No numeric sections."); return; }
+      var total = entries.length;
+      if (!total) { U.empty(container, "No entries in this range."); return; }
+      var rows = nums.map(function (s) {
+        var logged = entries.filter(function (e) {
+          return (e.numbers || {})[s.id] != null;
+        }).length;
+        return { name: s.name, color: s.color, logged: logged,
+                 pct: total ? (logged / total) * 100 : 0 };
+      });
+      var w = 600, rowH = 22, pad = 100;
+      var svg = U.svg(w, rows.length * rowH + 6);
+      rows.forEach(function (r, i) {
+        var y = i * rowH + 2;
+        U.text(svg, pad - 6, y + 14, r.name, c.text, { anchor: "end", size: 10 });
+        U.drawBar(svg, pad, y + 4, (w - pad - 60), 13, U.colorMix(c.muted, 16));
+        U.drawBar(svg, pad, y + 4, (w - pad - 60) * (r.pct / 100), 13, r.color);
+        U.text(svg, pad + (w - pad - 60) + 4, y + 14,
+               Math.round(r.pct) + "% (" + r.logged + "/" + total + ")",
+               c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
     },
   });
 
@@ -1877,8 +2362,13 @@
     // Default view (no search): the aggregate tag charts for the active lens
     // (the CHARTS registered under panel "tags"), rendered like a normal panel.
     function renderAggregateTags() {
+      resultsHost.innerHTML = "";
       var entries = filterEntries();
       var c = colors();
+      // Tag-section scope filter (narrows the per-section tag charts). The
+      // task-tag-frequency chart isn't section-based, so it always shows.
+      renderSectionFilter(resultsHost, "tag", renderAggregateTags);
+      var sectionsArg = filteredSections("tag");
       var charts = CHARTS.filter(function (ch) { return ch.panel === "tags"; });
       if (!charts.length) { U.empty(resultsHost, "No tag charts available."); return; }
       charts.forEach(function (ch) {
@@ -1889,7 +2379,7 @@
         h3.textContent = ch.title;
         panel.appendChild(h3);
         try {
-          ch.render(panel, entries, _data.sections, c);
+          ch.render(panel, entries, sectionsArg, c);
         } catch (err) {
           U.empty(panel, "Could not render this chart.");
           if (window.console) console.error(ch.id, err);
@@ -2027,6 +2517,61 @@
     renderActivePanel();
   }
 
+  // ----- section scope filter (Numeric & Tags tabs) -----
+  function sectionsOfType(kind) {
+    return (_data.sections || []).filter(function (s) { return s.type === kind; });
+  }
+
+  // _data.sections with the `kind`-type sections narrowed to the current
+  // selection. Sections of other types pass through untouched.
+  function filteredSections(kind) {
+    if (_secSel[kind] === null) return _data.sections;
+    var sel = _secSel[kind];
+    return (_data.sections || []).filter(function (s) {
+      return s.type !== kind || sel.indexOf(s.id) !== -1;
+    });
+  }
+
+  // A row of toggle chips choosing which `kind` sections show. All start active
+  // (= "show all"); clicking toggles one; the All chip resets. Re-renders via
+  // `onChange`. Renders nothing when there's 0–1 section (nothing to filter).
+  function renderSectionFilter(host, kind, onChange) {
+    var all = sectionsOfType(kind);
+    if (all.length <= 1) return;
+    var ids = all.map(function (s) { return s.id; });
+    var bar = document.createElement("div");
+    bar.className = "section-filter";
+    var lbl = document.createElement("span");
+    lbl.className = "section-filter-label";
+    lbl.textContent = (kind === "numeric" ? "numeric" : "tag") + ":";
+    bar.appendChild(lbl);
+
+    var allChip = document.createElement("button");
+    allChip.type = "button";
+    allChip.className = "section-filter-chip" + (_secSel[kind] === null ? " active" : "");
+    allChip.textContent = "All";
+    allChip.addEventListener("click", function () { _secSel[kind] = null; onChange(); });
+    bar.appendChild(allChip);
+
+    all.forEach(function (s) {
+      var on = _secSel[kind] === null || _secSel[kind].indexOf(s.id) !== -1;
+      var chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "section-filter-chip" + (on ? " active" : "");
+      chip.style.setProperty("--chip", s.color);
+      chip.textContent = s.name;
+      chip.addEventListener("click", function () {
+        var cur = _secSel[kind] === null ? ids.slice() : _secSel[kind].slice();
+        var i = cur.indexOf(s.id);
+        if (i === -1) cur.push(s.id); else cur.splice(i, 1);
+        _secSel[kind] = (cur.length === ids.length) ? null : cur;   // all → null
+        onChange();
+      });
+      bar.appendChild(chip);
+    });
+    host.appendChild(bar);
+  }
+
   // ----- rendering -----
   function renderActivePanel() {
     var host = root.querySelector(".analytics-panels");
@@ -2039,6 +2584,14 @@
     if (_activeTab === "tags") {
       renderTagsTab(host, c);
       return;
+    }
+
+    // The Numeric tab gets a section scope filter; charts read the (filtered)
+    // sections argument, so passing a narrowed list scopes them all at once.
+    var sectionsArg = _data.sections;
+    if (_activeTab === "numeric") {
+      renderSectionFilter(host, "numeric", renderActivePanel);
+      sectionsArg = filteredSections("numeric");
     }
 
     var charts = CHARTS.filter(function (ch) { return ch.panel === _activeTab; });
@@ -2055,7 +2608,7 @@
       h3.textContent = ch.title;
       panel.appendChild(h3);
       try {
-        ch.render(panel, entries, _data.sections, c);
+        ch.render(panel, entries, sectionsArg, c);
       } catch (err) {
         U.empty(panel, "Could not render this chart.");
         if (window.console) console.error(ch.id, err);

@@ -408,7 +408,19 @@ What exists today:
   bounds): `analytics_payload`, `describe`, `tag_frequency`, `tag_cooccurrence`,
   `tag_trend`, `tag_streak`, `entry_streak`, `numeric_series`, `dow_averages`,
   `word_counts`, `entry_gaps`, `creation_hours`, `date_density`,
-  `section_coverage`, plus `_filter_entries_by_date`. **Mood helpers** (all
+  `section_coverage`, plus `_filter_entries_by_date`. **Expanded numeric helpers**
+  (all ignore entries lacking the value, degrade gracefully on too few points):
+  `numeric_stats` ({count, mean, median, stdev, min, max, latest}),
+  `numeric_histogram` ([{lo, hi, count}] buckets, all-equal → single bucket),
+  `numeric_regression` ({slope, intercept, n} least-squares vs day-index),
+  `numeric_by_date` ([{date, value}]), `numeric_correlation_matrix`
+  ({pairs:[{a,b,r,n}]} pairwise Pearson, one per pair, n≥2),
+  `numeric_period_delta` ({current_mean, previous_mean, delta, pct} vs the
+  preceding equal-length window), `numeric_streaks` ({longest_above,
+  longest_below, current} vs the range mean; current is signed),
+  `numeric_cumulative` ([{date, total}] running sum), `numeric_coverage`
+  ({logged, total_entries, pct}); plus internal `_numeric_values`/`_pearson`.
+  **Mood helpers** (all
   ignore null moods): `mood_series`, `mood_dow_averages`, `mood_distribution`,
   `mood_by_date`, `mood_numeric_pairs` (same-day mood↔numeric pairs for
   correlation), and `_entry_mood` (the defensive 1..7-or-None reader).
@@ -418,7 +430,7 @@ What exists today:
   recorded mood via `hasMood`), Consistency (entry calendar, words/entry, gaps,
   time-of-day), the cross-domain **Tags** tab (journal frequency, trend, per-tag
   heatmap, co-occurrence, then task-tag frequency — shown in both lenses),
-  Numeric (line + rolling avg, day-of-week, correlation scatter), Coverage, plus
+  the expanded **Numeric** tab (see below), Coverage, plus
   a **`Journal | Task` lens toggle** that swaps the deeper tabs (the old single
   "Tasks" tab is now the Task-lens sub-tabs Throughput/Timeliness/Adherence/
   Difficulty; the former separate "Task tags" tab is folded into the shared Tags
@@ -428,6 +440,28 @@ What exists today:
   - **Mood tab**: mood-over-time (fixed 1–7 axis + 7-day rolling avg overlay),
     average mood by day of week, mood distribution histogram, and mood-vs-numeric
     scatter (one small-multiple per numeric section, with a Pearson `r`).
+  - **Numeric tab** (gated on `hasNumeric`) is a rich multi-chart tab reading
+    top-to-bottom — overview → trends → shape → relationships → streaks/coverage:
+    per-section **stat cards** (mean/median/std/min/max/latest/count); **values
+    over time** with a 7-pt rolling avg overlay AND a dashed least-squares trend
+    line + rising/falling slope annotation; **cumulative total** line; **period
+    delta** stat cards (this date-range window vs the immediately preceding equal
+    window, ▲/▼ per section); **distribution histogram**; **calendar heatmap**
+    (per section, days shaded dark→section-color by value, via
+    `buildValueMonthGrid`); average-by-day-of-week bars; pairwise **correlation
+    matrix** (tinted by sign/magnitude, accent=+ / danger=−, shown when ≥2
+    numeric sections); **above/below-average streaks** callout; **coverage** bars
+    (how often each number is logged); and the two-section correlation scatter.
+    JS mirrors the `numeric_*` pure helpers (`linearRegression`, `pearson`,
+    `isoShift`, `buildValueMonthGrid` are the new JS-side mirrors).
+  - **Section scope filter** (Numeric & Tags tabs): a row of toggle chips
+    (`renderSectionFilter` → `.section-filter`) picks which sections show — all
+    active by default, click to narrow, "All" resets. Charts read the (filtered)
+    `sections` argument, so a single narrowed list scopes every chart at once:
+    the **Numeric** tab filters numeric sections (`_secSel.numeric`); the
+    **Tags** tab's aggregate view filters tag sections (`_secSel.tag`; the
+    non-section task-tag chart always shows). State lives in `_secSel`
+    (`null` = all).
   - **Overview tab** is an at-a-glance dashboard: prominent **stat cards**
     (entries this period, current/longest streak, avg mood + a tiny mood
     sparkline, tasks completed, latest value per numeric section) and an

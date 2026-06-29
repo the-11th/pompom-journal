@@ -311,6 +311,176 @@ def test_mood_numeric_pairs_respects_date_range():
 
 
 # --------------------------------------------------------------------------- #
+# Expanded numeric aggregations (numeric_* helpers powering the Numeric tab)
+# --------------------------------------------------------------------------- #
+
+def test_numeric_stats_summary_and_latest():
+    entries = [
+        _entry("2026-06-01", numbers={NUM: 6.0}),
+        _entry("2026-06-03", numbers={NUM: 8.0}),  # latest dated value
+        _entry("2026-06-02", numbers={NUM: 7.0}),
+        _entry("2026-06-04", numbers={}),          # no value -> ignored
+    ]
+    s = journal.numeric_stats(entries, NUM, None, None)
+    assert s["count"] == 3
+    assert s["mean"] == 7.0
+    assert s["median"] == 7.0
+    assert s["min"] == 6.0 and s["max"] == 8.0
+    assert s["latest"] == 8.0  # value on the most recent dated entry
+    assert round(s["stdev"], 4) == 1.0
+
+
+def test_numeric_stats_empty_is_zero_count():
+    s = journal.numeric_stats([], NUM, None, None)
+    assert s["count"] == 0
+    assert s["mean"] is None and s["latest"] is None and s["stdev"] is None
+
+
+def test_numeric_histogram_buckets_span_min_max():
+    entries = [_entry("2026-06-0%d" % i, numbers={NUM: float(i)}) for i in range(1, 5)]
+    hist = journal.numeric_histogram(entries, NUM, 2, None, None)
+    assert len(hist) == 2
+    assert hist[0]["lo"] == 1.0 and hist[-1]["hi"] == 4.0
+    assert sum(b["count"] for b in hist) == 4
+
+
+def test_numeric_histogram_all_equal_values_single_bucket():
+    entries = [_entry("2026-06-01", numbers={NUM: 5.0}),
+               _entry("2026-06-02", numbers={NUM: 5.0})]
+    hist = journal.numeric_histogram(entries, NUM, 4, None, None)
+    assert len(hist) == 1
+    assert hist[0]["lo"] == 5.0 and hist[0]["hi"] == 5.0 and hist[0]["count"] == 2
+
+
+def test_numeric_histogram_too_few_points_empty():
+    assert journal.numeric_histogram([], NUM, 4, None, None) == []
+
+
+def test_numeric_regression_slope_intercept():
+    # values 6,7,8 on consecutive days -> slope 1/day, intercept 6 at day 0.
+    entries = [
+        _entry("2026-06-01", numbers={NUM: 6.0}),
+        _entry("2026-06-02", numbers={NUM: 7.0}),
+        _entry("2026-06-03", numbers={NUM: 8.0}),
+    ]
+    reg = journal.numeric_regression(entries, NUM, None, None)
+    assert reg["n"] == 3
+    assert round(reg["slope"], 6) == 1.0
+    assert round(reg["intercept"], 6) == 6.0
+
+
+def test_numeric_regression_too_few_points_is_none():
+    reg = journal.numeric_regression([_entry("2026-06-01", numbers={NUM: 6.0})],
+                                     NUM, None, None)
+    assert reg == {"slope": None, "intercept": None, "n": 1}
+
+
+def test_numeric_by_date_sorted():
+    entries = [
+        _entry("2026-06-03", numbers={NUM: 8.0}),
+        _entry("2026-06-01", numbers={NUM: 6.0}),
+        _entry("2026-06-02", numbers={}),  # skipped
+    ]
+    assert journal.numeric_by_date(entries, NUM, None, None) == [
+        {"date": "2026-06-01", "value": 6.0},
+        {"date": "2026-06-03", "value": 8.0},
+    ]
+
+
+def test_numeric_correlation_matrix_pairwise():
+    A, B = "sec-a", "sec-b"
+    entries = [
+        _entry("2026-06-01", numbers={A: 1.0, B: 2.0}),
+        _entry("2026-06-02", numbers={A: 2.0, B: 4.0}),
+        _entry("2026-06-03", numbers={A: 3.0, B: 6.0}),  # perfectly correlated
+    ]
+    m = journal.numeric_correlation_matrix(entries, [A, B], None, None)
+    assert len(m["pairs"]) == 1  # one symmetric pair, no self-pairs
+    p = m["pairs"][0]
+    assert {p["a"], p["b"]} == {A, B}
+    assert p["n"] == 3
+    assert round(p["r"], 6) == 1.0
+
+
+def test_numeric_correlation_matrix_skips_insufficient_overlap():
+    A, B = "sec-a", "sec-b"
+    entries = [_entry("2026-06-01", numbers={A: 1.0, B: 2.0})]  # only n=1 overlap
+    m = journal.numeric_correlation_matrix(entries, [A, B], None, None)
+    assert m["pairs"] == []
+
+
+def test_numeric_period_delta_vs_previous_window():
+    # window 06-03..06-04 (mean 8) vs previous equal window 06-01..06-02 (mean 6)
+    entries = [
+        _entry("2026-06-01", numbers={NUM: 6.0}),
+        _entry("2026-06-02", numbers={NUM: 6.0}),
+        _entry("2026-06-03", numbers={NUM: 8.0}),
+        _entry("2026-06-04", numbers={NUM: 8.0}),
+    ]
+    d = journal.numeric_period_delta(entries, NUM, "2026-06-03", "2026-06-04")
+    assert d["current_mean"] == 8.0
+    assert d["previous_mean"] == 6.0
+    assert d["delta"] == 2.0
+    assert round(d["pct"], 4) == round(2.0 / 6.0 * 100, 4)
+
+
+def test_numeric_period_delta_none_without_bounds():
+    d = journal.numeric_period_delta([], NUM, None, None)
+    assert d["current_mean"] is None and d["delta"] is None
+
+
+def test_numeric_streaks_relative_to_mean():
+    # values 1,2,8,9,3 mean=4.6: above=[8,9] run2; current run ends below.
+    entries = [
+        _entry("2026-06-01", numbers={NUM: 1.0}),
+        _entry("2026-06-02", numbers={NUM: 2.0}),
+        _entry("2026-06-03", numbers={NUM: 8.0}),
+        _entry("2026-06-04", numbers={NUM: 9.0}),
+        _entry("2026-06-05", numbers={NUM: 3.0}),
+    ]
+    s = journal.numeric_streaks(entries, NUM, None, None)
+    assert s["longest_above"] == 2
+    assert s["longest_below"] == 2
+    assert s["current"] != 0  # a signed current run length
+
+
+def test_numeric_streaks_empty():
+    assert journal.numeric_streaks([], NUM, None, None) == {
+        "longest_above": 0, "longest_below": 0, "current": 0}
+
+
+def test_numeric_cumulative_running_sum():
+    entries = [
+        _entry("2026-06-02", numbers={NUM: 3.0}),
+        _entry("2026-06-01", numbers={NUM: 2.0}),
+        _entry("2026-06-03", numbers={NUM: 5.0}),
+    ]
+    assert journal.numeric_cumulative(entries, NUM, None, None) == [
+        {"date": "2026-06-01", "total": 2.0},
+        {"date": "2026-06-02", "total": 5.0},
+        {"date": "2026-06-03", "total": 10.0},
+    ]
+
+
+def test_numeric_coverage_logged_fraction():
+    entries = [
+        _entry("2026-06-01", numbers={NUM: 6.0}),
+        _entry("2026-06-02", numbers={}),
+        _entry("2026-06-03", numbers={NUM: 7.0}),
+        _entry("2026-06-04", numbers={}),
+    ]
+    cov = journal.numeric_coverage(entries, NUM, None, None)
+    assert cov["logged"] == 2
+    assert cov["total_entries"] == 4
+    assert cov["pct"] == 50.0
+
+
+def test_numeric_coverage_no_entries_zero_pct():
+    cov = journal.numeric_coverage([], NUM, None, None)
+    assert cov == {"logged": 0, "total_entries": 0, "pct": 0}
+
+
+# --------------------------------------------------------------------------- #
 # analytics_payload
 # --------------------------------------------------------------------------- #
 

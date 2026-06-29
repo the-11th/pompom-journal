@@ -1195,6 +1195,30 @@ h2 {
 }
 .analytics-filter input[type="date"] { width: 165px; }
 
+/* Section scope filter (Numeric & Tags tabs) — toggle chips, all active by
+   default; inactive chips are dimmed. Active chips tint to the section color. */
+.section-filter {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 0.4rem; margin-bottom: 1rem;
+}
+.section-filter-label {
+  font-size: 0.72rem; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--muted); margin-right: 0.2rem;
+}
+.section-filter-chip {
+  font-family: inherit; font-size: 0.78rem; line-height: 1.1;
+  padding: 0.28rem 0.55rem; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px;
+  opacity: 0.55; transition: opacity 0.12s, border-color 0.12s, color 0.12s;
+}
+.section-filter-chip:hover { opacity: 0.85; color: var(--text); }
+.section-filter-chip.active {
+  opacity: 1; color: var(--text);
+  border-color: color-mix(in srgb, var(--chip, var(--accent)) 70%, var(--border));
+  background: color-mix(in srgb, var(--chip, var(--accent)) 16%, transparent);
+}
+
 /* One card per chart. */
 .analytics-panels { display: flex; flex-direction: column; gap: 1rem; }
 .analytics-panel {

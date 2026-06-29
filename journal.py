@@ -818,6 +818,218 @@ def dow_averages(entries, section_id, start, end):
 
 
 # --------------------------------------------------------------------------- #
+# Expanded numeric aggregations (numeric_* helpers powering the Numeric tab)
+# All ignore entries lacking the value and degrade gracefully on too few points.
+# --------------------------------------------------------------------------- #
+
+def _numeric_values(entries, section_id, start, end):
+    """Date-sorted [(date, value)] pairs for one numeric section, value present."""
+    pairs = [
+        (e["date"], (e.get("numbers") or {})[section_id])
+        for e in _filter_entries_by_date(entries, start, end)
+        if section_id in (e.get("numbers") or {})
+    ]
+    pairs.sort(key=lambda p: p[0])
+    return pairs
+
+
+def numeric_stats(entries, section_id, start, end):
+    """{count, mean, median, stdev, min, max, latest} for one numeric section.
+
+    `latest` is the value on the most recent dated entry that recorded it.
+    Entries lacking the value are ignored; an empty range yields all-None with
+    count 0. Sample stdev (n-1), matching `describe`/the JS."""
+    pairs = _numeric_values(entries, section_id, start, end)
+    vals = [v for _, v in pairs]
+    d = describe(vals)
+    return {
+        "count": d["count"],
+        "mean": d["mean"],
+        "median": d["median"],
+        "stdev": d["stdev"],
+        "min": d["min"],
+        "max": d["max"],
+        "latest": pairs[-1][1] if pairs else None,
+    }
+
+
+def numeric_histogram(entries, section_id, bins, start, end):
+    """[{lo, hi, count}] buckets spanning min..max for one numeric section.
+
+    All-equal values collapse to a single bucket (lo == hi); fewer than one
+    value yields []. The last bucket is closed on the right so the max value
+    lands in it."""
+    vals = [v for _, v in _numeric_values(entries, section_id, start, end)]
+    if not vals:
+        return []
+    lo, hi = min(vals), max(vals)
+    if hi == lo:
+        return [{"lo": lo, "hi": hi, "count": len(vals)}]
+    n = max(int(bins), 1)
+    width = (hi - lo) / n
+    out = [{"lo": lo + i * width, "hi": lo + (i + 1) * width, "count": 0}
+           for i in range(n)]
+    for v in vals:
+        idx = int((v - lo) / width)
+        if idx >= n:
+            idx = n - 1  # the max value belongs in the last bucket
+        out[idx]["count"] += 1
+    return out
+
+
+def numeric_regression(entries, section_id, start, end):
+    """{slope, intercept, n} least-squares fit of value vs day-index.
+
+    Day-index is days since the first dated value in range, so `slope` is in
+    units/day and `intercept` is the fitted value at the first day. Returns
+    None-ish slope/intercept when n < 2 or x has zero variance."""
+    pairs = _numeric_values(entries, section_id, start, end)
+    n = len(pairs)
+    if n < 2:
+        return {"slope": None, "intercept": None, "n": n}
+    base = datetime.strptime(pairs[0][0], "%Y-%m-%d").date()
+    xs = [(datetime.strptime(d, "%Y-%m-%d").date() - base).days for d, _ in pairs]
+    ys = [v for _, v in pairs]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return {"slope": None, "intercept": None, "n": n}
+    sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    slope = sxy / sxx
+    intercept = my - slope * mx
+    return {"slope": slope, "intercept": intercept, "n": n}
+
+
+def numeric_by_date(entries, section_id, start, end):
+    """[{date, value}] date-sorted for one numeric section (for the heatmap)."""
+    return [{"date": d, "value": v}
+            for d, v in _numeric_values(entries, section_id, start, end)]
+
+
+def numeric_correlation_matrix(entries, section_ids, start, end):
+    """{pairs: [{a, b, r, n}]} pairwise Pearson r over same-day value pairs.
+
+    Each unordered pair appears once; self-pairs are skipped. A pair is included
+    only when at least two same-day overlaps exist and both have non-zero
+    variance (else Pearson is undefined and the pair is dropped)."""
+    scoped = _filter_entries_by_date(entries, start, end)
+    ids = list(section_ids)
+    pairs = []
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = ids[i], ids[j]
+            xs, ys = [], []
+            for e in scoped:
+                nums = e.get("numbers") or {}
+                if a in nums and b in nums:
+                    xs.append(nums[a])
+                    ys.append(nums[b])
+            r = _pearson(xs, ys)
+            if r is not None:
+                pairs.append({"a": a, "b": b, "r": r, "n": len(xs)})
+    return {"pairs": pairs}
+
+
+def _pearson(xs, ys):
+    """Pearson correlation coefficient, or None (n < 2 or zero variance)."""
+    n = len(xs)
+    if n < 2:
+        return None
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxy = sum((xs[i] - mx) * (ys[i] - my) for i in range(n))
+    sxx = sum((x - mx) ** 2 for x in xs)
+    syy = sum((y - my) ** 2 for y in ys)
+    if sxx == 0 or syy == 0:
+        return None
+    return sxy / math.sqrt(sxx * syy)
+
+
+def numeric_period_delta(entries, section_id, start, end):
+    """{current_mean, previous_mean, delta, pct} for one numeric section.
+
+    Compares the [start, end] window against the immediately preceding window of
+    equal length (derived from the bounds). `pct` is delta as a percent of the
+    previous mean. All None when bounds are missing or a window has no data;
+    `pct` is None when the previous mean is 0."""
+    none = {"current_mean": None, "previous_mean": None, "delta": None, "pct": None}
+    if not start or not end:
+        return none
+    s = datetime.strptime(start, "%Y-%m-%d").date()
+    e = datetime.strptime(end, "%Y-%m-%d").date()
+    length = (e - s).days
+    prev_end = s - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=length)
+
+    def mean_in(a, b):
+        vals = [v for _, v in _numeric_values(entries, section_id,
+                                              a.isoformat(), b.isoformat())]
+        return sum(vals) / len(vals) if vals else None
+
+    cur = mean_in(s, e)
+    prev = mean_in(prev_start, prev_end)
+    if cur is None and prev is None:
+        return none
+    delta = (cur - prev) if (cur is not None and prev is not None) else None
+    pct = (delta / prev * 100) if (delta is not None and prev) else None
+    return {"current_mean": cur, "previous_mean": prev, "delta": delta, "pct": pct}
+
+
+def numeric_streaks(entries, section_id, start, end):
+    """{longest_above, longest_below, current} runs vs the range mean.
+
+    "Above" means value >= mean over consecutive dated entries. `current` is the
+    signed length of the run ending at the most recent value: positive for an
+    above-mean run, negative for a below-mean run, 0 when there are no values."""
+    pairs = _numeric_values(entries, section_id, start, end)
+    vals = [v for _, v in pairs]
+    if not vals:
+        return {"longest_above": 0, "longest_below": 0, "current": 0}
+    mean = sum(vals) / len(vals)
+    flags = [v >= mean for v in vals]  # True = above (or at) mean
+    longest_above = longest_below = run_len = 0
+    for i, above in enumerate(flags):
+        if i and flags[i] == flags[i - 1]:
+            run_len += 1
+        else:
+            run_len = 1
+        if above:
+            longest_above = max(longest_above, run_len)
+        else:
+            longest_below = max(longest_below, run_len)
+    # Current run length, signed by direction.
+    cur_len = 1
+    for i in range(len(flags) - 1, 0, -1):
+        if flags[i] == flags[i - 1]:
+            cur_len += 1
+        else:
+            break
+    current = cur_len if flags[-1] else -cur_len
+    return {"longest_above": longest_above, "longest_below": longest_below,
+            "current": current}
+
+
+def numeric_cumulative(entries, section_id, start, end):
+    """[{date, total}] running sum of one numeric section's date-sorted values."""
+    out = []
+    total = 0.0
+    for d, v in _numeric_values(entries, section_id, start, end):
+        total += v
+        out.append({"date": d, "total": total})
+    return out
+
+
+def numeric_coverage(entries, section_id, start, end):
+    """{logged, total_entries, pct} — how often the number is recorded in range."""
+    scoped = _filter_entries_by_date(entries, start, end)
+    total = len(scoped)
+    logged = sum(1 for e in scoped if section_id in (e.get("numbers") or {}))
+    pct = (logged / total * 100) if total else 0
+    return {"logged": logged, "total_entries": total, "pct": pct}
+
+
+# --------------------------------------------------------------------------- #
 # Mood aggregations (mood is an int 1..7 or null; nulls are always ignored)
 # --------------------------------------------------------------------------- #
 
