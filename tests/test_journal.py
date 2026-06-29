@@ -986,3 +986,43 @@ def test_journal_tag_overview_unknown_tag_is_empty():
     assert ov["mood_series"] == []
     assert ov["cooccurring"] == []
     assert ov["timeline"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Sleep field tests
+# --------------------------------------------------------------------------- #
+
+def test_set_entry_sleep_creates_entry():
+    data = journal._seeded()
+    s = {"start": "23:00", "end": "06:00", "duration_min": 420,
+         "efficiency": 90, "score": None, "quality": 90,
+         "stages": None, "source": "fitbit", "fetched": "x"}
+    journal.set_entry_sleep(data, "2026-06-29", s)
+    e = journal.get_entry_by_date(data, "2026-06-29")
+    assert e is not None and e["sleep"]["duration_min"] == 420
+
+
+def test_set_entry_sleep_updates_existing():
+    data = journal._seeded()
+    journal.upsert_entry(data, "2026-06-29", "Day", "body")
+    journal.set_entry_sleep(data, "2026-06-29", {"duration_min": 400})
+    journal.set_entry_sleep(data, "2026-06-29", {"duration_min": 999})
+    assert journal.get_entry_by_date(data, "2026-06-29")["sleep"]["duration_min"] == 999
+    # only one entry for the date
+    assert sum(e["date"] == "2026-06-29" for e in data["entries"]) == 1
+
+
+def test_set_entry_sleep_none_clears():
+    data = journal._seeded()
+    journal.set_entry_sleep(data, "2026-06-29", {"duration_min": 400})
+    journal.set_entry_sleep(data, "2026-06-29", None)
+    assert journal.get_entry_by_date(data, "2026-06-29")["sleep"] is None
+
+
+def test_load_defaults_sleep(tmp_path):
+    p = tmp_path / "j.json"
+    data = journal._seeded()
+    journal.upsert_entry(data, "2026-06-29", "Day", "b")
+    journal.save(str(p), data)
+    loaded = journal.load(str(p))
+    assert loaded["entries"][0]["sleep"] is None

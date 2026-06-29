@@ -84,6 +84,7 @@ def load(path):
             if not isinstance(e.get("numbers"), dict):
                 e["numbers"] = {}
             e.setdefault("mood", None)
+            e.setdefault("sleep", None)
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -506,6 +507,24 @@ def delete_entry(data, entry_id):
     """Remove an entry by id. Unknown id = no-op."""
     data["entries"] = [e for e in data.get("entries", []) if e.get("id") != entry_id]
     return data
+
+
+def set_entry_sleep(data, date, sleep, now=None):
+    """Set (or clear, with sleep=None) the auto-filled sleep dict for `date`.
+
+    Reuses the one-entry-per-date rule: updates the existing entry or creates a
+    minimal one (title = the date) so sleep can land before the user writes
+    anything. Bumps `updated`.
+    """
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    entry["sleep"] = sleep
+    entry["updated"] = now.isoformat()
+    return entry
 
 
 # --------------------------------------------------------------------------- #
