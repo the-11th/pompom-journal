@@ -59,7 +59,9 @@
   }
 
   function hasSleep() {
-    return _data.entries.some(function (e) { return e && e.sleep; });
+    // Use the same usable-sleep guard the charts use (sleepOf requires a
+    // truthy duration_min), so the tab never shows with all-empty charts.
+    return _data.entries.some(function (e) { return sleepOf(e); });
   }
 
   // Tasks completed within the active date range, by completed-day.
