@@ -85,6 +85,7 @@ def load(path):
                 e["numbers"] = {}
             e.setdefault("mood", None)
             e.setdefault("sleep", None)
+            e.setdefault("rescuetime", None)
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -523,6 +524,21 @@ def set_entry_sleep(data, date, sleep, now=None):
     if entry is None:
         entry = upsert_entry(data, date, date, "", now=now)
     entry["sleep"] = sleep
+    entry["updated"] = now.isoformat()
+    return entry
+
+
+def set_entry_rescuetime(data, date, value, now=None):
+    """Set (or clear, with value=None) the auto-filled RescueTime dict for `date`.
+
+    Same get-or-create rule as set_entry_sleep."""
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    entry["rescuetime"] = value
     entry["updated"] = now.isoformat()
     return entry
 
@@ -1188,6 +1204,83 @@ def sleep_stats(entries, start=None, end=None):
     }
 
 
+def _entry_rescuetime(entry):
+    r = entry.get("rescuetime")
+    if isinstance(r, dict) and (r.get("pulse") is not None or r.get("total_min")):
+        return r
+    return None
+
+
+def rescuetime_pulse_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if r and r.get("pulse") is not None:
+            out.append({"date": e["date"], "pulse": r["pulse"]})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def rescuetime_time_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if r:
+            out.append({"date": e["date"],
+                        "productive_min": r.get("productive_min", 0),
+                        "distracting_min": r.get("distracting_min", 0),
+                        "neutral_min": r.get("neutral_min", 0)})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def rescuetime_category_totals(entries, start=None, end=None):
+    totals = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if not r:
+            continue
+        for c in r.get("top_categories") or []:
+            totals[c["name"]] = totals.get(c["name"], 0) + c.get("min", 0)
+    rows = [{"name": k, "min": v} for k, v in totals.items()]
+    rows.sort(key=lambda c: c["min"], reverse=True)
+    return rows[:8]
+
+
+def rescuetime_dow_averages(entries, start=None, end=None):
+    buckets = {i: [] for i in range(7)}
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if r:
+            d = datetime.strptime(e["date"], "%Y-%m-%d").date()
+            buckets[d.weekday()].append(r.get("productive_min", 0))
+    return {_DOW_NAMES[i]: (sum(v) / len(v) if v else None) for i, v in buckets.items()}
+
+
+def productivity_mood_pairs(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        m = _entry_mood(e)
+        if r and r.get("pulse") is not None and m is not None:
+            out.append({"pulse": r["pulse"], "mood": m})
+    return out
+
+
+def rescuetime_stats(entries, start=None, end=None):
+    rows = [_entry_rescuetime(e) for e in _filter_entries_by_date(entries, start, end)]
+    rows = [r for r in rows if r]
+    if not rows:
+        return {"avg_pulse": None, "avg_productive_min": None, "days": 0}
+    pulses = [r["pulse"] for r in rows if r.get("pulse") is not None]
+    prod = [r.get("productive_min", 0) for r in rows]
+    return {
+        "avg_pulse": round(sum(pulses) / len(pulses), 1) if pulses else None,
+        "avg_productive_min": round(sum(prod) / len(prod)),
+        "days": len(rows),
+    }
+
+
 def mood_series(entries, start, end):
     """[{date, mood}] of recorded moods, date-filtered and sorted by date.
     Entries with no mood are omitted."""
@@ -1712,6 +1805,7 @@ def analytics_payload(data):
             "created": e.get("created"),
             "mood": _entry_mood(e),
             "sleep": _entry_sleep(e),
+            "rescuetime": _entry_rescuetime(e),
         }
         for e in data.get("entries", [])
     ]

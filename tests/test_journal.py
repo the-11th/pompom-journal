@@ -1120,3 +1120,69 @@ def test_payload_carries_sleep():
         "score": None, "stages": None, "source": "fitbit", "fetched": "x"})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["sleep"]["duration_min"] == 420
+
+
+# --------------------------------------------------------------------------- #
+# RescueTime helpers
+# --------------------------------------------------------------------------- #
+
+def _entry_rt(date, pulse, prod, distr=20, neut=10, cats=None):
+    return {"date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+            "sleep": None,
+            "rescuetime": {"date": date, "pulse": pulse, "productive_min": prod,
+                           "distracting_min": distr, "neutral_min": neut,
+                           "total_min": prod + distr + neut,
+                           "top_categories": cats or [], "source": "rescuetime",
+                           "fetched": "x"}}
+
+
+def test_set_entry_rescuetime_create_update_clear():
+    data = journal._seeded()
+    journal.set_entry_rescuetime(data, "2026-06-28", {"pulse": 70, "total_min": 100})
+    assert journal.get_entry_by_date(data, "2026-06-28")["rescuetime"]["pulse"] == 70
+    journal.set_entry_rescuetime(data, "2026-06-28", {"pulse": 90, "total_min": 120})
+    assert journal.get_entry_by_date(data, "2026-06-28")["rescuetime"]["pulse"] == 90
+    assert sum(e["date"] == "2026-06-28" for e in data["entries"]) == 1
+    journal.set_entry_rescuetime(data, "2026-06-28", None)
+    assert journal.get_entry_by_date(data, "2026-06-28")["rescuetime"] is None
+
+
+def test_rescuetime_pulse_series_sorted():
+    entries = [_entry_rt("2026-06-29", 80, 200), _entry_rt("2026-06-28", 60, 100)]
+    assert journal.rescuetime_pulse_series(entries) == [
+        {"date": "2026-06-28", "pulse": 60}, {"date": "2026-06-29", "pulse": 80}]
+
+
+def test_rescuetime_category_totals_aggregated():
+    e1 = _entry_rt("2026-06-28", 70, 100, cats=[{"name": "Software Development", "min": 90}])
+    e2 = _entry_rt("2026-06-29", 80, 120, cats=[{"name": "Software Development", "min": 60},
+                                                {"name": "News", "min": 30}])
+    totals = journal.rescuetime_category_totals([e1, e2])
+    assert totals[0] == {"name": "Software Development", "min": 150}
+    assert {"name": "News", "min": 30} in totals
+
+
+def test_productivity_mood_pairs_requires_both():
+    e1 = _entry_rt("2026-06-28", 70, 100); e1["mood"] = 5
+    e2 = _entry_rt("2026-06-29", 80, 120)  # no mood
+    assert journal.productivity_mood_pairs([e1, e2]) == [{"pulse": 70, "mood": 5}]
+
+
+def test_rescuetime_stats_empty():
+    s = journal.rescuetime_stats([])
+    assert s["days"] == 0 and s["avg_pulse"] is None
+
+
+def test_load_defaults_rescuetime(tmp_path):
+    p = tmp_path / "j.json"
+    data = journal._seeded()
+    journal.upsert_entry(data, "2026-06-28", "Day", "b")
+    journal.save(str(p), data)
+    assert journal.load(str(p))["entries"][0]["rescuetime"] is None
+
+
+def test_payload_carries_rescuetime():
+    data = journal._seeded()
+    journal.set_entry_rescuetime(data, "2026-06-28", {"pulse": 70, "total_min": 100})
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["rescuetime"]["pulse"] == 70
