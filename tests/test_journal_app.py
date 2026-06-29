@@ -513,7 +513,11 @@ def test_analytics_data_returns_json(client):
     assert resp.status_code == 200
     assert resp.is_json
     payload = resp.get_json()
-    assert {"sections", "entries", "date_range", "tasks"} <= set(payload)
+    assert {"sections", "entries", "date_range", "tasks",
+            "suggestions", "dormant"} <= set(payload)
+    # The range-independent Overview blocks ship as lists (empty on a fresh store).
+    assert isinstance(payload["suggestions"], list)
+    assert isinstance(payload["dormant"], list)
     # seeded store has the six default sections
     assert [s["name"] for s in payload["sections"]][0] == "people"
 

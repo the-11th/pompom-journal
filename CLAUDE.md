@@ -424,7 +424,17 @@ What exists today:
   ignore null moods): `mood_series`, `mood_dow_averages`, `mood_distribution`,
   `mood_by_date`, `mood_numeric_pairs` (same-day mood↔numeric pairs for
   correlation), and `_entry_mood` (the defensive 1..7-or-None reader).
-  `analytics_payload` now carries each entry's `mood` (int 1–7 or null).
+  **Overview-suggestion helpers** (powering the upgraded Overview): `_STOPWORDS`
+  (+ `_MIN_WORD_LEN`), `word_frequency` ([{word, count}] over bodies, sorted
+  count desc then word), `tag_suggestions(data, entries=None, ...)` (frequent
+  words not already a known tag in `tags ∪ archived_tags`), `dormant_tags(data,
+  now=None, section_name="people", threshold_days=21)` ([{name, section_id,
+  last_date, days_since}], most-dormant first), and `mood_tag_uplift(entries,
+  ..., min_n=2)` ([{name, section_id, avg_mood, baseline, uplift, n}], tag-mean
+  − baseline, sorted |uplift| desc). `analytics_payload` now carries each
+  entry's `mood` (int 1–7 or null), plus two **range-independent** keys computed
+  as of `today_iso()`: `suggestions` (= `tag_suggestions(data, limit=8)`) and
+  `dormant` (= `dormant_tags(data, now=today)`).
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
   recorded mood via `hasMood`), Consistency (entry calendar, words/entry, gaps,
@@ -462,13 +472,37 @@ What exists today:
     **Tags** tab's aggregate view filters tag sections (`_secSel.tag`; the
     non-section task-tag chart always shows). State lives in `_secSel`
     (`null` = all).
-  - **Overview tab** is an at-a-glance dashboard: prominent **stat cards**
-    (entries this period, current/longest streak, avg mood + a tiny mood
-    sparkline, tasks completed, latest value per numeric section) and an
-    auto-generated **Insights** list (`buildInsights`: weekend-vs-weekday mood,
-    best good-mood stretch, streak milestone, strongest mood↔numeric
-    correlation), plus a compact secondary stats row. Styles: `.stat-cards` /
-    `.stat-card*`, `.stat-spark`, `.insights*` in `style.css`.
+  - **Overview tab** is an at-a-glance cross-domain dashboard that *talks and
+    routes you onward*, reading top→bottom: (a) prominent **hero stat cards
+    with deltas** (entries, current/longest streak, avg mood + sparkline, tasks
+    completed, words written, latest value per numeric section) — each card
+    carries a **▲/▼ delta vs the immediately preceding equal-length window**
+    (green up / red down, muted/omitted when flat or no prior data, skipped
+    when the range is open-ended; computed in JS from `_data` by shifting
+    `[_from,_to]` back one window via `previousWindow`/`annotateDelta`); (b) a
+    **combined activity heatmap** (one month grid per spanned month, each day
+    tinted by a mood color ramp — `moodRampColor`, danger→accent — plus entry +
+    task-done dot marks and a summarizing `title`; built by
+    `buildActivityMonthGrid`/`renderActivityHeatmap`); (c) a **drivers board**
+    ("What moves my mood") — a ranked one-line list merging **tag uplift** (JS
+    `moodTagUplift` mirror of the pure helper), strongest **mood↔numeric**
+    Pearson, and **difficulty→mood** (`difficultyMoodEffect`: mean mood on
+    hard-task-completed days vs others), each origin-marked (☑ task / ● journal
+    section color) and clickable, thin rows dropped (`renderDriversBoard`);
+    (d) the auto-generated **Insights** list (`buildInsights`: weekend-vs-
+    weekday mood, best good-mood stretch, streak milestone, strongest mood↔
+    numeric correlation); (e) a **Suggestions** block (range-independent,
+    server-computed): suggested-tag chips from `_data.suggestions` +
+    dormant-people nudges from `_data.dormant` ("Haven't tagged X in N days"),
+    graceful when empty (`renderSuggestions`); (f) a compact secondary stats
+    row. **Clickable launchpad**: numeric card → Numeric tab
+    (`_secSel.numeric=[id]`); mood card → Mood tab; tasks card → Task lens +
+    Throughput; any driver/suggestion naming a tag → Tags tab pre-searched
+    (set `_tagQuery`, `switchTab("tags")`). Wired via `makeClickable` +
+    `switchLens`/`switchTab`/`gotoNumeric`/`gotoMood`/`gotoThroughput`/`gotoTag`.
+    Styles: `.stat-cards`/`.stat-card*`, `.stat-delta.up/.down`, `.stat-spark`,
+    `.insights*`, `.ov-section*`, `.ov-clickable`, `.drivers-list`/`.driver-*`,
+    `.heat-legend*`, `.suggest-*`/`.dormant-*` in `style.css`.
 - **`templates/journal_analytics.html`** + analytics styles in `style.css`
   (`.analytics-*`, `.chart-svg`/`.chart-svg-fixed`). Tests in
   `tests/test_journal_analytics.py` and route tests in `test_journal_app.py`.

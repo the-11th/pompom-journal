@@ -495,7 +495,8 @@ def test_analytics_payload_shape():
     )
     payload = journal.analytics_payload(data)
 
-    assert set(payload) == {"sections", "entries", "date_range"}
+    assert set(payload) == {"sections", "entries", "date_range",
+                            "suggestions", "dormant"}
     s = payload["sections"][0]
     assert set(s) == {"id", "name", "type", "color", "tags", "unit"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
@@ -521,3 +522,224 @@ def test_analytics_payload_empty_date_range():
     payload = journal.analytics_payload(journal._empty())
     assert payload["entries"] == []
     assert payload["date_range"] == {"min": None, "max": None}
+
+
+def test_analytics_payload_carries_suggestions_and_dormant():
+    """The payload exposes range-independent suggestion blocks with sane shapes."""
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.add_section_tag(data, sec["id"], "alex")
+    journal.upsert_entry(
+        data, "2026-06-10", "title",
+        "running running running mountains mountains",
+        tags={sec["id"]: ["alex"]}, numbers={}, mood=5,
+        now=datetime(2026, 6, 10, 9, 0, 0),
+    )
+    payload = journal.analytics_payload(data)
+    assert isinstance(payload["suggestions"], list)
+    assert isinstance(payload["dormant"], list)
+    # "running"/"mountains" recur and are not tags -> suggested.
+    sug_words = {s["word"] for s in payload["suggestions"]}
+    assert "running" in sug_words
+    for s in payload["suggestions"]:
+        assert set(s) == {"word", "count"}
+    for d in payload["dormant"]:
+        assert set(d) == {"name", "section_id", "last_date", "days_since"}
+
+
+# --------------------------------------------------------------------------- #
+# word_frequency
+# --------------------------------------------------------------------------- #
+
+def test_word_frequency_counts_and_orders():
+    entries = [
+        _entry("2026-06-01", body="apple apple banana"),
+        _entry("2026-06-02", body="apple cherry cherry cherry"),
+    ]
+    got = journal.word_frequency(entries)
+    # cherry 3, apple 3 (tie -> alphabetical), banana 1
+    assert got[0] == {"word": "apple", "count": 3}
+    assert got[1] == {"word": "cherry", "count": 3}
+    assert {"word": "banana", "count": 1} in got
+
+
+def test_word_frequency_strips_stopwords_and_short_tokens():
+    entries = [_entry("2026-06-01", body="the and a I go to running running")]
+    words = {w["word"] for w in journal.word_frequency(entries)}
+    # stopwords (the/and/a/to) and sub-min-length tokens (i, go) are dropped.
+    assert "running" in words
+    assert "the" not in words and "and" not in words
+    assert "go" not in words and "i" not in words
+
+
+def test_word_frequency_respects_date_bounds_and_limit():
+    entries = [
+        _entry("2026-06-01", body="alpha alpha"),
+        _entry("2026-06-10", body="beta beta beta"),
+    ]
+    got = journal.word_frequency(entries, start="2026-06-05", end=None)
+    assert [w["word"] for w in got] == ["beta"]
+    limited = journal.word_frequency(
+        [_entry("2026-06-01", body="alpha beta gamma")], limit=2)
+    assert len(limited) == 2
+
+
+def test_word_frequency_lowercases_alphanumeric():
+    entries = [_entry("2026-06-01", body="Running, RUNNING! running.")]
+    got = journal.word_frequency(entries)
+    assert got == [{"word": "running", "count": 3}]
+
+
+# --------------------------------------------------------------------------- #
+# tag_suggestions
+# --------------------------------------------------------------------------- #
+
+def test_tag_suggestions_excludes_known_tags():
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.add_section_tag(data, sec["id"], "alex")
+    journal.upsert_entry(
+        data, "2026-06-10", "t", "alex alex running running",
+        now=datetime(2026, 6, 10, 9, 0, 0),
+    )
+    got = journal.tag_suggestions(data)
+    words = {s["word"] for s in got}
+    assert "running" in words
+    assert "alex" not in words   # already a registered tag
+
+
+def test_tag_suggestions_excludes_archived_tags_case_insensitive():
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.add_section_tag(data, sec["id"], "alex")
+    journal.remove_section_tag(data, sec["id"], "alex")   # -> archived_tags
+    journal.upsert_entry(
+        data, "2026-06-10", "t", "Alex Alex jogging jogging",
+        now=datetime(2026, 6, 10, 9, 0, 0),
+    )
+    words = {s["word"] for s in journal.tag_suggestions(data)}
+    assert "alex" not in words   # archived tag, still excluded
+    assert "jogging" in words
+
+
+def test_tag_suggestions_uses_data_entries_when_none():
+    data = journal._empty()
+    journal.add_section(data, "people", "tag", "#e0a955")
+    journal.upsert_entry(
+        data, "2026-06-10", "t", "swimming swimming",
+        now=datetime(2026, 6, 10, 9, 0, 0),
+    )
+    got = journal.tag_suggestions(data)
+    assert {"word": "swimming", "count": 2} in got
+
+
+# --------------------------------------------------------------------------- #
+# dormant_tags
+# --------------------------------------------------------------------------- #
+
+def test_dormant_tags_surfaces_long_unused_people_tags():
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.upsert_entry(
+        data, "2026-05-01", "t", "", tags={sec["id"]: ["alex"]},
+        now=datetime(2026, 5, 1, 9, 0, 0),
+    )
+    now = datetime(2026, 6, 10)   # 40 days later
+    got = journal.dormant_tags(data, now=now)
+    assert len(got) == 1
+    d = got[0]
+    assert d["name"] == "alex" and d["section_id"] == sec["id"]
+    assert d["last_date"] == "2026-05-01" and d["days_since"] == 40
+
+
+def test_dormant_tags_threshold_boundary_and_recent_excluded():
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.upsert_entry(
+        data, "2026-06-01", "t", "", tags={sec["id"]: ["recent"]},
+        now=datetime(2026, 6, 1, 9, 0, 0),
+    )
+    journal.upsert_entry(
+        data, "2026-05-20", "t", "", tags={sec["id"]: ["old"]},
+        now=datetime(2026, 5, 20, 9, 0, 0),
+    )
+    now = datetime(2026, 6, 10)   # recent=9d ago, old=21d ago
+    names = {d["name"] for d in journal.dormant_tags(data, now=now)}
+    assert "old" in names         # exactly 21 days -> dormant (>= threshold)
+    assert "recent" not in names  # 9 days -> active
+
+
+def test_dormant_tags_matches_people_section_by_name():
+    data = journal._empty()
+    people = journal.add_section(data, "people", "tag", "#e0a955")
+    work = journal.add_section(data, "work", "tag", "#e06666")
+    journal.upsert_entry(
+        data, "2026-05-01", "t", "", tags={people["id"]: ["alex"],
+                                           work["id"]: ["projectx"]},
+        now=datetime(2026, 5, 1, 9, 0, 0),
+    )
+    got = journal.dormant_tags(data, now=datetime(2026, 6, 10))
+    names = {d["name"] for d in got}
+    assert names == {"alex"}   # only the people section is scanned
+
+
+def test_dormant_tags_sorted_most_dormant_first():
+    data = journal._empty()
+    sec = journal.add_section(data, "people", "tag", "#e0a955")
+    journal.upsert_entry(data, "2026-04-01", "t", "",
+                         tags={sec["id"]: ["older"]},
+                         now=datetime(2026, 4, 1, 9, 0, 0))
+    journal.upsert_entry(data, "2026-05-01", "t", "",
+                         tags={sec["id"]: ["newer"]},
+                         now=datetime(2026, 5, 1, 9, 0, 0))
+    got = journal.dormant_tags(data, now=datetime(2026, 6, 10))
+    assert [d["name"] for d in got] == ["older", "newer"]
+
+
+# --------------------------------------------------------------------------- #
+# mood_tag_uplift
+# --------------------------------------------------------------------------- #
+
+def test_mood_tag_uplift_is_tag_mean_minus_baseline():
+    sid = "people"
+    entries = [
+        _entry("2026-06-01", tags={sid: ["alex"]}, mood=6),
+        _entry("2026-06-02", tags={sid: ["alex"]}, mood=6),
+        _entry("2026-06-03", tags={}, mood=2),
+        _entry("2026-06-04", tags={}, mood=2),
+    ]
+    got = journal.mood_tag_uplift(entries)
+    row = [r for r in got if r["name"] == "alex"][0]
+    assert row["section_id"] == sid
+    assert row["avg_mood"] == 6
+    assert row["baseline"] == 4        # (6+6+2+2)/4
+    assert row["uplift"] == 2
+    assert row["n"] == 2
+
+
+def test_mood_tag_uplift_ignores_null_moods():
+    sid = "people"
+    entries = [
+        _entry("2026-06-01", tags={sid: ["alex"]}, mood=5),
+        _entry("2026-06-02", tags={sid: ["alex"]}, mood=None),
+        _entry("2026-06-03", tags={}, mood=3),
+    ]
+    got = journal.mood_tag_uplift(entries, min_n=1)
+    row = [r for r in got if r["name"] == "alex"][0]
+    assert row["n"] == 1 and row["avg_mood"] == 5
+    assert row["baseline"] == 4        # (5+3)/2; null ignored
+
+
+def test_mood_tag_uplift_min_n_gate_and_ranking():
+    sid = "people"
+    entries = [
+        _entry("2026-06-01", tags={sid: ["alex"]}, mood=7),
+        _entry("2026-06-02", tags={sid: ["alex"]}, mood=7),
+        _entry("2026-06-03", tags={sid: ["bob"]}, mood=1),   # n=1, gated out
+        _entry("2026-06-04", tags={sid: ["cara", "cara_dup"]}, mood=3),
+        _entry("2026-06-05", tags={sid: ["cara"]}, mood=3),
+    ]
+    got = journal.mood_tag_uplift(entries, min_n=2)
+    names = [r["name"] for r in got]
+    assert "bob" not in names          # below min_n
+    assert names[0] == "alex"          # largest |uplift| first

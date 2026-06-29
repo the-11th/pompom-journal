@@ -388,6 +388,219 @@
     return out.slice(0, 4);
   }
 
+  // ----- Overview launchpad: click a card/driver/suggestion into a deep tab.
+  // Uses the existing switchLens/switchTab + Tags-search entry points. Defined
+  // up here (hoisted) but they call functions declared later in the IIFE; all
+  // are reachable by the time a click fires. -----
+  function makeClickable(el, fn) {
+    el.classList.add("ov-clickable");
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("role", "button");
+    el.addEventListener("click", fn);
+    el.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); }
+    });
+  }
+  function gotoNumeric(sectionId) {
+    if (_lens !== "journal") switchLens("journal");
+    _secSel.numeric = sectionId ? [sectionId] : null;
+    switchTab("numeric");
+  }
+  function gotoMood() {
+    if (_lens !== "journal") switchLens("journal");
+    switchTab("mood");
+  }
+  function gotoThroughput() {
+    if (_lens !== "task") switchLens("task");
+    switchTab("throughput");
+  }
+  function gotoTag(name) {
+    _tagQuery = (name || "").trim().toLowerCase();
+    switchTab("tags");   // renderTagsTab reads _tagQuery and renders the detail
+  }
+
+  // Shift the active [_from,_to] range back one equal-length window. Returns
+  // {start, end} or null when the range is open-ended (no deltas then).
+  function previousWindow() {
+    if (!_from || !_to) return null;
+    var len = dayDiff(_from, _to);
+    var prevEnd = isoShift(_from, -1);
+    return { start: isoShift(prevEnd, -len), end: prevEnd };
+  }
+  function entriesInRange(start, end) {
+    return _data.entries.filter(function (e) {
+      return e.date >= start && e.date <= end;
+    });
+  }
+  function tasksCompletedBetween(start, end) {
+    var n = 0;
+    (_data.tasks ? _data.tasks.archive : []).forEach(function (t) {
+      if (!t.completed) return;
+      var d = t.completed.slice(0, 10);
+      if (d >= start && d <= end) n++;
+    });
+    return n;
+  }
+  function totalWords(entries) {
+    return entries.reduce(function (a, e) {
+      return a + (e.body || "").split(/\s+/).filter(Boolean).length;
+    }, 0);
+  }
+  function meanMood(entries) {
+    var ms = moodSeries(entries).map(function (m) { return m.mood; });
+    return ms.length ? ms.reduce(function (a, b) { return a + b; }, 0) / ms.length : null;
+  }
+
+  // Annotate a stat card with a ▲/▼ delta vs a previous value. Muted/omitted
+  // when flat, when there's no previous data, or when prev is null.
+  function annotateDelta(card, cur, prev, opts) {
+    opts = opts || {};
+    if (prev == null || cur == null) return;
+    var delta = cur - prev;
+    if (Math.abs(delta) < (opts.eps || 1e-9)) return;   // flat -> omit
+    var el = document.createElement("div");
+    el.className = "stat-delta " + (delta > 0 ? "up" : "down");
+    var mag = opts.fmt ? opts.fmt(Math.abs(delta)) : U.fmt(Math.abs(delta));
+    el.textContent = (delta > 0 ? "▲ " : "▼ ") + mag + " vs prev";
+    card.appendChild(el);
+  }
+
+  // JS mirror of journal.mood_tag_uplift over a set of entries (range-aware).
+  // [{name, section_id, avg_mood, baseline, uplift, n}], sorted |uplift| desc.
+  function moodTagUplift(entries, minN) {
+    minN = minN || 2;
+    var moods = moodSeries(entries).map(function (m) { return m.mood; });
+    if (!moods.length) return [];
+    var baseline = moods.reduce(function (a, b) { return a + b; }, 0) / moods.length;
+    var byTag = {};   // "name|sid" -> [moods]
+    entries.forEach(function (e) {
+      var m = moodOf(e);
+      if (m == null) return;
+      var tags = e.tags || {};
+      Object.keys(tags).forEach(function (sid) {
+        var seen = {};
+        (tags[sid] || []).forEach(function (raw) {
+          var n = String(raw).trim().toLowerCase();
+          if (!n || seen[n]) return;
+          seen[n] = true;
+          var key = n + "|" + sid;
+          (byTag[key] = byTag[key] || []).push(m);
+        });
+      });
+    });
+    var out = [];
+    Object.keys(byTag).forEach(function (key) {
+      var moodsT = byTag[key];
+      if (moodsT.length < minN) return;
+      var sep = key.lastIndexOf("|");
+      var avg = moodsT.reduce(function (a, b) { return a + b; }, 0) / moodsT.length;
+      out.push({
+        name: key.slice(0, sep), section_id: key.slice(sep + 1),
+        avg_mood: avg, baseline: baseline, uplift: avg - baseline, n: moodsT.length,
+      });
+    });
+    out.sort(function (a, b) { return Math.abs(b.uplift) - Math.abs(a.uplift); });
+    return out;
+  }
+
+  // Difficulty -> mood: mean mood on days a `hard` task was completed vs other
+  // days. Returns {hardMean, otherMean, diff, nHard, nOther} or null on thin
+  // data. Cross-domain: joins _data.tasks archive completions to entry moods.
+  function difficultyMoodEffect(entries) {
+    var moodBy = moodByDate(entries);
+    var hardDays = {};
+    (_data.tasks ? _data.tasks.archive : []).forEach(function (t) {
+      if (t.difficulty === "hard" && t.completed) {
+        hardDays[t.completed.slice(0, 10)] = true;
+      }
+    });
+    var hard = [], other = [];
+    Object.keys(moodBy).forEach(function (d) {
+      (hardDays[d] ? hard : other).push(moodBy[d]);
+    });
+    if (hard.length < 2 || !other.length) return null;
+    function mean(a) { return a.reduce(function (x, y) { return x + y; }, 0) / a.length; }
+    var hm = mean(hard), om = mean(other);
+    return { hardMean: hm, otherMean: om, diff: hm - om,
+             nHard: hard.length, nOther: other.length };
+  }
+
+  // Mood color ramp: map a 1..7 mood onto danger(low) -> accent(high). Returns
+  // a color-mix string blending the two theme colors by mood position.
+  function moodRampColor(mood, c) {
+    var frac = (Math.max(1, Math.min(7, mood)) - 1) / 6;   // 0..1
+    // Blend danger and accent: accent share rises with mood.
+    return "color-mix(in srgb, " + c.accent + " " +
+           Math.round(frac * 100) + "%, " + c.danger + ")";
+  }
+
+  // A month grid blending journal + tasks + mood for the Overview heatmap.
+  // tint = mood ramp (neutral when no mood); a small dot row marks an entry
+  // and task completions; the cell title summarizes the day.
+  function buildActivityMonthGrid(year, month, moodBy, entryDays, taskBy, todayIso, c) {
+    var wrap = document.createElement("div");
+    wrap.className = "cal-month";
+    var title = document.createElement("div");
+    title.className = "cal-month-title";
+    title.textContent = CAL_MONTHS[month] + " " + year;
+    wrap.appendChild(title);
+    var grid = document.createElement("div");
+    grid.className = "cal-grid";
+    CAL_DAYS.forEach(function (d) {
+      var wh = document.createElement("div");
+      wh.className = "cal-weekday"; wh.textContent = d;
+      grid.appendChild(wh);
+    });
+    var firstDow = new Date(year, month, 1).getDay();
+    for (var b = 0; b < firstDow; b++) {
+      var blank = document.createElement("div");
+      blank.className = "cal-day cal-day-blank";
+      grid.appendChild(blank);
+    }
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (var day = 1; day <= daysInMonth; day++) {
+      var iso = calIso(year, month, day);
+      var cell = document.createElement("div");
+      cell.className = "cal-day";
+      if (iso === todayIso) cell.classList.add("is-today");
+      var mood = moodBy[iso];
+      var nTasks = taskBy[iso] || 0;
+      var hasEntry = !!entryDays[iso];
+      if (mood != null) {
+        cell.style.background = U.colorMix(moodRampColor(mood, c), 70);
+      } else if (hasEntry || nTasks) {
+        cell.style.background = U.colorMix(c.muted, 14);   // activity, no mood
+      }
+      var bits = [iso];
+      bits.push(mood != null ? "mood " + mood : "no mood");
+      bits.push(hasEntry ? "entry" : "no entry");
+      if (nTasks) bits.push(nTasks + " task" + (nTasks === 1 ? "" : "s") + " done");
+      cell.title = bits.join(" · ");
+      var num = document.createElement("span");
+      num.className = "cal-day-num";
+      num.textContent = String(day);
+      cell.appendChild(num);
+      if (hasEntry || nTasks) {
+        var dots = document.createElement("span");
+        dots.className = "cal-dots-row";
+        if (hasEntry) {
+          var ed = document.createElement("span");
+          ed.className = "cal-dot";
+          dots.appendChild(ed);
+        }
+        for (var k = 0; k < Math.min(nTasks, 3); k++) {
+          var td = document.createElement("span");
+          td.className = "cal-dot cal-dot-alt";
+          dots.appendChild(td);
+        }
+        cell.appendChild(dots);
+      }
+      grid.appendChild(cell);
+    }
+    wrap.appendChild(grid);
+    return wrap;
+  }
+
   CHARTS.push({
     id: "overview-summary",
     panel: "overview",
@@ -398,30 +611,55 @@
       var st = streaks(dates);
       var moods = moodSeries(entries);
       var md = U.describe(moods.map(function (m) { return m.mood; }));
+      var prev = previousWindow();
+      var prevEntries = prev ? entriesInRange(prev.start, prev.end) : null;
 
-      // ----- prominent stat cards -----
+      // ----- prominent stat cards (with deltas vs the previous window) -----
       var grid = document.createElement("div");
       grid.className = "stat-cards";
-      statCard(grid, entries.length, "entries this period",
+
+      var entriesCard = statCard(grid, entries.length, "entries this period",
                "last: " + dates[dates.length - 1]);
-      statCard(grid, st.current + "d", "current streak",
-               "longest " + st.longest + "d");
+      if (prevEntries) annotateDelta(entriesCard, entries.length,
+               uniqueDates(prevEntries).length, { fmt: function (n) { return n + ""; } });
+
+      statCard(grid, st.current + "d", "current streak", "longest " + st.longest + "d");
+
       var moodCard = statCard(grid, md.count ? U.fmt(md.mean) : null,
                               "avg mood",
                               md.count ? md.count + " day" + (md.count === 1 ? "" : "s") : "no mood yet");
       if (md.count) moodSparkline(moodCard, moods);
+      if (prevEntries && md.count) annotateDelta(moodCard, md.mean, meanMood(prevEntries));
+      makeClickable(moodCard, gotoMood);
+
       if (hasTasks()) {
-        statCard(grid, tasksCompletedInRange(), "tasks completed", null);
+        var tasksCard = statCard(grid, tasksCompletedInRange(), "tasks completed", null);
+        if (prev) annotateDelta(tasksCard, tasksCompletedInRange(),
+                 tasksCompletedBetween(prev.start, prev.end),
+                 { fmt: function (n) { return n + ""; } });
+        makeClickable(tasksCard, gotoThroughput);
       }
-      // Current numeric highlights: latest value per numeric section.
+
+      var wordsCard = statCard(grid, totalWords(entries), "words written", null);
+      if (prevEntries) annotateDelta(wordsCard, totalWords(entries),
+               totalWords(prevEntries), { fmt: function (n) { return n + ""; } });
+
+      // Current numeric highlights: latest value per numeric section (clickable).
       U.numericSections(sections).forEach(function (s) {
         var series = numericSeries(entries, s.id);
         if (!series.length) return;
         var last = series[series.length - 1];
-        statCard(grid, U.fmt(last.value) + (s.unit ? " " + s.unit : ""),
+        var nc = statCard(grid, U.fmt(last.value) + (s.unit ? " " + s.unit : ""),
                  s.name, "latest " + last.date);
+        makeClickable(nc, function () { gotoNumeric(s.id); });
       });
       container.appendChild(grid);
+
+      // ----- combined activity heatmap (journal + tasks + mood) -----
+      renderActivityHeatmap(container, entries, c);
+
+      // ----- drivers board (what moves my mood) -----
+      renderDriversBoard(container, entries, sections, c);
 
       // ----- auto-insights -----
       var insights = buildInsights(entries);
@@ -443,6 +681,9 @@
         container.appendChild(box);
       }
 
+      // ----- suggestions (range-independent: from the server payload) -----
+      renderSuggestions(container, c);
+
       // ----- compact secondary stats (kept from the original summary) -----
       var words = entries.map(function (e) {
         return (e.body || "").split(/\s+/).filter(Boolean).length;
@@ -461,6 +702,188 @@
       ]);
     },
   });
+
+  // The combined activity heatmap: one month grid per spanned calendar month,
+  // each day tinted by mood (ramp) and marked for entry + task completions.
+  function renderActivityHeatmap(container, entries, c) {
+    var dates = uniqueDates(entries);
+    if (!dates.length) return;
+    var moodBy = moodByDate(entries);
+    var entryDays = {};
+    dates.forEach(function (d) { entryDays[d] = true; });
+    var taskBy = taskThroughput();   // {YYYY-MM-DD: completed count} in range
+    var now = new Date();
+    var todayIso = calIso(now.getFullYear(), now.getMonth(), now.getDate());
+
+    var section = document.createElement("div");
+    section.className = "ov-section";
+    var h = document.createElement("div");
+    h.className = "ov-section-title";
+    h.textContent = "Activity";
+    section.appendChild(h);
+
+    var wrap = document.createElement("div");
+    wrap.className = "analytics-cal";
+    var first = new Date(dates[0] + "T00:00:00");
+    var last = new Date(dates[dates.length - 1] + "T00:00:00");
+    var y = first.getFullYear(), m = first.getMonth();
+    while (y < last.getFullYear() || (y === last.getFullYear() && m <= last.getMonth())) {
+      wrap.appendChild(buildActivityMonthGrid(y, m, moodBy, entryDays, taskBy, todayIso, c));
+      m++; if (m > 11) { m = 0; y++; }
+    }
+    section.appendChild(wrap);
+
+    // Legend: mood ramp + the entry / task dot marks.
+    var legend = document.createElement("div");
+    legend.className = "heat-legend";
+    var ramp = document.createElement("span");
+    ramp.className = "heat-legend-ramp";
+    ramp.style.background = "linear-gradient(90deg," +
+      moodRampColor(1, c) + "," + moodRampColor(4, c) + "," + moodRampColor(7, c) + ")";
+    legend.appendChild(document.createTextNode("low "));
+    legend.appendChild(ramp);
+    legend.appendChild(document.createTextNode(" high mood"));
+    var entLeg = document.createElement("span");
+    entLeg.className = "heat-legend-mark";
+    entLeg.innerHTML = '<span class="cal-dot"></span> entry &nbsp; ' +
+                       '<span class="cal-dot cal-dot-alt"></span> task done';
+    legend.appendChild(entLeg);
+    section.appendChild(legend);
+    container.appendChild(section);
+  }
+
+  // The drivers board: a ranked one-line list of what correlates with mood —
+  // tag uplift, strongest mood↔numeric Pearson, and difficulty→mood. Each row
+  // is origin-marked and clickable into the relevant deep tab. Thin rows drop.
+  function renderDriversBoard(container, entries, sections, c) {
+    var rows = [];   // {kind, label, effect (sortable), build(li)}
+
+    // Tag uplift (top 3 by |uplift|), origin = section dot, click -> Tags tab.
+    moodTagUplift(entries, 2).slice(0, 3).forEach(function (u) {
+      if (Math.abs(u.uplift) < 0.3) return;
+      rows.push({
+        effect: Math.abs(u.uplift),
+        origin: { dot: sectionColorOf(u.section_id) },
+        name: u.name,
+        text: (u.uplift > 0 ? "+" : "") + U.fmt(u.uplift) + " mood when present",
+        click: function () { gotoTag(u.name); },
+      });
+    });
+
+    // Strongest mood<->numeric correlation, click -> that numeric section.
+    var best = null;
+    U.numericSections(sections).forEach(function (s) {
+      var pairs = entries.filter(function (e) {
+        return moodOf(e) != null && (e.numbers || {})[s.id] != null;
+      });
+      if (pairs.length < 3) return;
+      var r = pearson(pairs.map(function (e) { return Number(e.numbers[s.id]); }),
+                      pairs.map(function (e) { return moodOf(e); }));
+      if (r != null && (!best || Math.abs(r) > Math.abs(best.r))) {
+        best = { name: s.name, id: s.id, r: r, color: s.color };
+      }
+    });
+    if (best && Math.abs(best.r) >= 0.3) {
+      rows.push({
+        effect: Math.abs(best.r),
+        origin: { dot: best.color },
+        name: best.name,
+        text: "r=" + (best.r > 0 ? "+" : "") + U.fmt(best.r) + " with mood",
+        click: function () { gotoNumeric(best.id); },
+      });
+    }
+
+    // Difficulty -> mood (cross-domain), origin = task mark, click -> Throughput.
+    var de = difficultyMoodEffect(entries);
+    if (de && Math.abs(de.diff) >= 0.3) {
+      rows.push({
+        effect: Math.abs(de.diff),
+        origin: { task: true },
+        name: "hard tasks",
+        text: (de.diff > 0 ? "+" : "") + U.fmt(de.diff) + " mood on hard-task days",
+        click: gotoThroughput,
+      });
+    }
+
+    if (!rows.length) return;
+    rows.sort(function (a, b) { return b.effect - a.effect; });
+
+    var section = document.createElement("div");
+    section.className = "ov-section";
+    var h = document.createElement("div");
+    h.className = "ov-section-title";
+    h.textContent = "What moves my mood";
+    section.appendChild(h);
+    var list = document.createElement("div");
+    list.className = "drivers-list";
+    rows.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "driver-row";
+      var nm = document.createElement("span");
+      nm.className = "driver-name";
+      nm.appendChild(r.origin.task ? originTaskMark() : originDot(r.origin.dot));
+      nm.appendChild(document.createTextNode(" " + r.name));
+      var tx = document.createElement("span");
+      tx.className = "driver-effect";
+      tx.textContent = r.text;
+      row.appendChild(nm); row.appendChild(tx);
+      makeClickable(row, r.click);
+      list.appendChild(row);
+    });
+    section.appendChild(list);
+    container.appendChild(section);
+  }
+
+  // Suggestions: server-computed (range-independent) suggested tags + dormant
+  // people. Both render gracefully empty. Suggested-tag chips and dormant rows
+  // open the Tags tab pre-searched.
+  function renderSuggestions(container, c) {
+    var sug = _data.suggestions || [];
+    var dorm = _data.dormant || [];
+    if (!sug.length && !dorm.length) return;
+
+    var section = document.createElement("div");
+    section.className = "ov-section";
+    var h = document.createElement("div");
+    h.className = "ov-section-title";
+    h.textContent = "Suggestions";
+    section.appendChild(h);
+
+    if (sug.length) {
+      var lbl = document.createElement("div");
+      lbl.className = "suggest-label";
+      lbl.textContent = "Frequent words you don't tag yet:";
+      section.appendChild(lbl);
+      var chips = document.createElement("div");
+      chips.className = "suggest-chips";
+      sug.forEach(function (s) {
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "suggest-chip";
+        chip.textContent = s.word + " ·" + s.count;
+        chip.addEventListener("click", function () { gotoTag(s.word); });
+        chips.appendChild(chip);
+      });
+      section.appendChild(chips);
+    }
+
+    if (dorm.length) {
+      var ul = document.createElement("ul");
+      ul.className = "dormant-list";
+      dorm.slice(0, 5).forEach(function (d) {
+        var li = document.createElement("li");
+        li.className = "dormant-row";
+        makeClickable(li, function () { gotoTag(d.name); });
+        li.appendChild(originDot(sectionColorOf(d.section_id)));
+        var tx = document.createElement("span");
+        tx.textContent = " Haven't tagged " + d.name + " in " + d.days_since + " days";
+        li.appendChild(tx);
+        ul.appendChild(li);
+      });
+      section.appendChild(ul);
+    }
+    container.appendChild(section);
+  }
 
   // Month-grid calendar matching the journal entry form's custom calendar.
   // Reuses the .cal-* classes from style.css so the look is identical; days
@@ -2561,10 +2984,19 @@
       chip.style.setProperty("--chip", s.color);
       chip.textContent = s.name;
       chip.addEventListener("click", function () {
-        var cur = _secSel[kind] === null ? ids.slice() : _secSel[kind].slice();
-        var i = cur.indexOf(s.id);
-        if (i === -1) cur.push(s.id); else cur.splice(i, 1);
-        _secSel[kind] = (cur.length === ids.length) ? null : cur;   // all → null
+        if (_secSel[kind] === null) {
+          // From the default "all selected", the first pick focuses to just
+          // this one (deselects the rest).
+          _secSel[kind] = [s.id];
+        } else {
+          // Already narrowed: toggle this one in/out (multi-select).
+          var cur = _secSel[kind].slice();
+          var i = cur.indexOf(s.id);
+          if (i === -1) cur.push(s.id); else cur.splice(i, 1);
+          // Back to all (or emptied) → reset to the "all" state.
+          _secSel[kind] = (cur.length === 0 || cur.length === ids.length)
+            ? null : cur;
+        }
         onChange();
       });
       bar.appendChild(chip);

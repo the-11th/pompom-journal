@@ -1180,12 +1180,162 @@ def section_coverage(entries, active_section_ids, start, end):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Overview suggestions: word frequency, tag suggestions, dormant tags, uplift.
+# All pure; range-relevant helpers take injectable start/end bounds. Mood
+# aggregations ignore null moods and degrade gracefully on thin data.
+# --------------------------------------------------------------------------- #
+
+# Common English stopwords stripped before counting body word frequency. Plus a
+# minimum token length (very short tokens are never meaningful suggestions).
+_STOPWORDS = {
+    "the", "and", "a", "an", "to", "of", "in", "on", "at", "for", "with",
+    "is", "it", "this", "that", "these", "those", "as", "by", "be", "been",
+    "was", "were", "are", "am", "or", "but", "if", "so", "then", "than",
+    "from", "into", "out", "up", "down", "over", "under", "i", "im", "ive",
+    "you", "youre", "he", "she", "they", "them", "we", "us", "my", "me",
+    "your", "his", "her", "its", "our", "their", "do", "did", "does", "done",
+    "have", "has", "had", "will", "would", "can", "could", "should", "shall",
+    "may", "might", "must", "not", "no", "yes", "all", "any", "some", "more",
+    "most", "much", "very", "just", "about", "after", "before", "again",
+    "got", "get", "go", "going", "went", "day", "today", "really", "also",
+    "there", "here", "what", "when", "where", "which", "who", "how", "why",
+    "because", "while", "still", "too", "now", "one", "two",
+}
+_MIN_WORD_LEN = 3
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def word_frequency(entries, start=None, end=None, limit=None):
+    """[{word, count}] over entry bodies, sorted by count desc then word.
+
+    Tokens are lowercased alphanumeric runs; `_STOPWORDS` and tokens shorter
+    than `_MIN_WORD_LEN` are excluded. `limit` caps the result length."""
+    counts = Counter()
+    for e in _filter_entries_by_date(entries, start, end):
+        for tok in _WORD_RE.findall((e.get("body") or "").lower()):
+            if len(tok) >= _MIN_WORD_LEN and tok not in _STOPWORDS:
+                counts[tok] += 1
+    ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if limit is not None:
+        ordered = ordered[:limit]
+    return [{"word": w, "count": c} for w, c in ordered]
+
+
+def _known_tag_names(data):
+    """Set of every registered tag name (tags ∪ archived_tags), normalized."""
+    known = set()
+    for s in data.get("sections", []):
+        for name in (s.get("tags") or []) + (s.get("archived_tags") or []):
+            n = _normalize_name(name)
+            if n:
+                known.add(n)
+    return known
+
+
+def tag_suggestions(data, entries=None, start=None, end=None, limit=None):
+    """[{word, count}] of frequent body words that are NOT already a known tag.
+
+    A word is "known" when it matches (case-insensitively) any section's
+    permanent or archived tag list. Uses `data["entries"]` when `entries` is
+    None. `limit` caps the result length (applied after the known-tag filter)."""
+    if entries is None:
+        entries = data.get("entries", [])
+    known = _known_tag_names(data)
+    out = [w for w in word_frequency(entries, start, end)
+           if w["word"] not in known]
+    if limit is not None:
+        out = out[:limit]
+    return out
+
+
+def dormant_tags(data, now=None, section_name="people", threshold_days=21):
+    """[{name, section_id, last_date, days_since}] for long-unused people tags.
+
+    Scans tags used on entries under section(s) whose name == `section_name`
+    (case-insensitive) and whose most recent appearance is `>= threshold_days`
+    before `now`. Tags never used on any entry are ignored. Sorted most-dormant
+    (largest days_since) first, then by name."""
+    now = now or datetime.now()
+    today = now.date()
+    target = _normalize_name(section_name)
+    out = []
+    for s in data.get("sections", []):
+        if _normalize_name(s.get("name")) != target:
+            continue
+        sid = s.get("id")
+        last = {}  # tag name -> latest YYYY-MM-DD it appeared on
+        for e in data.get("entries", []):
+            date = e.get("date")
+            if not date:
+                continue
+            for raw in (e.get("tags") or {}).get(sid, []) or []:
+                n = _normalize_name(raw)
+                if n and (n not in last or date > last[n]):
+                    last[n] = date
+        for name, last_date in last.items():
+            days_since = (today - datetime.strptime(last_date, "%Y-%m-%d").date()).days
+            if days_since >= threshold_days:
+                out.append({
+                    "name": name,
+                    "section_id": sid,
+                    "last_date": last_date,
+                    "days_since": days_since,
+                })
+    out.sort(key=lambda d: (-d["days_since"], d["name"]))
+    return out
+
+
+def mood_tag_uplift(entries, start=None, end=None, min_n=2):
+    """[{name, section_id, avg_mood, baseline, uplift, n}] per tag.
+
+    `avg_mood` is the mean mood on days the tag appears; `baseline` is the mean
+    mood over ALL in-range entries with a mood; `uplift` is their difference.
+    Only tags with `n >= min_n` mood-bearing days are kept. Null moods are
+    ignored throughout. Sorted by abs(uplift) desc, then name. Each (name,
+    section) pair is one row; a tag repeated within one entry counts once."""
+    scoped = _filter_entries_by_date(entries, start, end)
+    baseline_moods = [m for m in (_entry_mood(e) for e in scoped) if m is not None]
+    if not baseline_moods:
+        return []
+    baseline = sum(baseline_moods) / len(baseline_moods)
+
+    by_tag = {}  # (name, section_id) -> [moods]
+    for e in scoped:
+        m = _entry_mood(e)
+        if m is None:
+            continue
+        for sid, names in (e.get("tags") or {}).items():
+            for raw in set(_normalize_name(n) for n in names or [] if n):
+                by_tag.setdefault((raw, sid), []).append(m)
+
+    out = []
+    for (name, sid), moods in by_tag.items():
+        if len(moods) < min_n:
+            continue
+        avg = sum(moods) / len(moods)
+        out.append({
+            "name": name,
+            "section_id": sid,
+            "avg_mood": avg,
+            "baseline": baseline,
+            "uplift": avg - baseline,
+            "n": len(moods),
+        })
+    out.sort(key=lambda r: (-abs(r["uplift"]), r["name"]))
+    return out
+
+
 def analytics_payload(data):
     """The full JSON payload for the analytics page.
 
     `sections` lists active sections only (archived ones are dropped, but their
     historical values stay in `entries` keyed by section id — the JS simply
     never references an unknown id). `date_range` spans all entry dates.
+
+    `suggestions` (suggested tags) and `dormant` (dormant people) are
+    range-independent (computed as of `today_iso()`), so the front-end renders
+    them directly without a refetch on date-range change.
     """
     sections = [
         {
@@ -1212,7 +1362,14 @@ def analytics_payload(data):
     dates = sorted(e["date"] for e in entries if e.get("date"))
     date_range = ({"min": dates[0], "max": dates[-1]}
                   if dates else {"min": None, "max": None})
-    return {"sections": sections, "entries": entries, "date_range": date_range}
+    today = today_iso()
+    return {
+        "sections": sections,
+        "entries": entries,
+        "date_range": date_range,
+        "suggestions": tag_suggestions(data, limit=8),
+        "dormant": dormant_tags(data, now=datetime.fromisoformat(today + "T00:00:00")),
+    }
 
 
 # --------------------------------------------------------------------------- #
