@@ -922,3 +922,20 @@ def test_mood_tag_uplift_min_n_gate_and_ranking():
     names = [r["name"] for r in got]
     assert "bob" not in names          # below min_n
     assert names[0] == "alex"          # largest |uplift| first
+
+
+# --------------------------------------------------------------------------- #
+# Sleep analytics tab — payload regression test
+# --------------------------------------------------------------------------- #
+
+def test_payload_includes_sleep_for_sleep_tab():
+    """analytics_payload entries carry a sleep dict (incl. nested stages)."""
+    data = journal._seeded()
+    journal.set_entry_sleep(data, "2026-06-29", {
+        "duration_min": 420, "start": "23:00", "end": "06:00",
+        "quality": 90, "efficiency": 90, "score": None,
+        "stages": {"deep": 60, "light": 240, "rem": 90, "wake": 30},
+        "source": "fitbit", "fetched": "x",
+    })
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["sleep"]["stages"]["deep"] == 60

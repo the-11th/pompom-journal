@@ -2156,6 +2156,31 @@ a.tl-date:hover { color: var(--accent); }
 .sleep-panel .sleep-times { color: var(--text); }
 .sleep-panel .sleep-qual { color: var(--accent); }
 
+/* ----- Sleep analytics tab ----- */
+/* Stage legend: a row of color-swatch + label items */
+.sleep-stage-legend {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.sleep-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.sleep-legend-item::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--sl-color, var(--accent));
+  flex-shrink: 0;
+}
+
 /* ----- Integrations page ----- */
 .integrations-wrap { max-width: 640px; }
 .integration-card { margin-top: 1.2rem; padding: 1rem 1.2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }

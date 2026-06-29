@@ -552,6 +552,28 @@ def test_analytics_data_entries_carry_mood(client):
     assert by_date["2026-06-16"] is None
 
 
+def test_analytics_data_entries_carry_sleep(client, app):
+    """The analytics feed surfaces each entry's sleep dict so the Sleep tab
+    can render its charts; a staged sleep entry carries the stages key."""
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_sleep(jdata, "2026-06-15", {
+        "duration_min": 420, "start": "23:00", "end": "06:00",
+        "quality": 90, "efficiency": 90, "score": None,
+        "stages": {"deep": 60, "light": 240, "rem": 90, "wake": 30},
+        "source": "fitbit", "fetched": "x",
+    })
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+
+    resp = client.get("/journal/analytics/data")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    sleep_entries = [e for e in payload["entries"] if e.get("sleep")]
+    assert len(sleep_entries) == 1
+    s = sleep_entries[0]["sleep"]
+    assert s["duration_min"] == 420
+    assert s["stages"]["deep"] == 60
+
+
 def test_analytics_route_not_shadowed_by_date_route(client):
     """`/journal/analytics` must hit the analytics page, not be parsed as a
     date by /journal/<date>."""

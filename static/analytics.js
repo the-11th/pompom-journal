@@ -29,6 +29,7 @@
     { id: "overview", label: "Overview" },
     // Journal lens
     { id: "mood", label: "Mood", lens: ["journal"], needs: hasMood },
+    { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
     { id: "consistency", label: "Consistency", lens: ["journal"] },
     { id: "tags", label: "Tags", lens: ["journal", "task"] },
     { id: "numeric", label: "Numeric", lens: ["journal"], needs: hasNumeric },
@@ -55,6 +56,10 @@
 
   function hasMood() {
     return _data.entries.some(function (e) { return e.mood != null; });
+  }
+
+  function hasSleep() {
+    return _data.entries.some(function (e) { return e && e.sleep; });
   }
 
   // Tasks completed within the active date range, by completed-day.
@@ -2346,6 +2351,389 @@
     if (sxx === 0 || syy === 0) return null;
     return sxy / Math.sqrt(sxx * syy);
   }
+
+  // ========================= Sleep tab charts ============================== //
+  // Mirrors the Mood tab pattern.  All series derived from e.sleep (filtered
+  // by _entry_sleep logic: must have a usable duration_min > 0).
+
+  // Return the sleep dict if it has a usable duration, else null.
+  // Mirrors journal._entry_sleep.
+  function sleepOf(e) {
+    var s = e && e.sleep;
+    if (s && typeof s === "object" && s.duration_min) return s;
+    return null;
+  }
+
+  // Convert a clock string "HH:MM" to minutes from midnight.
+  function clockToMin(hhmm) {
+    if (!hhmm || typeof hhmm !== "string") return null;
+    var p = hhmm.split(":");
+    if (p.length < 2) return null;
+    return parseInt(p[0], 10) * 60 + parseInt(p[1], 10);
+  }
+
+  // Format total minutes back to "HH:MM" (wraps mod 1440).
+  // Mirrors journal._min_to_clock.
+  function minToClock(total) {
+    total = Math.round(total) % 1440;
+    if (total < 0) total += 1440;
+    var h = Math.floor(total / 60), m = total % 60;
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+  }
+
+  // Stat cards: avg duration, quality, bedtime, waketime, nights tracked.
+  // Mirrors journal.sleep_stats.
+  CHARTS.push({
+    id: "sleep-stat-cards", panel: "sleep", title: "Sleep at a glance",
+    render: function (container, entries, sections, c) {
+      var sleepEntries = entries.filter(function (e) { return sleepOf(e); });
+      if (!sleepEntries.length) {
+        U.empty(container, "No sleep data in this range."); return;
+      }
+      var hours = sleepEntries.map(function (e) { return sleepOf(e).duration_min / 60; });
+      var avgHours = hours.reduce(function (a, b) { return a + b; }, 0) / hours.length;
+
+      var quals = sleepEntries
+        .map(function (e) { return sleepOf(e).quality; })
+        .filter(function (q) { return q != null; });
+      var avgQual = quals.length
+        ? quals.reduce(function (a, b) { return a + b; }, 0) / quals.length : null;
+
+      var clockEntries = sleepEntries.filter(function (e) {
+        var s = sleepOf(e); return s.start && s.end;
+      });
+      var beds = clockEntries.map(function (e) {
+        var b = clockToMin(sleepOf(e).start);
+        return b >= 12 * 60 ? b - 1440 : b;
+      });
+      var wakes = clockEntries.map(function (e) { return clockToMin(sleepOf(e).end); });
+      var avgBed = beds.length
+        ? beds.reduce(function (a, b) { return a + b; }, 0) / beds.length : null;
+      var avgWake = wakes.length
+        ? wakes.reduce(function (a, b) { return a + b; }, 0) / wakes.length : null;
+
+      var grid = document.createElement("div");
+      grid.className = "stat-cards";
+      statCard(grid, U.fmt(avgHours) + " hrs", "avg duration", null);
+      statCard(grid, avgQual != null ? U.fmt(avgQual) + "%" : null, "avg quality", null);
+      statCard(grid, avgBed != null ? minToClock(avgBed) : null, "avg bedtime", null);
+      statCard(grid, avgWake != null ? minToClock(avgWake) : null, "avg wake", null);
+      statCard(grid, sleepEntries.length, "nights tracked", null);
+      container.appendChild(grid);
+    },
+  });
+
+  // Duration over time with 7-night rolling average. Mirrors mood-over-time.
+  CHARTS.push({
+    id: "sleep-duration", panel: "sleep", title: "Sleep duration over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return sleepOf(e); })
+        .map(function (e) { return { date: e.date, hours: sleepOf(e).duration_min / 60 }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No sleep data in this range."); return; }
+      var vals = series.map(function (s) { return s.hours; });
+      var max = Math.max.apply(null, vals), min = 0, span = max - min || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
+        return { x: x, y: y };
+      }
+      var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+      var pts = series.map(function (s, i) { return ptAt(i, s.hours); });
+      U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
+      U.drawLine(svg, pts, c.accent, 1.5);
+      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      // Y-axis labels
+      U.text(svg, 0, 14, U.fmt(max) + "h", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0h", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", U.fmt(d.mean) + " hrs"], ["median", U.fmt(d.median) + " hrs"],
+        ["min", U.fmt(d.min) + " hrs"], ["max", U.fmt(d.max) + " hrs"],
+        ["nights", d.count],
+      ]);
+    },
+  });
+
+  // Quality over time. Mirrors duration chart but for quality (0..100).
+  CHARTS.push({
+    id: "sleep-quality", panel: "sleep", title: "Sleep quality over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return sleepOf(e) && sleepOf(e).quality != null; })
+        .map(function (e) { return { date: e.date, quality: sleepOf(e).quality }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No quality data in this range."); return; }
+      var vals = series.map(function (s) { return s.quality; });
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      var min = 0, max = 100, span = 100;
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
+        return { x: x, y: y };
+      }
+      var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+      var pts = series.map(function (s, i) { return ptAt(i, s.quality); });
+      U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
+      U.drawLine(svg, pts, c.accent, 1.5);
+      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      U.text(svg, 0, 14, "100%", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0%", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", U.fmt(d.mean) + "%"], ["median", U.fmt(d.median) + "%"],
+        ["min", U.fmt(d.min) + "%"], ["max", U.fmt(d.max) + "%"],
+      ]);
+    },
+  });
+
+  // Bedtime & wake-time consistency: two lines per night (bed_min, wake_min).
+  // Y-axis shows HH:MM. Mirrors bedtime_series logic (pre-midnight negative).
+  CHARTS.push({
+    id: "sleep-consistency", panel: "sleep", title: "Bedtime & wake-time consistency",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) {
+          var s = sleepOf(e); return s && s.start && s.end;
+        })
+        .map(function (e) {
+          var s = sleepOf(e);
+          var bed = clockToMin(s.start);
+          if (bed >= 12 * 60) bed -= 1440;  // pre-midnight → negative
+          return { date: e.date, bed_min: bed, wake_min: clockToMin(s.end) };
+        })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) {
+        U.empty(container, "No bedtime/wake data in this range."); return;
+      }
+      var allMins = series.map(function (s) { return s.bed_min; })
+                          .concat(series.map(function (s) { return s.wake_min; }));
+      var minV = Math.min.apply(null, allMins), maxV = Math.max.apply(null, allMins);
+      var span = maxV - minV || 1;
+      var w = 600, h = 200, pad = 42;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - (v - minV) / span);
+        return { x: x, y: y };
+      }
+      var bedPts = series.map(function (s, i) { return ptAt(i, s.bed_min); });
+      var wakePts = series.map(function (s, i) { return ptAt(i, s.wake_min); });
+      // Bed line in muted accent, wake line in accent.
+      U.drawLine(svg, bedPts, U.colorMix(c.accent, 55), 1.5);
+      bedPts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, U.colorMix(c.accent, 55)); });
+      U.drawLine(svg, wakePts, c.accent, 1.5);
+      wakePts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      // Y-axis: top and bottom ticks formatted as HH:MM.
+      U.text(svg, 0, 14, minToClock(maxV), c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, minToClock(minV), c.muted, { size: 9 });
+      container.appendChild(svg);
+      // Legend.
+      var legend = document.createElement("div");
+      legend.className = "sleep-stage-legend";
+      var bedLeg = document.createElement("span");
+      bedLeg.className = "sleep-legend-item";
+      bedLeg.style.setProperty("--sl-color", U.colorMix(c.accent, 55));
+      bedLeg.textContent = "bedtime";
+      var wakeLeg = document.createElement("span");
+      wakeLeg.className = "sleep-legend-item";
+      wakeLeg.style.setProperty("--sl-color", c.accent);
+      wakeLeg.textContent = "wake";
+      legend.appendChild(bedLeg);
+      legend.appendChild(wakeLeg);
+      container.appendChild(legend);
+      var beds = series.map(function (s) { return s.bed_min; });
+      var wks = series.map(function (s) { return s.wake_min; });
+      U.statsRow(container, [
+        ["avg bedtime", minToClock(beds.reduce(function (a, b) { return a + b; }, 0) / beds.length)],
+        ["avg wake", minToClock(wks.reduce(function (a, b) { return a + b; }, 0) / wks.length)],
+      ]);
+    },
+  });
+
+  // Average duration by day of week. Mirrors mood-dow pattern.
+  CHARTS.push({
+    id: "sleep-dow", panel: "sleep", title: "Average sleep duration by day of week",
+    render: function (container, entries, sections, c) {
+      var buckets = [[], [], [], [], [], [], []];
+      entries.forEach(function (e) {
+        var s = sleepOf(e);
+        if (!s) return;
+        var dow = (new Date(e.date + "T00:00:00").getDay() + 6) % 7;  // Mon=0
+        buckets[dow].push(s.duration_min / 60);
+      });
+      var avgs = buckets.map(function (b) {
+        return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
+      });
+      if (avgs.every(function (a) { return a == null; })) {
+        U.empty(container, "No sleep data in this range."); return;
+      }
+      var nonNull = avgs.filter(function (a) { return a != null; });
+      var max = Math.max.apply(null, nonNull) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var bw = (w - pad - 10) / 7;
+      avgs.forEach(function (a, i) {
+        if (a == null) return;
+        var bh = (h - pad - 10) * (a / max);
+        U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      container.appendChild(svg);
+      var ranked = DOW_NAMES
+        .map(function (n, i) { return [n, avgs[i]]; })
+        .filter(function (p) { return p[1] != null; })
+        .sort(function (a, b) { return b[1] - a[1]; });
+      U.statsRow(container, [
+        ["most sleep", ranked[0][0] + " (" + U.fmt(ranked[0][1]) + " hrs)"],
+        ["least sleep", ranked[ranked.length - 1][0] + " (" + U.fmt(ranked[ranked.length - 1][1]) + " hrs)"],
+      ]);
+    },
+  });
+
+  // Stage composition: stacked/grouped bars for deep/light/REM/awake averages.
+  // Mirrors sleep_stage_averages; only shows when staged nights exist.
+  CHARTS.push({
+    id: "sleep-stages", panel: "sleep", title: "Average sleep stage composition",
+    render: function (container, entries, sections, c) {
+      var STAGE_KEYS = ["deep", "light", "rem", "wake"];
+      var STAGE_LABELS = ["Deep", "Light", "REM", "Awake"];
+      // Collect per-stage values across staged nights only.
+      var buckets = { deep: [], light: [], rem: [], wake: [] };
+      entries.forEach(function (e) {
+        var s = sleepOf(e);
+        if (!s || !s.stages) return;
+        STAGE_KEYS.forEach(function (k) {
+          var v = s.stages[k];
+          if (v != null) buckets[k].push(v);
+        });
+      });
+      var avgs = STAGE_KEYS.map(function (k) {
+        var b = buckets[k];
+        return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
+      });
+      var hasData = avgs.some(function (a) { return a != null; });
+      if (!hasData) {
+        U.empty(container, "No sleep stage data in this range."); return;
+      }
+      // Bar chart: one bar per stage, value in minutes.
+      var maxV = Math.max.apply(null, avgs.filter(function (a) { return a != null; })) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var STAGE_COLORS = [c.accent, U.colorMix(c.accent, 60),
+                         U.colorMix(c.accent, 40), U.colorMix(c.danger, 50)];
+      var bw = (w - pad - 10) / STAGE_KEYS.length;
+      avgs.forEach(function (a, i) {
+        if (a == null) return;
+        var bh = (h - pad - 10) * (a / maxV);
+        U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, STAGE_COLORS[i]);
+        U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
+               a != null ? Math.round(a) + "m" : "", c.muted,
+               { anchor: "middle", size: 9 });
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, STAGE_LABELS, c);
+      container.appendChild(svg);
+      // Stage legend.
+      var legend = document.createElement("div");
+      legend.className = "sleep-stage-legend";
+      STAGE_KEYS.forEach(function (k, i) {
+        var item = document.createElement("span");
+        item.className = "sleep-legend-item";
+        item.style.setProperty("--sl-color", STAGE_COLORS[i]);
+        item.textContent = STAGE_LABELS[i] +
+          (avgs[i] != null ? " (" + Math.round(avgs[i]) + "m)" : "");
+        legend.appendChild(item);
+      });
+      container.appendChild(legend);
+      U.statsRow(container, STAGE_KEYS.map(function (k, i) {
+        return [STAGE_LABELS[i].toLowerCase(), avgs[i] != null ? Math.round(avgs[i]) + " min" : null];
+      }));
+    },
+  });
+
+  // Sleep ↔ mood scatter with Pearson r. Mirrors mood-numeric-scatter pattern.
+  CHARTS.push({
+    id: "sleep-mood-scatter", panel: "sleep", title: "Sleep duration vs. mood",
+    render: function (container, entries, sections, c) {
+      var pairs = entries.filter(function (e) {
+        return sleepOf(e) && e.mood != null;
+      }).map(function (e) {
+        return { x: sleepOf(e).duration_min / 60, y: Number(e.mood) };
+      });
+      if (pairs.length < 2) {
+        U.empty(container, "Need 2+ nights with both sleep and mood data."); return;
+      }
+      var xs = pairs.map(function (p) { return p.x; });
+      var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+      var xSpan = xMax - xMin || 1;
+      var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+      var w = 600, h = 240, pad = 36;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      pairs.forEach(function (p) {
+        var x = (xMax - xMin) === 0
+          ? pad + (w - pad - 10) / 2
+          : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
+        var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
+        U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
+      });
+      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, w / 2, h - 2, "sleep hours (x)  vs  mood (y)", c.muted,
+             { anchor: "middle", size: 9 });
+      container.appendChild(svg);
+      var r = pearson(xs, pairs.map(function (p) { return p.y; }));
+      U.statsRow(container, [
+        ["pairs", pairs.length],
+        ["correlation r", r == null ? null : U.fmt(r)],
+      ]);
+    },
+  });
+
+  // Coverage: how many of the in-range nights have sleep data.
+  CHARTS.push({
+    id: "sleep-coverage", panel: "sleep", title: "Sleep tracking coverage",
+    render: function (container, entries, sections, c) {
+      var nights = entries.filter(function (e) { return sleepOf(e); }).length;
+      var total = entries.length;
+      if (!total) { U.empty(container, "No entries in this range."); return; }
+      var pct = Math.round(100 * nights / total);
+      var w = 600, h = 50, pad = 0;
+      var svg = U.svg(w, h);
+      // Background track.
+      svg.appendChild(U.svgEl("rect", {
+        x: 0, y: 18, width: w, height: 14, fill: U.colorMix(c.muted, 18), rx: 3,
+      }));
+      // Fill.
+      svg.appendChild(U.svgEl("rect", {
+        x: 0, y: 18, width: Math.round(w * nights / total), height: 14,
+        fill: c.accent, rx: 3,
+      }));
+      U.text(svg, w / 2, 30, pct + "% (" + nights + " of " + total + " nights)",
+             c.text, { anchor: "middle", size: 10 });
+      container.appendChild(svg);
+    },
+  });
 
   // ===================== Tags tab (search + overview) ==================== //
   // A dedicated, bespoke renderer (not part of the CHARTS loop): a search box +
