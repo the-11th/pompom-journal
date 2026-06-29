@@ -1026,3 +1026,68 @@ def test_load_defaults_sleep(tmp_path):
     journal.save(str(p), data)
     loaded = journal.load(str(p))
     assert loaded["entries"][0]["sleep"] is None
+
+
+# ---------------------------------------------------------------------------
+# Sleep analytics helpers
+# ---------------------------------------------------------------------------
+
+def _entry_with_sleep(date, dur_min, quality, start="23:00", end="06:00",
+                      stages=None):
+    return {"date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+            "sleep": {"start": start, "end": end, "duration_min": dur_min,
+                      "efficiency": quality, "score": None, "quality": quality,
+                      "stages": stages, "source": "fitbit", "fetched": "x"}}
+
+
+def test_sleep_series_sorted_and_hours():
+    entries = [_entry_with_sleep("2026-06-29", 420, 90),
+               _entry_with_sleep("2026-06-28", 480, 80),
+               {"date": "2026-06-27", "tags": {}, "numbers": {}, "mood": None,
+                "body": "", "sleep": None}]
+    out = journal.sleep_series(entries)
+    assert [d["date"] for d in out] == ["2026-06-28", "2026-06-29"]
+    assert out[0]["hours"] == 8.0
+
+
+def test_sleep_stage_averages():
+    entries = [_entry_with_sleep("2026-06-29", 420, 90,
+                stages={"deep": 60, "light": 200, "rem": 100, "wake": 30}),
+               _entry_with_sleep("2026-06-28", 480, 80,
+                stages={"deep": 80, "light": 220, "rem": 120, "wake": 20})]
+    avg = journal.sleep_stage_averages(entries)
+    assert avg["deep"] == 70 and avg["rem"] == 110
+
+
+def test_bedtime_series_wraps_pre_midnight_negative():
+    out = journal.bedtime_series([_entry_with_sleep("2026-06-29", 420, 90,
+                                  start="23:00", end="06:00")])
+    assert out[0]["bed_min"] == 23 * 60 - 1440  # = -60
+    assert out[0]["wake_min"] == 6 * 60
+
+
+def test_sleep_mood_pairs_requires_both():
+    e1 = _entry_with_sleep("2026-06-29", 420, 90); e1["mood"] = 5
+    e2 = _entry_with_sleep("2026-06-28", 480, 80)  # no mood
+    assert journal.sleep_mood_pairs([e1, e2]) == [{"hours": 7.0, "mood": 5}]
+
+
+def test_sleep_coverage():
+    entries = [_entry_with_sleep("2026-06-29", 420, 90),
+               _entry_with_sleep("2026-06-27", 480, 80)]
+    cov = journal.sleep_coverage(entries, "2026-06-25", "2026-06-29")
+    assert cov["nights"] == 2 and cov["span_days"] == 5
+
+
+def test_sleep_stats_empty():
+    s = journal.sleep_stats([])
+    assert s["nights"] == 0 and s["avg_hours"] is None
+
+
+def test_payload_carries_sleep():
+    data = journal._seeded()
+    journal.set_entry_sleep(data, "2026-06-29", {"duration_min": 420,
+        "start": "23:00", "end": "06:00", "quality": 90, "efficiency": 90,
+        "score": None, "stages": None, "source": "fitbit", "fetched": "x"})
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["sleep"]["duration_min"] == 420

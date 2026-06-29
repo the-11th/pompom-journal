@@ -1063,6 +1063,128 @@ def _entry_mood(entry):
     return int(m) if _valid_mood(m) else None
 
 
+def _entry_sleep(entry):
+    """The entry's sleep dict if it has a usable duration, else None."""
+    s = entry.get("sleep")
+    if isinstance(s, dict) and s.get("duration_min"):
+        return s
+    return None
+
+
+def _clock_to_min(hhmm):
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def sleep_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        if s:
+            out.append({"date": e["date"], "hours": round(s["duration_min"] / 60, 2)})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def sleep_quality_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        if s and s.get("quality") is not None:
+            out.append({"date": e["date"], "quality": s["quality"]})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def sleep_stage_averages(entries, start=None, end=None):
+    buckets = {k: [] for k in ("deep", "light", "rem", "wake")}
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        if s and s.get("stages"):
+            for k in buckets:
+                buckets[k].append(s["stages"].get(k, 0))
+    return {k: (sum(v) / len(v) if v else None) for k, v in buckets.items()}
+
+
+def sleep_dow_averages(entries, start=None, end=None):
+    buckets = {i: [] for i in range(7)}
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        if s:
+            d = datetime.strptime(e["date"], "%Y-%m-%d").date()
+            buckets[d.weekday()].append(s["duration_min"] / 60)
+    return {_DOW_NAMES[i]: (sum(v) / len(v) if v else None)
+            for i, v in buckets.items()}
+
+
+def bedtime_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        if not s:
+            continue
+        bed = _clock_to_min(s["start"])
+        if bed >= 12 * 60:           # evening bedtime -> negative (pre-midnight)
+            bed -= 1440
+        out.append({"date": e["date"], "bed_min": bed,
+                    "wake_min": _clock_to_min(s["end"])})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def sleep_coverage(entries, start=None, end=None):
+    rows = _filter_entries_by_date(entries, start, end)
+    nights = sum(1 for e in rows if _entry_sleep(e))
+    dates = sorted(e["date"] for e in rows if e.get("date"))
+    if start and end:
+        span = (datetime.strptime(end, "%Y-%m-%d")
+                - datetime.strptime(start, "%Y-%m-%d")).days + 1
+    elif dates:
+        span = (datetime.strptime(dates[-1], "%Y-%m-%d")
+                - datetime.strptime(dates[0], "%Y-%m-%d")).days + 1
+    else:
+        span = 0
+    pct = round(100 * nights / span, 1) if span else 0
+    return {"nights": nights, "span_days": span, "pct": pct}
+
+
+def sleep_mood_pairs(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        s = _entry_sleep(e)
+        m = _entry_mood(e)
+        if s and m is not None:
+            out.append({"hours": round(s["duration_min"] / 60, 2), "mood": m})
+    return out
+
+
+def _min_to_clock(total):
+    total = int(round(total)) % 1440
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def sleep_stats(entries, start=None, end=None):
+    rows = [_entry_sleep(e) for e in _filter_entries_by_date(entries, start, end)]
+    rows = [s for s in rows if s]
+    if not rows:
+        return {"avg_hours": None, "avg_quality": None, "avg_bedtime": None,
+                "avg_waketime": None, "nights": 0}
+    hours = [s["duration_min"] / 60 for s in rows]
+    quals = [s["quality"] for s in rows if s.get("quality") is not None]
+    beds = []
+    for s in rows:
+        b = _clock_to_min(s["start"])
+        beds.append(b - 1440 if b >= 12 * 60 else b)
+    wakes = [_clock_to_min(s["end"]) for s in rows]
+    return {
+        "avg_hours": round(sum(hours) / len(hours), 2),
+        "avg_quality": round(sum(quals) / len(quals), 1) if quals else None,
+        "avg_bedtime": _min_to_clock(sum(beds) / len(beds)),
+        "avg_waketime": _min_to_clock(sum(wakes) / len(wakes)),
+        "nights": len(rows),
+    }
+
+
 def mood_series(entries, start, end):
     """[{date, mood}] of recorded moods, date-filtered and sorted by date.
     Entries with no mood are omitted."""
@@ -1586,6 +1708,7 @@ def analytics_payload(data):
             "body": e.get("body", ""),
             "created": e.get("created"),
             "mood": _entry_mood(e),
+            "sleep": _entry_sleep(e),
         }
         for e in data.get("entries", [])
     ]
