@@ -35,10 +35,19 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 - **`journal.py`** — all journal domain logic, zero Flask imports. Same pattern as
   `todo.py`. Imports only `todo.py`'s pure validators (`_HEX_COLOR_RE`,
   `_TAG_NAME_RE`) so hex/name validation has a single source of truth.
-- **`fitbit.py`** — pure Fitbit API client, zero Flask imports. Network access is
-  isolated behind an injectable `transport(method, url, headers, body) -> (status,
-  json)` callable (default `_urllib_transport`, stdlib urllib); tests pass a fake
-  so no test hits the network. See the Integrations section below.
+- **`oauth.py`** — generic OAuth2 Authorization-Code-Grant helpers (zero Flask).
+  Extracted from `fitbit.py` so every OAuth provider shares the same transport
+  seam without duplication. Functions: `build_authorize_url(authorize_url, ...)`,
+  `exchange_code(token_url, ...)`, `refresh_tokens(token_url, ...)`,
+  `token_expired(tokens, now=None)`, `normalize_token_response(raw, now=None)`,
+  `urllib_transport`. Fitbit delegates all OAuth calls to it (thin wrappers, same
+  public signatures); Spotify (Plan B) will too.
+- **`fitbit.py`** — Fitbit-specific client (zero Flask). OAuth delegated to
+  `oauth.py`; only sleep-specific `fetch_sleep` / `parse_sleep` live here. See
+  the Integrations section below.
+- **`rescuetime.py`** — RescueTime API client (zero Flask, API-key auth). Network
+  behind an injectable `transport` (default `oauth.urllib_transport`); tests pass
+  a fake. See the Integrations section below.
 - **`integrations.py`** — third-party credential/token store, zero Flask imports.
   Same forgiving-load/atomic-save pattern as `journal.py`/`todo.py`. See the
   Integrations section below.
@@ -58,16 +67,18 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 - **`data/journal.json`** — journal store: `sections` (list), `entries` (list),
   `dismissed_suggestions` (`{word: "YYYY-MM-DD"}` — when each Manage-page tag
   suggestion was dismissed; words are suppressed for a 30-day cooldown). Each
-  entry also has a `sleep` field (structured dict or null, defaulted by `load()`).
+  entry also has a `sleep` field (structured dict or null) and a `rescuetime`
+  field (structured dict or null), both defaulted to `None` by `load()`.
 - **`data/integrations.json`** — third-party credential/token store (gitignored
-  via the existing `data/*` rule). Top-level keys: `fitbit`, `rescuetime`,
-  `spotify` (rescuetime/spotify are deferred; the store is shaped for them).
+  via the existing `data/*` rule). Top-level keys: `fitbit` (OAuth tokens +
+  credentials), `rescuetime` (api_key + last_sync), `spotify` (Plan B, slot
+  reserved). `rescuetime.api_key` is populated by `integrations.set_api_key`.
 
 All three stores use forgiving `load()` (missing keys defaulted, corrupt files
 backed up to `.bak`) and atomic `save()` (temp file + `os.replace`). Extend
 `load()` and `_empty()` whenever you add a new top-level key or field — including
-new entry fields like `sleep` (handled via `e.setdefault("sleep", None)` in
-`journal.load()`).
+new entry fields like `sleep` and `rescuetime` (both handled via
+`e.setdefault(field, None)` in `journal.load()`).
 
 - **`data/server.log`** — Flask stdout/stderr when launched via the dock app.
 
@@ -126,7 +137,8 @@ One entry per calendar date (date is the unique key). Fields: `id` (uuid4 hex),
 `date` (YYYY-MM-DD), `title`, `body`, `created`, `updated`,
 `tags` (`{section_id: [tag names]}`), `numbers` (`{section_id: float}`),
 `mood` (integer 1–7, or null), `sleep` (structured dict or null — see the
-Integrations section for the full model; defaults to null via `load()`).
+Integrations section for the full model; defaults to null via `load()`),
+`rescuetime` (structured dict or null — see Integrations; defaults to null).
 
 ### Section model
 
@@ -234,10 +246,11 @@ health, work.
 ### Journal templates
 
 `journal_entry.html` (entry form with calendar, tag chips, numeric inputs, action
-row), `journal_search.html` (live search), `journal_sections.html` (section
-management), `journal_sections_archive.html` (archived sections & tags),
-`integrations.html` (Fitbit settings page: credentials form, connect/disconnect,
-sync status, "Sync now" button).
+row — now includes a `rescuetime-panel` row alongside `sleep-panel` when
+RescueTime is connected), `journal_search.html` (live search),
+`journal_sections.html` (section management), `journal_sections_archive.html`
+(archived sections & tags), `integrations.html` (settings page: Fitbit OAuth card
++ RescueTime API-key card, each with connect/disconnect, last-synced, "Sync now").
 
 ### Static JS / CSS notes
 
@@ -260,16 +273,16 @@ sync status, "Sync now" button).
 - **`journal-richtext.js`**: click-to-edit body rendering (inline formatting +
   color-coded `@mentions`) and live mention→chip reflection.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
-- **`fitbit-sync.js`** (loaded via each template's `{% block scripts %}` on the
-  journal entry page and the `/integrations` settings page; it no-ops where its
-  hooks are absent): on the entry page, when the sleep panel reports connected, it
-  auto-syncs the last 7 days of sleep in the background on page load (throttled to
-  once per hour via `data-last-sync` on the panel) and re-renders the read-only
-  **sleep panel** in place (builds via `textContent`, not `innerHTML`). The "Sync
-  now" buttons — settings page (`#fitbit-sync-now`, reloads afterward) and the
-  optional entry-page (`#fitbit-sync-entry`, in-place) — call the same sync path;
-  button wiring works with or without a panel, so the settings-page button syncs
-  even though that page has no sleep panel.
+- **`integrations-sync.js`** (renamed from `fitbit-sync.js`; loaded on the journal
+  entry page and the `/integrations` settings page): a self-contained per-provider
+  registry (`PROVIDERS` array). Each entry has `{name, panelId, key, syncPath,
+  render}`. Currently two providers: Fitbit (`sleep-panel` / `renderSleep`) and
+  RescueTime (`rescuetime-panel` / `renderRescuetime`). For each connected
+  provider the entry page auto-syncs the last 7 days in the background on load
+  (throttled to once per hour via `data-last-sync` on the panel) and re-renders
+  the read-only panel row in place (built via `textContent`). `#<name>-sync-now`
+  buttons on the settings page (and optional entry-page) call the same sync path
+  then `location.reload()`; button wiring works even when no panel is present.
 - **`journal-sections.js`**: drag-and-drop tag reassignment on the manage page
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the
@@ -289,6 +302,8 @@ sync status, "Sync now" button).
   styles: `.integration-card`, `.integration-creds`, `.integration-status.on/.off`.
   Sleep panel styles: `.sleep-panel`, `.sleep-times`, `.sleep-qual`,
   `.sleep-stage-legend` (bedtime/wake consistency legend).
+  RescueTime panel styles: `.rt-row`, `.rt-pulse`, `.rt-prod` (reuses the
+  `.sleep-stage-legend` pattern; entry panel row shows pulse + productive hours).
 - **Styling is mandatory for all new UI.** Every new feature MUST match the dark
   amber/monospace theme — no native/unstyled browser chrome. Concretely: use the
   `:root` CSS variables (never hardcode theme colors); route every `<select>`
@@ -372,7 +387,7 @@ upgrade it). The lens swaps the deeper tabs:
 | Lens | Tabs |
 |---|---|
 | Shared (always) | **Overview** · **Tags** |
-| **Journal** | Mood · Consistency · Numeric · Coverage |
+| **Journal** | Mood · Sleep · Productivity · Consistency · Numeric · Coverage |
 | **Task** | Throughput · Timeliness · Adherence · Difficulty |
 
 The old single **"Tasks"** tab was **refactored** into the Task-lens sub-tabs
@@ -417,29 +432,46 @@ Third-party data providers fill structured fields on journal entries automatical
 The integration layer follows the same pure-logic/thin-HTTP split as the rest of
 the app: all provider logic lives in dedicated pure modules; `app.py` only routes.
 
+### `oauth.py` — shared OAuth2 helpers (zero Flask)
+
+Extracted from `fitbit.py` so future OAuth providers (Spotify / Plan B) reuse the
+same transport seam without duplication. `fitbit.py` now delegates all OAuth
+operations to it; its own public signatures are unchanged.
+
+- `build_authorize_url(authorize_url, client_id, redirect_uri, state, scope)` → redirect URL (Authorization Code flow).
+- `exchange_code(token_url, client_id, client_secret, code, redirect_uri, transport=None, now=None)` — exchanges an authorization code for tokens via HTTP Basic auth.
+- `refresh_tokens(token_url, client_id, client_secret, refresh_token, transport=None, now=None)` — refreshes using the same Basic-auth endpoint.
+- `token_expired(tokens, now=None)` → bool. 60-second skew margin against `expires_at`.
+- `normalize_token_response(raw, now=None)` → `{access_token, refresh_token, scope, expires_at, fetched}`.
+- `urllib_transport(method, url, headers, body)` — default real transport; tests swap in a fake.
+
 ### `fitbit.py` — Fitbit client (zero Flask)
 
-Injectable `transport(method, url, headers, body) -> (status, json)` seam; default
-`_urllib_transport` uses stdlib `urllib`. Tests pass a fake — no test hits the
-network.
+OAuth delegated to `oauth.py` (thin wrappers, same signatures). Only Fitbit-
+specific `fetch_sleep` and `parse_sleep` live here.
 
-- `build_authorize_url(client_id, redirect_uri, state, scope="sleep")` → URL.
-  Authorization Code Grant at `https://www.fitbit.com/oauth2/authorize`.
-- `exchange_code(client_id, client_secret, code, redirect_uri, transport=None, now=None)` — POST to `https://api.fitbit.com/oauth2/token` with HTTP Basic auth (`client_id:client_secret`), `grant_type=authorization_code`.
-- `refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None)` — same endpoint, `grant_type=refresh_token`.
-- `token_expired(tokens, now=None)` → bool. 60-second skew margin against `expires_at`.
 - `fetch_sleep(access_token, date, transport=None)` → raw API JSON. Calls `GET https://api.fitbit.com/1.2/user/-/sleep/date/<YYYY-MM-DD>.json`; raises `PermissionError` on 401.
 - `parse_sleep(api_json, now=None)` → sleep dict or `None`. Pure. Picks the record with `isMainSleep == true`, falls back to the longest by `minutesAsleep`; naps are ignored. `quality = score if score is not None else efficiency`. `stages` (`{deep, light, rem, wake}` minutes) is `None` for classic (non-staged) sleep.
-- `normalize_token_response(raw, now=None)` → `{access_token, refresh_token, scope, expires_at, fetched}`.
+
+### `rescuetime.py` — RescueTime client (zero Flask, API-key auth)
+
+No OAuth; authentication is a personal API key passed as a query param.
+Transport seam: same `transport(method, url, headers, body) -> (status, json)`
+injectable callable, defaulting to `oauth.urllib_transport`.
+
+- `fetch_daily_summary(api_key, transport=None)` → raw JSON from the daily-summary feed (≈ last two weeks, newest first).
+- `parse_day(row, now=None)` → `{date, pulse, productive_min, distracting_min, neutral_min, total_min, top_categories:[{name,min}], source:"rescuetime", fetched}`. Pure. Hours fields converted to minutes; top_categories capped at 5, sorted by minutes desc.
 
 ### `integrations.py` — credential/token store (zero Flask)
 
 Same forgiving-load/atomic-save pattern as `journal.py`.
 
-- `_empty()` → `{"fitbit": {}, "rescuetime": {}, "spotify": {}}` (rescuetime/spotify deferred; store is shaped for them).
+- `_empty()` → `{"fitbit": {}, "rescuetime": {}, "spotify": {}}`.
 - `load(path)` / `save(path, data)` — forgiving read (missing → empty; corrupt → `.bak` + empty), atomic write.
-- Accessors: `get_provider`, `set_credentials`, `set_tokens`, `clear_provider`
-  (removes `tokens`, `last_sync`, `oauth_state`), `is_connected`, `last_sync`,
+- Accessors: `get_provider`, `set_credentials`, `set_tokens`, `set_api_key`
+  (stores `api_key` on a provider dict — used by RescueTime), `clear_provider`
+  (removes `tokens`, `last_sync`, `oauth_state`, **and** `api_key`), `is_connected`
+  (true when an `access_token` OR a non-empty `api_key` exists), `last_sync`,
   `set_last_sync`.
 
 Stored in `data/integrations.json` (covered by the existing `data/*` gitignore).
@@ -471,6 +503,29 @@ the journal date — last night's sleep lands on today's entry.
 Writer: `journal.set_entry_sleep(data, date, sleep, now=None)` — get-or-creates
 the entry, sets `entry["sleep"]`, bumps `updated`. `sleep=None` clears it.
 
+### Entry `rescuetime` field
+
+Added by auto-sync; `None` when no RescueTime data. `journal.load()` defaults
+every entry's `rescuetime` to `None` (`e.setdefault("rescuetime", None)`).
+Read-only on the form; a re-sync overwrites it.
+
+```json
+"rescuetime": {
+  "date": "2026-06-28",
+  "pulse": 72,
+  "productive_min": 312,
+  "distracting_min": 45,
+  "neutral_min": 90,
+  "total_min": 447,
+  "top_categories": [{"name": "Software Development", "min": 240}],
+  "source": "rescuetime",
+  "fetched": "2026-06-29T08:15:00"
+}
+```
+
+Writer: `journal.set_entry_rescuetime(data, date, value, now=None)` — same
+get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
+
 ### Integrations routes (in `app.py`)
 
 `app.config["INTEGRATIONS_FILE"]` (default `data/integrations.json`) + `integrations_file()` helper, mirroring `data_file()` / `journal_file()`.
@@ -483,12 +538,22 @@ the entry, sets `entry["sleep"]`, bumps `updated`. `sleep=None` clears it.
 | `GET /integrations/fitbit/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick 30-day backfill, redirect to `/integrations`. |
 | `POST /integrations/fitbit/disconnect` | POST | Clear Fitbit tokens + state (confirmModal-guarded). |
 | `POST /integrations/fitbit/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], sleep:{<date>: sleep\|null}}`. |
+| `POST /integrations/rescuetime/key` | POST | Save the personal API key (PRG + flash). |
+| `POST /integrations/rescuetime/disconnect` | POST | Clear the key + last_sync (confirmModal-guarded). |
+| `POST /integrations/rescuetime/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], data:{<date>: rescuetime\|null}}`. |
 
-**Sync internals**: for each target date lacking `entry.sleep`, calls
+**Fitbit sync internals**: for each target date lacking `entry.sleep`, calls
 `fitbit.fetch_sleep` → `fitbit.parse_sleep` → `journal.set_entry_sleep`. On a
 401, calls `refresh_tokens` once and retries. Network/parse exceptions are caught
 per-day and reported in `errors` without aborting the rest. Sets `last_sync` on
 completion.
+
+**RescueTime sync internals** (`_rescuetime_sync`): fetches the full recent feed
+once via `rescuetime.fetch_daily_summary`, then iterates rows. Skips dates that
+already have `entry.rescuetime` (unless `force=True`). Calls
+`rescuetime.parse_day` → `journal.set_entry_rescuetime` per row. Per-row errors
+are isolated and reported in `errors` without aborting remaining rows. Sets
+`last_sync` on completion.
 
 ### Sleep analytics (`journal.py` + `analytics.js`)
 
@@ -515,6 +580,30 @@ quality over time; bedtime & wake-time consistency; avg duration by day of week;
 stage composition stacked bar; sleep↔mood correlation scatter with Pearson `r`;
 nights-tracked coverage. Mirrors the Mood tab pattern via `sleepOf(e)` (the
 JS-side `_entry_sleep` mirror).
+
+### RescueTime analytics (`journal.py` + `analytics.js`)
+
+Pure helpers (all injectable date bounds; ignore entries without usable rescuetime
+data; degrade gracefully on too few points):
+
+- `rescuetime_pulse_series(entries, start=None, end=None)` → `[{date, pulse}]`.
+- `rescuetime_time_series(entries, ...)` → `[{date, productive_min, distracting_min, neutral_min}]`.
+- `rescuetime_category_totals(entries, ...)` → `[{name, min}]` aggregate across all days.
+- `rescuetime_dow_averages(entries, ...)` → 7 mean-pulse values Mon–Sun.
+- `productivity_mood_pairs(entries, ...)` → `[{pulse, mood}]` same-day pairs for pulse↔mood correlation (ignores null moods).
+- `rescuetime_stats(entries, ...)` → `{avg_pulse, avg_productive_min, days}`.
+- `_entry_rescuetime(entry)` — returns the rescuetime dict if it has usable data (pulse or total_min present), else `None`.
+
+`analytics_payload` carries each entry's `rescuetime` (structured dict or `null`)
+so the client can render without a new endpoint.
+
+**Productivity tab** in `static/analytics.js` (`lens: ["journal"]`, gated on
+`hasRescueTime`, placed after Sleep in the Journal lens): stat cards (avg pulse,
+avg productive hours, days tracked); pulse over time with 7-day rolling avg;
+time breakdown stacked bar (productive/distracting/neutral); category totals bar;
+avg pulse by day of week; pulse↔mood correlation scatter with Pearson `r`. Mirrors
+the Sleep tab pattern via `rescuetimeOf(e)` (the JS-side `_entry_rescuetime`
+mirror). Panel CSS reuses `.rt-row` (`.rt-pulse`, `.rt-prod`) from `style.css`.
 
 ---
 
@@ -635,10 +724,11 @@ What exists today:
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
   recorded mood via `hasMood`), **Sleep** (gated on `hasSleep`, Journal lens
-  only — see Integrations below), Consistency (entry calendar, words/entry, gaps,
-  time-of-day), the cross-domain **Tags** tab (journal frequency, trend, per-tag
-  heatmap, co-occurrence, then task-tag frequency — shown in both lenses),
-  the expanded **Numeric** tab (see below), Coverage, plus
+  only — see Integrations below), **Productivity** (gated on `hasRescueTime`,
+  Journal lens only — see Integrations below), Consistency (entry calendar,
+  words/entry, gaps, time-of-day), the cross-domain **Tags** tab (journal
+  frequency, trend, per-tag heatmap, co-occurrence, then task-tag frequency —
+  shown in both lenses), the expanded **Numeric** tab (see below), Coverage, plus
   a **`Journal | Task` lens toggle** that swaps the deeper tabs (the old single
   "Tasks" tab is now the Task-lens sub-tabs Throughput/Timeliness/Adherence/
   Difficulty; the former separate "Task tags" tab is folded into the shared Tags
