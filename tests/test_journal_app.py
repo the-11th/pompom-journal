@@ -823,3 +823,25 @@ def test_sync_refreshes_on_401(client, app, monkeypatch):
     r = client.post("/integrations/fitbit/sync?days=1")
     assert r.get_json()["synced"]
     assert I.load(app.config["INTEGRATIONS_FILE"])["fitbit"]["tokens"]["access_token"] == "NEW"
+
+
+# --------------------------------------------------------------------------- #
+# Task 8: Entry-form sleep panel
+# --------------------------------------------------------------------------- #
+
+def test_entry_shows_connect_fitbit_when_not_connected(client):
+    """When Fitbit is not connected the entry page shows a 'Connect Fitbit' link."""
+    resp = client.get("/journal")
+    assert resp.status_code == 200
+    assert b"Connect Fitbit" in resp.data
+
+
+def test_entry_shows_no_sleep_data_when_connected_empty(client, app):
+    """When Fitbit is connected but no sleep data is stored, the panel shows
+    'No sleep data for this day'."""
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_tokens(d, "fitbit", {"access_token": "tok"})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    resp = client.get("/journal")
+    assert resp.status_code == 200
+    assert b"No sleep data" in resp.data

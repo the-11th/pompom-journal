@@ -496,12 +496,17 @@ def _mention_index(data):
 
 
 def _render_entry(data, date):
+    istore = integrations.load(integrations_file())
+    entry = journal.get_entry_by_date(data, date)
     return render_template(
         "journal_entry.html", data=data,
-        entry=journal.get_entry_by_date(data, date),
+        entry=entry,
         date=date, sections=journal.active_sections(data),
         entry_dates=journal.entry_dates(data),
         mention_index=_mention_index(data),
+        fitbit_connected=integrations.is_connected(istore, "fitbit"),
+        fitbit_last_sync=integrations.last_sync(istore, "fitbit"),
+        sleep=(entry or {}).get("sleep"),
     )
 
 

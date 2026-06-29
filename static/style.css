@@ -2150,6 +2150,12 @@ a.tl-date:hover { color: var(--accent); }
   flex-shrink: 0; width: 2rem; text-align: right; color: var(--muted);
 }
 
+/* ----- Sleep panel (journal entry form) ----- */
+.sleep-panel { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+  font-size: .85rem; color: var(--muted); margin: .4rem 0; }
+.sleep-panel .sleep-times { color: var(--text); }
+.sleep-panel .sleep-qual { color: var(--accent); }
+
 /* ----- Integrations page ----- */
 .integrations-wrap { max-width: 640px; }
 .integration-card { margin-top: 1.2rem; padding: 1rem 1.2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
