@@ -497,6 +497,21 @@ def _mention_index(data):
     }
 
 
+def _numeric_index(data):
+    """{name: {"section_id": ..., "color": ..., "unit": ...}} for client-side
+    #numeric capture. Built from journal.numeric_section_index + each section's
+    color and unit. Active numeric sections only."""
+    out = {}
+    for name, sid in journal.numeric_section_index(data).items():
+        s = journal.section_by_id(data, sid)
+        out[name] = {
+            "section_id": sid,
+            "color": journal.section_color(data, sid),
+            "unit": (s.get("unit") if s else None),
+        }
+    return out
+
+
 def _render_entry(data, date):
     istore = integrations.load(integrations_file())
     entry = journal.get_entry_by_date(data, date)
@@ -506,6 +521,7 @@ def _render_entry(data, date):
         date=date, sections=journal.active_sections(data),
         entry_dates=journal.entry_dates(data),
         mention_index=_mention_index(data),
+        numeric_index=_numeric_index(data),
         google_connected=integrations.is_connected(istore, "google"),
         google_last_sync=integrations.last_sync(istore, "google"),
         sleep=(entry or {}).get("sleep"),
@@ -663,6 +679,12 @@ def journal_save():
         idx = journal.tag_section_index(data)
         mentions = journal.extract_mentions(body, idx)
         base_tags = journal.merge_entry_tags(base_tags, mentions)
+        # Inline #numeric capture from the body — fills only sections lacking an
+        # explicit field value (the explicit field is the source of truth).
+        nidx = journal.numeric_section_index(data)
+        body_numbers = journal.extract_numbers(body, nidx)
+        for sid, val in body_numbers.items():
+            base_numbers.setdefault(sid, val)   # explicit field value wins
         journal.upsert_entry(data, date, title, body,
                              tags=base_tags, numbers=base_numbers, mood=mood)
         journal.save(journal_file(), data)

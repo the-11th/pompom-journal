@@ -229,6 +229,15 @@ separate field:
   Mentions are **additive** — they never remove a tag you picked from the chips.
   *Example:* `lunch with @alex, then @gym` tags the day `alex` and `gym`.
 
+- **`#numeric` capture.** Type `#name value` to log a numeric section inline — if
+  `name` is an existing numeric section, the value fills that section's field for
+  the day (the `#` is dropped on render and the section's unit is appended).
+  Underscores match multi-word sections: `#hours_slept 7.5` → the `hours slept`
+  section. The value reflects into the field on blur; if you also type a value in
+  the field directly, the field wins. The mnemonic: **`@` = who/what (tags), `#`
+  = how much (numbers).** *Example:* `weighed in at #weight 175 today` logs `175`
+  to your `weight` section.
+
 - **Rich-text formatting (Discord-style).** Wrap text in `**bold**`, `*italic*`,
   `__underline__`, or `~~strikethrough~~`. The body shows the raw markup while
   you're typing and renders the formatted result the moment you click away — click
@@ -243,9 +252,8 @@ separate field:
   to open a popover summarizing that tag across **both** tasks and journal entries;
   **Expand →** jumps to the full **Tags** analytics view, pre-searched.
 
-> **More inline grammar is in design.** Two companions to `@mention` are specced
-> under `docs/superpowers/specs/` and will be documented here as they ship:
-> **`#numeric`** (e.g. `#weight 175` to log a numeric section inline) and
+> **More inline grammar is in design.** One companion to `@mention`/`#numeric` is
+> specced under `docs/superpowers/specs/` and will be documented here as it ships:
 > **`[]`** (e.g. `[] call dentist >friday` to spawn a real to-do from the journal).
 > The intended mnemonic: **`@` tags the day · `#` logs a number · `[]` spawns a
 > task.**

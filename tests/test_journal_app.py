@@ -153,6 +153,62 @@ def test_save_numeric_zero_round_trips(client):
     assert e["numbers"][s["id"]] == 0.0
 
 
+def test_save_inline_numeric_fills_empty_field(client):
+    """Body `#weight 175` with no explicit field value lands the value."""
+    data = journal.load(_journal_path())
+    w = journal.add_section(data, "weight", "numeric", "#fff", unit="lbs")
+    journal.save(_journal_path(), data)
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "weighed in at #weight 175 today"})
+    data = journal.load(_journal_path())
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    assert e["numbers"][w["id"]] == 175.0
+
+
+def test_save_explicit_field_beats_inline_numeric(client):
+    """Body `#weight 175` AND explicit field `180` → field wins."""
+    data = journal.load(_journal_path())
+    w = journal.add_section(data, "weight", "numeric", "#fff", unit="lbs")
+    journal.save(_journal_path(), data)
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "#weight 175",
+        f"num:{w['id']}": "180"})
+    data = journal.load(_journal_path())
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    assert e["numbers"][w["id"]] == 180.0
+
+
+def test_save_inline_numeric_unknown_section_ignored(client):
+    """Body `#foo 9` referencing no section is ignored — no spurious data."""
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "#foo 9"})
+    data = journal.load(_journal_path())
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    assert e["numbers"] == {}
+
+
+def test_save_inline_numeric_round_trips_into_field(client):
+    """A saved inline value re-renders with the numeric field populated."""
+    data = journal.load(_journal_path())
+    w = journal.add_section(data, "weight", "numeric", "#fff", unit="lbs")
+    journal.save(_journal_path(), data)
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "#weight 175"})
+    resp = client.get("/journal/2026-06-15")
+    assert resp.status_code == 200
+    assert ('name="num:%s" value="175' % w["id"]).encode() in resp.data
+
+
+def test_entry_page_embeds_numeric_index(client):
+    """The entry page carries a numeric-index JSON blob for the client mirror."""
+    data = journal.load(_journal_path())
+    journal.add_section(data, "weight", "numeric", "#abcabc", unit="lbs")
+    journal.save(_journal_path(), data)
+    resp = client.get("/journal/2026-06-15")
+    assert b'id="numeric-index"' in resp.data
+    assert b"weight" in resp.data
+
+
 def test_save_bad_number_aborts_entirely(client):
     """A bad numeric value aborts the whole save: no entry AND the permanent
     new tag in another section is not persisted (all-or-nothing)."""

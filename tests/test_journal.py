@@ -846,6 +846,108 @@ def test_extract_mentions_literal_underscore_tag_wins():
 
 
 # --------------------------------------------------------------------------- #
+# Rich entries: #numeric section index
+# --------------------------------------------------------------------------- #
+
+def test_numeric_section_index_maps_active_numeric_sections():
+    data = journal._empty()
+    w = journal.add_section(data, "weight", "numeric", "#fff", unit="lbs")
+    c = journal.add_section(data, "coffee", "numeric", "#000")
+    idx = journal.numeric_section_index(data)
+    assert idx["weight"] == w["id"]
+    assert idx["coffee"] == c["id"]
+
+
+def test_numeric_section_index_ignores_tag_sections():
+    data = journal._empty()
+    journal.add_section(data, "people", "tag", "#fff")
+    n = journal.add_section(data, "weight", "numeric", "#000", unit="lbs")
+    idx = journal.numeric_section_index(data)
+    assert idx == {"weight": n["id"]}
+
+
+def test_numeric_section_index_ignores_archived_sections():
+    data = journal._empty()
+    n = journal.add_section(data, "weight", "numeric", "#fff", unit="lbs")
+    arch = journal.add_section(data, "coffee", "numeric", "#000")
+    journal.archive_section(data, arch["id"])
+    idx = journal.numeric_section_index(data)
+    assert idx == {"weight": n["id"]}
+
+
+def test_numeric_section_index_normalizes_names():
+    data = journal._empty()
+    n = journal.add_section(data, "hours slept", "numeric", "#fff", unit="hrs")
+    idx = journal.numeric_section_index(data)
+    assert "hours slept" in idx and idx["hours slept"] == n["id"]
+
+
+# --------------------------------------------------------------------------- #
+# Rich entries: #numeric extraction
+# --------------------------------------------------------------------------- #
+
+def test_extract_numbers_basic_match():
+    index = {"weight": "S1"}
+    assert journal.extract_numbers("#weight 175", index) == {"S1": 175.0}
+
+
+def test_extract_numbers_in_prose():
+    index = {"weight": "S1"}
+    out = journal.extract_numbers("weighed in at #weight 175 today", index)
+    assert out == {"S1": 175.0}
+
+
+def test_extract_numbers_word_boundary_rejects_attached():
+    # `a#b 1` — the '#' is preceded by a word char, so it must NOT match.
+    index = {"b": "S1"}
+    assert journal.extract_numbers("a#b 1", index) == {}
+
+
+def test_extract_numbers_underscore_resolves_to_spaced_section():
+    index = {"hours slept": "S1"}
+    out = journal.extract_numbers("#hours_slept 7.5", index)
+    assert out == {"S1": 7.5}
+
+
+def test_extract_numbers_literal_underscore_section_wins():
+    index = {"hours_slept": "S1", "hours slept": "S2"}
+    out = journal.extract_numbers("#hours_slept 7", index)
+    assert out == {"S1": 7.0}
+
+
+def test_extract_numbers_drops_unknown_name():
+    index = {"weight": "S1"}
+    assert journal.extract_numbers("#foo 9", index) == {}
+
+
+def test_extract_numbers_last_write_wins():
+    index = {"coffee": "S1"}
+    out = journal.extract_numbers("#coffee 2 then #coffee 3", index)
+    assert out == {"S1": 3.0}
+
+
+def test_extract_numbers_negatives_and_decimals():
+    index = {"mood_proxy": "S1", "delta": "S2"}
+    out = journal.extract_numbers("#mood_proxy -2 and #delta -0.5", index)
+    assert out == {"S1": -2.0, "S2": -0.5}
+
+
+def test_extract_numbers_multiple_sections():
+    index = {"weight": "S1", "coffee": "S2"}
+    out = journal.extract_numbers("#weight 175 and #coffee 3", index)
+    assert out == {"S1": 175.0, "S2": 3.0}
+
+
+def test_extract_numbers_independent_from_mentions():
+    # @ and # extraction don't interfere in one body.
+    tag_index = {"alex": "T1"}
+    num_index = {"weight": "S1"}
+    body = "lunch with @alex, #weight 175"
+    assert journal.extract_mentions(body, tag_index) == {"T1": ["alex"]}
+    assert journal.extract_numbers(body, num_index) == {"S1": 175.0}
+
+
+# --------------------------------------------------------------------------- #
 # Rich entries: tag merge
 # --------------------------------------------------------------------------- #
 

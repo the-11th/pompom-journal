@@ -639,6 +639,52 @@ def extract_mentions(body, index):
     return out
 
 
+# A numeric token: '#' at a word boundary (like _MENTION_RE) followed by a
+# section-name (`[A-Za-z0-9_-]+`), whitespace, then a number. `a#b 1` does NOT
+# match (the char before '#' is a word char). Mirrors @-mention grammar.
+_NUMERIC_RE = re.compile(r"(?:^|(?<=\W))#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)")
+
+
+def numeric_section_index(data):
+    """Build the #numeric lookup: {normalized_name: section_id}.
+
+    Sibling of tag_section_index, but simpler: a numeric section has only a
+    name (no tag list to overlay). Covers ACTIVE numeric sections only. Names
+    are normalized (strip + lowercase).
+    """
+    index = {}
+    for s in active_sections(data):
+        if s.get("type") != "numeric":
+            continue
+        n = _normalize_name(s.get("name"))
+        if n:
+            index[n] = s.get("id")
+    return index
+
+
+def extract_numbers(body, index):
+    """Find #name value tokens in `body` that match a known numeric section.
+
+    Returns {section_id: float}. A token is a '#' at a word boundary followed
+    by [A-Za-z0-9_-]+, whitespace, and a number (so `a#b 1` does not match).
+    Each name is resolved like a mention (as-is, then underscores -> spaces, so
+    `#hours_slept` matches `hours slept`; a literal-underscore section wins when
+    both exist); unknown names are dropped. The LAST occurrence per section wins
+    (a correction reads naturally). Defensive: a value that fails float() is
+    skipped.
+    """
+    out = {}
+    for raw, value in _NUMERIC_RE.findall(body or ""):
+        n = _resolve_mention(raw, index)
+        if n is None:
+            continue
+        try:
+            out[index[n]] = float(value)   # last write wins
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def merge_entry_tags(base, mentions):
     """Union two {section_id: [names]} dicts, non-destructively.
 

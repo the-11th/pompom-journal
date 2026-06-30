@@ -587,7 +587,9 @@ h2 {
 .body-rendered u { text-decoration: underline; }
 .body-rendered s, .body-rendered del { text-decoration: line-through; }
 /* Mention highlight: translucent section-color tint, like .title-highlight. */
-.mention-highlight {
+.mention-highlight,
+/* Numeric highlight: same translucent section-color tint as a mention. */
+.numeric-highlight {
   background: color-mix(in srgb, var(--tag-bg, transparent) 35%, transparent);
   color: var(--text);
   padding: 0 0.2em;

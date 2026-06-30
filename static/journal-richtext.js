@@ -33,6 +33,14 @@
     catch (e) { INDEX = {}; }
   }
 
+  // Numeric (#name value) index: {name: {section_id, color, unit}}.
+  var numIndexEl = document.getElementById('numeric-index');
+  var NUM_INDEX  = {};
+  if (numIndexEl) {
+    try { NUM_INDEX = JSON.parse(numIndexEl.textContent || '{}') || {}; }
+    catch (e) { NUM_INDEX = {}; }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Helpers                                                              */
   /* ------------------------------------------------------------------ */
@@ -62,6 +70,21 @@
     if (INDEX[direct]) return direct;
     var spaced = normalize(token.replace(/_/g, ' '));
     if (INDEX[spaced]) return spaced;
+    return null;
+  }
+
+  // Mirror journal._NUMERIC_RE: '#' at a word boundary, a name [A-Za-z0-9_-]+,
+  // whitespace, then a number (-?\d+(\.\d+)?). So `a#b 1` does not match.
+  var NUMERIC_RE = /(^|\W)#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)/g;
+
+  // Resolve a numeric token to a known section name in NUM_INDEX, or null.
+  // Mirrors journal._resolve_mention (as-is, then underscores -> spaces;
+  // literal-underscore section wins).
+  function resolveNumeric(token) {
+    var direct = normalize(token);
+    if (NUM_INDEX[direct]) return direct;
+    var spaced = normalize(token.replace(/_/g, ' '));
+    if (NUM_INDEX[spaced]) return spaced;
     return null;
   }
 
@@ -100,14 +123,50 @@
     });
   }
 
+  // Wrap recognized #name value tokens in a colored span showing "name value
+  // unit" WITHOUT the leading '#' (the numeric analogue of applyMentions). Runs
+  // on escaped text; the displayed name/unit come from the controlled index
+  // (allowlisted chars) and the value is captured by the numeric regex, so the
+  // result stays safe.
+  function applyNumbers(html) {
+    return html.replace(NUMERIC_RE, function (match, boundary, name, value) {
+      var key = resolveNumeric(name);
+      if (!key) return match;
+      var info = NUM_INDEX[key];
+      var unit = info.unit ? ' ' + info.unit : '';
+      return boundary +
+        '<span class="numeric-highlight" style="--tag-bg: ' + info.color + '">' +
+        escapeHtml(key) + ' ' + escapeHtml(value) + escapeHtml(unit) + '</span>';
+    });
+  }
+
   function render(raw, index) {
     INDEX = index || INDEX;
     var html = escapeHtml(raw);
     html = applyMarkers(html);
     html = applyMentions(html);
+    html = applyNumbers(html);
     // Preserve author line breaks in the rendered (block) view.
     html = html.replace(/\n/g, '<br>');
     return html;
+  }
+
+  // Reflect recognized #name value tokens into their numeric section's
+  // input[name="num:<sid>"] field (overwrite, visible) — the numeric analogue
+  // of mentions ticking chips. Last occurrence per section wins. Additive in
+  // spirit: removing the text does not clear the field.
+  function reflectNumbers(raw) {
+    var re = /(^|\W)#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)/g;  // own lastIndex
+    var m, values = {};
+    while ((m = re.exec(raw)) !== null) {
+      var key = resolveNumeric(m[2]);
+      if (!key) continue;
+      values[NUM_INDEX[key].section_id] = m[3];   // last write wins
+    }
+    Object.keys(values).forEach(function (sid) {
+      var field = document.querySelector('input[name="num:' + sid + '"]');
+      if (field) field.value = values[sid];
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -167,6 +226,7 @@
   function showRendered() {
     rendered.innerHTML = render(input.value, INDEX);
     reconcileChips(input.value);
+    reflectNumbers(input.value);
     rendered.hidden = false;
     input.hidden = true;
   }
