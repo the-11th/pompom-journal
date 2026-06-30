@@ -831,6 +831,16 @@ def test_google_callback_state_mismatch(client, app):
     assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "google")
 
 
+def test_google_callback_handles_error_param(client, app):
+    """Callback with an ?error= (user denied consent) must redirect (not 500)
+    and stay disconnected — the error is handled before any token exchange."""
+    client.post("/integrations/google/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    r = client.get("/integrations/google/callback?error=access_denied")
+    assert r.status_code == 302
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "google")
+
+
 def test_google_sync_writes_sleep(client, app, monkeypatch):
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R",
