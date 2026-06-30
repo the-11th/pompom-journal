@@ -5,8 +5,8 @@ import integrations as I
 
 def test_empty_has_three_providers():
     d = I._empty()
-    assert set(d) == {"fitbit", "rescuetime", "spotify"}
-    assert d["fitbit"] == {}
+    assert set(d) == {"google", "rescuetime", "spotify"}
+    assert d["google"] == {}
 
 
 def test_load_missing_file_returns_empty(tmp_path):

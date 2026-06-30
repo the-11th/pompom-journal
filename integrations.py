@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-_PROVIDERS = ("fitbit", "rescuetime", "spotify")
+_PROVIDERS = ("google", "rescuetime", "spotify")
 
 
 def _empty():
