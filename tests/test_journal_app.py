@@ -996,3 +996,51 @@ def test_spotify_disconnect(client, app):
     I.save(app.config["INTEGRATIONS_FILE"], d)
     client.post("/integrations/spotify/disconnect")
     assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+
+
+# --------------------------------------------------------------------------- #
+# Task 6: _spotify_sync orchestration + sync route
+# --------------------------------------------------------------------------- #
+
+_RP = {"items": [
+    {"played_at": "2026-06-29T22:10:00.000Z",
+     "track": {"id": "t1", "name": "A", "duration_ms": 200000,
+               "artists": [{"name": "Phoebe Bridgers"}]}}]}
+
+
+def _connect_spotify(app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_credentials(d, "spotify", "CID", "SEC")
+    I.set_tokens(d, "spotify", {"access_token": "A", "refresh_token": "R", "expires_at": 9e9})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+
+
+def test_spotify_sync_writes_music(client, app, monkeypatch):
+    _connect_spotify(app)
+    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: _RP)
+    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
+    r = client.post("/integrations/spotify/sync?date=2026-06-29")
+    body = r.get_json()
+    assert body["ok"] and body["connected"]
+    assert "2026-06-29" in body["synced"]
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    assert journal.get_entry_by_date(jdata, "2026-06-29")["music"]["tracks"] == 1
+
+
+def test_spotify_sync_not_connected(client, app):
+    body = client.post("/integrations/spotify/sync").get_json()
+    assert body["ok"] and body["connected"] is False
+
+
+def test_spotify_sync_refreshes_taste(client, app, monkeypatch):
+    _connect_spotify(app)
+    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: {"items": []})
+    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("spotify.fetch_top",
+        lambda tok, kind, tr, transport=None: {"items": [{"name": "X", "genres": ["indie"]}]}
+        if kind == "artists" else {"items": [{"name": "Song"}]})
+    client.post("/integrations/spotify/sync")
+    taste = I.get_taste(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+    assert taste["artists"]["short_term"] == ["X"]

@@ -993,8 +993,78 @@ def fitbit_disconnect():
 
 
 def _spotify_sync(force=False, focus_date=None, now=None):
-    """Placeholder; fully implemented in the sync task."""
-    return {"connected": False, "synced": [], "errors": []}
+    istore = integrations.load(integrations_file())
+    if not integrations.is_connected(istore, "spotify"):
+        return {"connected": False, "synced": [], "errors": []}
+    sp = integrations.get_provider(istore, "spotify")
+    tokens = sp["tokens"]
+    cid, csecret = sp.get("client_id"), sp.get("client_secret")
+    errors = []
+
+    if spotify.token_expired(tokens) and tokens.get("refresh_token") and cid:
+        try:
+            tokens = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
+            integrations.set_tokens(istore, "spotify", tokens)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _recent():
+        try:
+            return spotify.fetch_recently_played(tokens["access_token"])
+        except PermissionError:
+            if cid and tokens.get("refresh_token"):
+                new = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
+                tokens.update(new)
+                integrations.set_tokens(istore, "spotify", tokens)
+                return spotify.fetch_recently_played(tokens["access_token"])
+            raise
+
+    jdata = journal.load(journal_file())
+    synced = []
+    try:
+        plays = spotify.parse_recently_played(_recent())
+        buffer = spotify.merge_plays(
+            integrations.get_plays_buffer(istore, "spotify"), plays, now=now)
+        integrations.set_plays_buffer(istore, "spotify", buffer)
+        for date, by_ts in buffer.items():
+            day_plays = list(by_ts.values())
+            ids = [p["track_id"] for p in day_plays if p.get("track_id")]
+            try:
+                feats = spotify.fetch_audio_features(tokens["access_token"], ids)
+            except Exception as exc:  # noqa: BLE001
+                feats, _ = None, errors.append(f"features {date}: {exc}")
+            journal.set_entry_music(jdata, date, spotify.summarize_day(day_plays, feats, now=now))
+            synced.append(date)
+        journal.save(journal_file(), jdata)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(str(exc))
+
+    # Taste snapshot (best-effort).
+    try:
+        terms = ("short_term", "medium_term", "long_term")
+        tops = {"tracks": {}, "artists": {}}
+        for kind in ("tracks", "artists"):
+            for term in terms:
+                tops[kind][term] = spotify.fetch_top(tokens["access_token"], kind, term)
+        integrations.set_taste(istore, "spotify", spotify.build_taste(tops, now=now))
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"taste: {exc}")
+
+    integrations.set_last_sync(istore, "spotify",
+                               (now or datetime.now()).replace(microsecond=0).isoformat())
+    integrations.save(integrations_file(), istore)
+    return {"connected": True, "synced": synced, "errors": errors}
+
+
+@app.route("/integrations/spotify/sync", methods=["POST"])
+def spotify_sync_route():
+    focus = request.args.get("date")
+    result = _spotify_sync(focus_date=focus)
+    music = {}
+    if focus and result["connected"]:
+        entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
+        music = {focus: (entry or {}).get("music")}
+    return jsonify({"ok": True, **result, "music": music})
 
 
 def _spotify_redirect_uri():
