@@ -40,14 +40,16 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   seam without duplication. Functions: `build_authorize_url(authorize_url, ...)`,
   `exchange_code(token_url, ...)`, `refresh_tokens(token_url, ...)`,
   `token_expired(tokens, now=None)`, `normalize_token_response(raw, now=None)`,
-  `urllib_transport`. Fitbit delegates all OAuth calls to it (thin wrappers, same
-  public signatures); Spotify (Plan B) will too.
+  `urllib_transport`. Fitbit and Spotify both delegate all OAuth calls to it
+  (thin wrappers, same public signatures).
 - **`fitbit.py`** — Fitbit-specific client (zero Flask). OAuth delegated to
   `oauth.py`; only sleep-specific `fetch_sleep` / `parse_sleep` live here. See
   the Integrations section below.
 - **`rescuetime.py`** — RescueTime API client (zero Flask, API-key auth). Network
   behind an injectable `transport` (default `oauth.urllib_transport`); tests pass
   a fake. See the Integrations section below.
+- **`spotify.py`** — Spotify Web API client (zero Flask, OAuth via `oauth.py`).
+  Same injectable-transport pattern. See the Integrations section below.
 - **`integrations.py`** — third-party credential/token store, zero Flask imports.
   Same forgiving-load/atomic-save pattern as `journal.py`/`todo.py`. See the
   Integrations section below.
@@ -67,12 +69,15 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 - **`data/journal.json`** — journal store: `sections` (list), `entries` (list),
   `dismissed_suggestions` (`{word: "YYYY-MM-DD"}` — when each Manage-page tag
   suggestion was dismissed; words are suppressed for a 30-day cooldown). Each
-  entry also has a `sleep` field (structured dict or null) and a `rescuetime`
-  field (structured dict or null), both defaulted to `None` by `load()`.
+  entry also has a `sleep` field (structured dict or null), a `rescuetime` field
+  (structured dict or null), and a `music` field (structured dict or null), all
+  defaulted to `None` by `load()`.
 - **`data/integrations.json`** — third-party credential/token store (gitignored
   via the existing `data/*` rule). Top-level keys: `fitbit` (OAuth tokens +
-  credentials), `rescuetime` (api_key + last_sync), `spotify` (Plan B, slot
-  reserved). `rescuetime.api_key` is populated by `integrations.set_api_key`.
+  credentials), `rescuetime` (api_key + last_sync), `spotify` (OAuth tokens +
+  credentials + `taste` snapshot + `plays_buffer`). `rescuetime.api_key` is
+  populated by `integrations.set_api_key`; Spotify tokens by
+  `integrations.set_tokens` and taste/buffer by `set_taste`/`set_plays_buffer`.
 
 All three stores use forgiving `load()` (missing keys defaulted, corrupt files
 backed up to `.bak`) and atomic `save()` (temp file + `os.replace`). Extend
@@ -138,7 +143,8 @@ One entry per calendar date (date is the unique key). Fields: `id` (uuid4 hex),
 `tags` (`{section_id: [tag names]}`), `numbers` (`{section_id: float}`),
 `mood` (integer 1–7, or null), `sleep` (structured dict or null — see the
 Integrations section for the full model; defaults to null via `load()`),
-`rescuetime` (structured dict or null — see Integrations; defaults to null).
+`rescuetime` (structured dict or null — see Integrations; defaults to null),
+`music` (structured dict or null — see Integrations; defaults to null via `load()`).
 
 ### Section model
 
@@ -246,11 +252,12 @@ health, work.
 ### Journal templates
 
 `journal_entry.html` (entry form with calendar, tag chips, numeric inputs, action
-row — now includes a `rescuetime-panel` row alongside `sleep-panel` when
-RescueTime is connected), `journal_search.html` (live search),
+row — includes a `sleep-panel`, `rescuetime-panel`, and `spotify-panel` row when
+the respective provider is connected), `journal_search.html` (live search),
 `journal_sections.html` (section management), `journal_sections_archive.html`
-(archived sections & tags), `integrations.html` (settings page: Fitbit OAuth card
-+ RescueTime API-key card, each with connect/disconnect, last-synced, "Sync now").
+(archived sections & tags), `integrations.html` (settings page: Fitbit OAuth card,
+RescueTime API-key card, and Spotify OAuth card, each with connect/disconnect,
+last-synced, "Sync now").
 
 ### Static JS / CSS notes
 
@@ -276,13 +283,14 @@ RescueTime is connected), `journal_search.html` (live search),
 - **`integrations-sync.js`** (renamed from `fitbit-sync.js`; loaded on the journal
   entry page and the `/integrations` settings page): a self-contained per-provider
   registry (`PROVIDERS` array). Each entry has `{name, panelId, key, syncPath,
-  render}`. Currently two providers: Fitbit (`sleep-panel` / `renderSleep`) and
-  RescueTime (`rescuetime-panel` / `renderRescuetime`). For each connected
-  provider the entry page auto-syncs the last 7 days in the background on load
-  (throttled to once per hour via `data-last-sync` on the panel) and re-renders
-  the read-only panel row in place (built via `textContent`). `#<name>-sync-now`
-  buttons on the settings page (and optional entry-page) call the same sync path
-  then `location.reload()`; button wiring works even when no panel is present.
+  render}`. Three providers: Fitbit (`sleep-panel` / `renderSleep`), RescueTime
+  (`rescuetime-panel` / `renderRescuetime`), and Spotify (`spotify-panel` /
+  `renderMusic`; `key: "music"`). For each connected provider the entry page
+  auto-syncs in the background on load (throttled to once per hour via
+  `data-last-sync` on the panel) and re-renders the read-only panel row in place
+  (built via `textContent`; Spotify row shows 🎧 icon + minutes + tracks +
+  top artist). `#<name>-sync-now` buttons on the settings page call the same sync
+  path then `location.reload()`; button wiring works even when no panel is present.
 - **`journal-sections.js`**: drag-and-drop tag reassignment on the manage page
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the
@@ -304,6 +312,12 @@ RescueTime is connected), `journal_search.html` (live search),
   `.sleep-stage-legend` (bedtime/wake consistency legend).
   RescueTime panel styles: `.rt-row`, `.rt-pulse`, `.rt-prod` (reuses the
   `.sleep-stage-legend` pattern; entry panel row shows pulse + productive hours).
+  Music/Spotify panel and analytics styles: `.music-row` (entry panel — 🎧 icon,
+  minutes, tracks, top artist); `.music-taste-section`/`.music-taste-heading`/
+  `.music-taste-grid`/`.music-taste-col`/`.music-taste-col-title`/
+  `.music-taste-list` (taste view in Music tab); `.chart-muted` (muted note when
+  data is absent, e.g. audio-features unavailable); `.chart-subtitle` (sub-heading
+  within a chart block).
 - **Styling is mandatory for all new UI.** Every new feature MUST match the dark
   amber/monospace theme — no native/unstyled browser chrome. Concretely: use the
   `:root` CSS variables (never hardcode theme colors); route every `<select>`
@@ -387,7 +401,7 @@ upgrade it). The lens swaps the deeper tabs:
 | Lens | Tabs |
 |---|---|
 | Shared (always) | **Overview** · **Tags** |
-| **Journal** | Mood · Sleep · Productivity · Consistency · Numeric · Coverage |
+| **Journal** | Mood · Sleep · Productivity · Music · Consistency · Numeric · Coverage |
 | **Task** | Throughput · Timeliness · Adherence · Difficulty |
 
 The old single **"Tasks"** tab was **refactored** into the Task-lens sub-tabs
@@ -605,6 +619,123 @@ avg pulse by day of week; pulse↔mood correlation scatter with Pearson `r`. Mir
 the Sleep tab pattern via `rescuetimeOf(e)` (the JS-side `_entry_rescuetime`
 mirror). Panel CSS reuses `.rt-row` (`.rt-pulse`, `.rt-prod`) from `style.css`.
 
+### `spotify.py` — Spotify client (zero Flask, OAuth via `oauth.py`)
+
+OAuth endpoints: authorize `https://accounts.spotify.com/authorize`, token
+`https://accounts.spotify.com/api/token` (HTTP Basic auth), scopes
+`user-read-recently-played user-top-read`. Redirect URI
+`http://127.0.0.1:5001/integrations/spotify/callback`. OAuth helpers delegate to
+`oauth.py` (thin wrappers, same `exchange_code`/`refresh_tokens`/`token_expired`
+signatures).
+
+- `fetch_recently_played(access_token, transport=None)` → raw API JSON from `GET /v1/me/player/recently-played?limit=50`. Raises `PermissionError` on 401.
+- `fetch_top(access_token, kind, time_range, transport=None)` → raw JSON from `GET /v1/me/top/{tracks|artists}?time_range={short|medium|long}_term&limit=20`. Raises `PermissionError` on 401.
+- `fetch_audio_features(access_token, ids, transport=None)` → raw JSON or `None`. `GET /v1/audio-features?ids=…`; **returns `None` on 403** (endpoint deprecated for apps created after Nov 2024; not an error). Raises `PermissionError` on 401.
+- `parse_recently_played(payload)` → `[{played_at, date, track_id, name, artists:[names], duration_ms}]`. **Pure.**
+- `merge_plays(buffer, new_plays, now=None, keep_days=3)` → merged plays dict keyed by date → `{played_at: play}`. **Pure.** De-dupes by `played_at` within each day; prunes dates older than `keep_days` (default 3) relative to `now`. This is the rolling **plays-buffer** that lets re-syncs accumulate a day's plays without double-counting.
+- `summarize_day(plays, audio_features=None, now=None)` → `entry["music"]` dict. **Pure.** Aggregates one date's plays list into tracks/minutes/distinct/top_artists + audio-feature means (from `_feature_means`); all feature fields are `None` when `audio_features` is `None` or empty.
+- `build_taste(tops, now=None)` → taste dict. **Pure.** Builds top tracks/artists/genres by short/medium/long term from the raw top-items payloads; genres derived from artists' `genres` lists (top-10 by frequency per term).
+
+### Entry `music` field
+
+Added by auto-sync; `None` when no Spotify data. `journal.load()` defaults every
+entry's `music` to `None` (`e.setdefault("music", None)`). Read-only on the form;
+a re-sync overwrites it.
+
+```json
+"music": {
+  "tracks": 37,
+  "minutes": 142,
+  "distinct": 29,
+  "top_artists": [{"name": "Phoebe Bridgers", "count": 6}],
+  "valence": 0.58,
+  "energy": 0.71,
+  "danceability": 0.62,
+  "tempo": 118.4,
+  "source": "spotify",
+  "fetched": "2026-06-29T18:05:00"
+}
+```
+
+Audio-feature fields (`valence`/`energy`/`danceability`/`tempo`) are `null` when
+the audio-features endpoint 403s. The **forward-only** model: recently-played caps
+at ~50 tracks/~24h, so per-day data is accumulated from the rolling plays-buffer
+going forward — no historical backfill.
+
+Writer: `journal.set_entry_music(data, date, value, now=None)` — same
+get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
+
+### Taste snapshot
+
+Stored in `data/integrations.json` under `spotify.taste`, refreshed on each sync.
+Shape: `{tracks: {short_term:[...], medium_term:[...], long_term:[...]}, artists:
+{...}, genres: {...}, fetched: "..."}`. Accessed via `integrations.set_taste` /
+`integrations.get_taste`. Exposed read-only at `GET /integrations/spotify/taste`.
+
+### `integrations.py` — Spotify accessors
+
+- `set_taste(data, name, taste)` / `get_taste(data, name)` — read/write the taste snapshot.
+- `set_plays_buffer(data, name, buffer)` / `get_plays_buffer(data, name)` — read/write the rolling plays-buffer dict.
+- `clear_provider` drops `tokens`, `last_sync`, `oauth_state`, `api_key`, `taste`, and `plays_buffer`.
+
+### Spotify routes (in `app.py`)
+
+| Route | Method | Purpose |
+|---|---|---|
+| `POST /integrations/spotify/credentials` | POST | Save Client ID/Secret (PRG + flash). |
+| `GET /integrations/spotify/connect` | GET | Generate random `state`, redirect to Spotify authorize. |
+| `GET /integrations/spotify/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick initial taste+sync, redirect to `/integrations`. |
+| `POST /integrations/spotify/disconnect` | POST | Clear tokens, taste, and plays-buffer (confirmModal-guarded). |
+| `POST /integrations/spotify/sync` | POST | JSON. Optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], data:{<date>: music\|null}}`. |
+| `GET /integrations/spotify/taste` | GET | Returns the stored taste snapshot JSON (empty object when none). |
+
+**Spotify sync internals** (`_spotify_sync`): if not connected, returns early with
+`{connected: false}`. Refreshes tokens if expired. Fetches recently-played →
+`parse_recently_played` → `merge_plays` into the plays-buffer (stored back to
+integrations store). For each date in the buffer, fetches audio features for that
+date's track IDs (`fetch_audio_features`; on 403 uses `None`) → `summarize_day` →
+`journal.set_entry_music`. Then refreshes the taste snapshot: `fetch_top` for
+tracks and artists across all three terms → `build_taste` → stored. On a 401,
+refreshes tokens once and retries. Per-date errors are isolated and reported in
+`errors` without aborting remaining dates. Sets `last_sync` on completion.
+
+### Music analytics (`journal.py` + `analytics.js`)
+
+Pure helpers (all injectable date bounds; ignore entries without usable music;
+degrade gracefully on too few points):
+
+- `music_minutes_series(entries, start=None, end=None)` → `[{date, minutes}]`.
+- `music_tracks_series(entries, ...)` → `[{date, tracks}]`.
+- `music_top_artists(entries, ...)` → `[{name, count}]` aggregated over range, sorted desc.
+- `music_feature_averages(entries, ...)` → `{valence, energy, danceability, tempo}` means; `None`-safe (skips entries with null features).
+- `music_mood_pairs(entries, ...)` → `[{valence, mood}]` same-day pairs (both present).
+- `music_stats(entries, ...)` → `{avg_minutes, total_tracks, days}`.
+- `_entry_music(entry)` — returns the music dict if it has a usable `tracks` count, else `None`.
+
+`analytics_payload` carries each entry's `music` (structured dict or `null`) so
+the client renders without a new per-entry endpoint.
+
+**Music tab** in `static/analytics.js` (`lens: ["journal"]`, gated on `hasMusic`,
+placed after Productivity in the Journal lens): stat cards (avg minutes/day, total
+tracks, days tracked); minutes listened over time with 7-day rolling avg; top
+artists aggregated over the date range (bar chart); **taste view** — three
+terms (4wk/6mo/All-time) each showing top artists, tracks, and genres, fetched
+from `/integrations/spotify/taste` and cached in `_tasteCache`; **audio-feature
+charts** (valence↔mood scatter with Pearson `r` + feature averages bar) — gated
+on `hasFeatures` (any in-range entry with non-null `valence`); when audio features
+are unavailable, renders a `.chart-muted` note ("Audio features unavailable for
+this Spotify app.") instead. Mirrors the Sleep/Productivity tab pattern via
+`musicOf(e)` (the JS-side `_entry_music` mirror). CSS: `.music-row`,
+`.music-taste-*`, `.chart-muted`, `.chart-subtitle`.
+
+**Note on audio features:** Spotify deprecated the `/v1/audio-features` endpoint
+for apps created after November 2024. All feature fields (`valence`/`energy`/
+`danceability`/`tempo`) will be `null` for those apps; all audio-feature charts
+and radar views degrade gracefully to the muted-note state.
+
+All three planned integrations (Fitbit sleep, RescueTime productivity, Spotify
+music) are now shipped.
+
 ---
 
 ## Testing convention
@@ -725,6 +856,7 @@ What exists today:
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
   recorded mood via `hasMood`), **Sleep** (gated on `hasSleep`, Journal lens
   only — see Integrations below), **Productivity** (gated on `hasRescueTime`,
+  Journal lens only — see Integrations below), **Music** (gated on `hasMusic`,
   Journal lens only — see Integrations below), Consistency (entry calendar,
   words/entry, gaps, time-of-day), the cross-domain **Tags** tab (journal
   frequency, trend, per-tag heatmap, co-occurrence, then task-tag frequency —
@@ -739,6 +871,8 @@ What exists today:
     average mood by day of week, mood distribution histogram, and mood-vs-numeric
     scatter (one small-multiple per numeric section, with a Pearson `r`).
   - **Sleep tab** (Journal lens, gated on `hasSleep`): see Integrations section.
+  - **Productivity tab** (Journal lens, gated on `hasRescueTime`): see Integrations section.
+  - **Music tab** (Journal lens, gated on `hasMusic`): see Integrations section.
   - **Numeric tab** (gated on `hasNumeric`) is a rich multi-chart tab reading
     top-to-bottom — overview → trends → shape → relationships → streaks/coverage:
     per-section **stat cards** (mean/median/std/min/max/latest/count); **values
@@ -818,14 +952,16 @@ helpers live in `todo.py` (e.g. `completion_throughput`, `difficulty_breakdown`)
 the analytics route merges a task payload into the data feed. Built on the same
 `CHARTS` registry + SVG utilities in `analytics.js`; no new dependencies.
 
-### Fitbit sleep integration — DONE
+### Third-party integrations — DONE (all three)
 
-Fitbit connects once via `/integrations`; sleep data (bedtime, wake, duration,
-quality, stage breakdown) is synced into `entry["sleep"]` automatically on each
-journal page load (throttled to once/hour) and on-demand via "Sync now". A
-dedicated **Sleep** tab on the analytics page (Journal lens, gated on `hasSleep`)
-provides duration/quality trends, bedtime consistency, DOW bars, stage composition,
-sleep↔mood correlation, and coverage. See the Integrations section for full detail.
+All three data-provider integrations are implemented and shipped. Each connects
+once via `/integrations` (settings page) and auto-syncs on journal page load
+(throttled to once/hour) and on-demand via "Sync now". See the Integrations section
+for full detail on routes, data models, and analytics helpers.
+
+- **Fitbit sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (Journal lens, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
+- **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (Journal lens, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
+- **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (Journal lens, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
 
 ### Shipped quality-of-life features
 
@@ -835,14 +971,16 @@ subagent implementation, TDD). See the feature sections above for detail:
 - **Task notes + subtasks** (inline dropdown on the active list).
 - **Rich journal entries** — Discord-style inline formatting + `@mention` tagging.
 - **Mood quick-pick** — optional 1–7 per-entry mood via 7 Pompompurin GIFs.
-- **Fitbit sleep** — auto-filled `entry["sleep"]` + dedicated analytics tab.
+- **Fitbit sleep** — auto-filled `entry["sleep"]` + dedicated Sleep analytics tab.
+- **RescueTime productivity** — auto-filled `entry["rescuetime"]` + Productivity analytics tab.
+- **Spotify music** — auto-filled `entry["music"]` + Music analytics tab (taste view + audio-feature charts with graceful 403 degradation).
+
+All three planned integrations (Fitbit, RescueTime, Spotify) are shipped.
 
 ### Future features
 
 Planned additions, in priority order (specs to be written first, as above):
 
-- **RescueTime + Spotify integrations** — the `integrations.py` store is already
-  shaped for both (`rescuetime` and `spotify` provider keys). Not yet implemented.
 - **Today dashboard** — a combined landing view: tasks due today (with subtask
   progress), today's journal entry + mood, and streak/stat tidbits. Cross-domain;
   reuses `entry_streak`, `today_iso`, and due-date filtering. Likely a new
