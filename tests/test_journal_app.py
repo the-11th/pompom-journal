@@ -943,3 +943,56 @@ def test_integrations_page_has_rescuetime_card(client):
 def test_entry_shows_rescuetime_connect_when_not_connected(client):
     r = client.get("/journal")
     assert b"Connect RescueTime" in r.data
+
+
+# --------------------------------------------------------------------------- #
+# Task 5: Spotify OAuth routes + taste endpoint
+# --------------------------------------------------------------------------- #
+
+def test_spotify_save_credentials_and_connect(client, app):
+    client.post("/integrations/spotify/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    assert d["spotify"]["client_id"] == "CID"
+    r = client.get("/integrations/spotify/connect")
+    assert r.status_code == 302
+    assert "accounts.spotify.com/authorize" in r.headers["Location"]
+    assert "state=" in r.headers["Location"]
+
+
+def test_spotify_callback_exchanges_code(client, app, monkeypatch):
+    client.post("/integrations/spotify/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    client.get("/integrations/spotify/connect")
+    state = I.load(app.config["INTEGRATIONS_FILE"])["spotify"]["oauth_state"]
+    monkeypatch.setattr("spotify.exchange_code",
+        lambda *a, **k: {"access_token": "A", "refresh_token": "R",
+                         "scope": "s", "expires_at": 9e9})
+    monkeypatch.setattr("app._spotify_sync", lambda *a, **k: {"connected": True, "synced": [], "errors": []})
+    r = client.get(f"/integrations/spotify/callback?code=C&state={state}")
+    assert r.status_code == 302
+    assert I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+
+
+def test_spotify_callback_state_mismatch(client, app):
+    client.post("/integrations/spotify/credentials",
+                data={"client_id": "CID", "client_secret": "SEC"})
+    r = client.get("/integrations/spotify/callback?code=C&state=WRONG")
+    assert r.status_code == 302
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+
+
+def test_spotify_taste_endpoint(client, app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_taste(d, "spotify", {"genres": {"short_term": ["indie"]}})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    body = client.get("/integrations/spotify/taste").get_json()
+    assert body["genres"]["short_term"] == ["indie"]
+
+
+def test_spotify_disconnect(client, app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_tokens(d, "spotify", {"access_token": "A", "refresh_token": "R"})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    client.post("/integrations/spotify/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")

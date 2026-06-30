@@ -18,6 +18,7 @@ import fitbit
 import integrations
 import journal
 import rescuetime
+import spotify
 import todo
 
 app = Flask(__name__)
@@ -921,6 +922,12 @@ def integrations_page():
         redirect_uri=_fitbit_redirect_uri(),
         rescuetime_connected=integrations.is_connected(data, "rescuetime"),
         rescuetime_last_sync=integrations.last_sync(data, "rescuetime"),
+        spotify_connected=integrations.is_connected(data, "spotify"),
+        spotify_has_creds=bool(integrations.get_provider(data, "spotify").get("client_id")
+                               and integrations.get_provider(data, "spotify").get("client_secret")),
+        spotify_client_id=integrations.get_provider(data, "spotify").get("client_id", ""),
+        spotify_last_sync=integrations.last_sync(data, "spotify"),
+        spotify_redirect_uri=_spotify_redirect_uri(),
     )
 
 
@@ -983,6 +990,80 @@ def fitbit_disconnect():
     integrations.save(integrations_file(), data)
     flash("Fitbit disconnected.")
     return redirect(url_for("integrations_page"))
+
+
+def _spotify_sync(force=False, focus_date=None, now=None):
+    """Placeholder; fully implemented in the sync task."""
+    return {"connected": False, "synced": [], "errors": []}
+
+
+def _spotify_redirect_uri():
+    return url_for("spotify_callback", _external=True)
+
+
+@app.route("/integrations/spotify/credentials", methods=["POST"])
+def spotify_credentials():
+    data = integrations.load(integrations_file())
+    integrations.set_credentials(
+        data, "spotify",
+        request.form.get("client_id", "").strip(),
+        request.form.get("client_secret", "").strip())
+    integrations.save(integrations_file(), data)
+    flash("Spotify credentials saved.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/spotify/connect")
+def spotify_connect():
+    data = integrations.load(integrations_file())
+    sp = integrations.get_provider(data, "spotify")
+    if not (sp.get("client_id") and sp.get("client_secret")):
+        flash("Enter your Spotify Client ID and Secret first.")
+        return redirect(url_for("integrations_page"))
+    state = secrets.token_urlsafe(16)
+    sp["oauth_state"] = state
+    integrations.save(integrations_file(), data)
+    return redirect(spotify.build_authorize_url(sp["client_id"], _spotify_redirect_uri(), state))
+
+
+@app.route("/integrations/spotify/callback")
+def spotify_callback():
+    data = integrations.load(integrations_file())
+    sp = integrations.get_provider(data, "spotify")
+    if request.args.get("error"):
+        flash(f"Spotify authorization failed: {request.args.get('error')}")
+        return redirect(url_for("integrations_page"))
+    if not request.args.get("state") or request.args.get("state") != sp.get("oauth_state"):
+        flash("Spotify authorization state mismatch; please try again.")
+        return redirect(url_for("integrations_page"))
+    try:
+        tokens = spotify.exchange_code(
+            sp["client_id"], sp["client_secret"],
+            request.args.get("code"), _spotify_redirect_uri())
+    except Exception as exc:  # noqa: BLE001
+        flash(f"Spotify connection failed: {exc}")
+        return redirect(url_for("integrations_page"))
+    integrations.set_tokens(data, "spotify", tokens)
+    sp.pop("oauth_state", None)
+    integrations.save(integrations_file(), data)
+    _spotify_sync()
+    flash("Spotify connected.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/spotify/disconnect", methods=["POST"])
+def spotify_disconnect():
+    data = integrations.load(integrations_file())
+    integrations.clear_provider(data, "spotify")
+    integrations.save(integrations_file(), data)
+    flash("Spotify disconnected.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/spotify/taste")
+def spotify_taste():
+    data = integrations.load(integrations_file())
+    return jsonify(integrations.get_taste(data, "spotify") or {})
 
 
 @app.route("/integrations/rescuetime/key", methods=["POST"])
