@@ -1142,3 +1142,98 @@ def test_integrations_page_has_spotify_card(client):
 def test_entry_shows_connect_spotify_when_not_connected(client):
     r = client.get("/journal")
     assert b"Connect Spotify" in r.data
+
+
+# --------------------------------------------------------------------------- #
+# Inline [] task spawning (Spec 2)
+# --------------------------------------------------------------------------- #
+
+def _tasks_path():
+    return app_module.app.config["DATA_FILE"]
+
+
+def test_save_body_spawns_task_with_due_and_tag(client):
+    """`[] foo >tomorrow @alex` spawns an active task (title/due/tags), the day
+    is tagged `alex`, and the body is rewritten to a linked token."""
+    sid = _first_tag_section_id()
+    data = journal.load(_journal_path())
+    journal.add_section_tag(data, sid, "alex")
+    journal.save(_journal_path(), data)
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t",
+        "body": "[] foo >tomorrow @alex"})
+    # Task created.
+    tdata = todo.load(_tasks_path())
+    assert len(tdata["active"]) == 1
+    task = tdata["active"][0]
+    assert task["title"] == "foo @alex"
+    # ">tomorrow" resolves against the real clock (the route does not inject
+    # now); compare to today+1 at 23:59 rather than a hard-coded date.
+    expected_due = todo.parse_due_token("tomorrow")
+    assert task["due"] == expected_due
+    assert task["tags"] == ["alex"]
+    # Body rewritten to a linked token referencing the new id.
+    e = journal.get_entry_by_date(journal.load(_journal_path()), "2026-06-15")
+    assert e["body"] == "[task:%s] foo >tomorrow @alex" % task["id"]
+    # Day also tagged with the mention.
+    assert "alex" in e["tags"][sid]
+
+
+def test_save_body_spawn_is_idempotent_on_resave(client):
+    """Re-saving the (rewritten) body does not spawn a duplicate task."""
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "[] buy milk"})
+    tdata = todo.load(_tasks_path())
+    assert len(tdata["active"]) == 1
+    linked_id = tdata["active"][0]["id"]
+    e = journal.get_entry_by_date(journal.load(_journal_path()), "2026-06-15")
+    assert e["body"] == "[task:%s] buy milk" % linked_id
+    # Re-save the rewritten body verbatim.
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": e["body"]})
+    assert len(todo.load(_tasks_path())["active"]) == 1
+
+
+def test_save_body_empty_title_marker_not_spawned(client):
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "[]\n[] real"})
+    tdata = todo.load(_tasks_path())
+    assert [t["title"] for t in tdata["active"]] == ["real"]
+
+
+def test_entry_page_embeds_task_ref_index(client):
+    """The entry page carries a task-ref-index blob reflecting linked tasks'
+    status (active/done/expired/missing)."""
+    # Active task.
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "[] still open"})
+    tdata = todo.load(_tasks_path())
+    active_id = tdata["active"][0]["id"]
+
+    # Complete it -> moves to archive (done).
+    todo.refresh(tdata, [active_id], now=__import__("datetime").datetime(2026, 6, 15, 13))
+    todo.save(_tasks_path(), tdata)
+
+    resp = client.get("/journal/2026-06-15")
+    assert resp.status_code == 200
+    assert b'id="task-ref-index"' in resp.data
+    body = resp.get_data(as_text=True)
+    import json as _json, re as _re
+    m = _re.search(r'id="task-ref-index">(.*?)</script>', body, _re.S)
+    idx = _json.loads(m.group(1))
+    assert idx[active_id]["status"] == "done"
+    assert idx[active_id]["done"] is True
+
+
+def test_task_ref_index_missing_status(client):
+    """A [task:bogus] token with no matching task renders as missing."""
+    data = journal.load(_journal_path())
+    journal.upsert_entry(data, "2026-06-15", "t", "[task:deadbeef] ghost")
+    journal.save(_journal_path(), data)
+    resp = client.get("/journal/2026-06-15")
+    body = resp.get_data(as_text=True)
+    import json as _json, re as _re
+    m = _re.search(r'id="task-ref-index">(.*?)</script>', body, _re.S)
+    idx = _json.loads(m.group(1))
+    assert idx["deadbeef"]["status"] == "missing"
+    assert idx["deadbeef"]["done"] is False

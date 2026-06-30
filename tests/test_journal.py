@@ -1359,3 +1359,118 @@ def test_payload_carries_music():
     journal.set_entry_music(data, "2026-06-29", {"tracks": 10, "minutes": 40})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["music"]["minutes"] == 40
+
+
+# --------------------------------------------------------------------------- #
+# Inline [] task spawning (Spec 2): extract_task_lines / rewrite_task_lines /
+# linked_task_ids. NOW = 2026-06-15 (Monday).
+# --------------------------------------------------------------------------- #
+
+def _due_parser(token, now=None):
+    """A trivial fake due-parser for these pure tests: maps known tokens to a
+    fixed ISO, everything else to None. Keeps these tests independent of
+    todo.parse_due_token."""
+    return {"tomorrow": "2026-06-16T23:59:00",
+            "friday": "2026-06-19T23:59:00"}.get((token or "").lower())
+
+
+def _mention_idx():
+    # {normalized_name: section_id}
+    return {"alex": "people", "alex dad": "people"}
+
+
+def test_extract_task_lines_basic_marker():
+    lines = journal.extract_task_lines("[] call the dentist", {}, _due_parser)
+    assert lines == [{"title": "call the dentist", "due": None, "tags": []}]
+
+
+def test_extract_task_lines_marker_variants():
+    body = "[] a\n[ ] b\n- [ ] c\n   [] d"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    titles = [l["title"] for l in lines]
+    assert titles == ["a", "b", "c", "d"]
+
+
+def test_extract_task_lines_due_and_tags():
+    body = "[] lunch with @alex >friday"
+    lines = journal.extract_task_lines(body, _mention_idx(), _due_parser)
+    assert len(lines) == 1
+    assert lines[0]["due"] == "2026-06-19T23:59:00"
+    assert lines[0]["tags"] == ["alex"]
+    # The >due token is stripped from the title; the @mention stays verbatim.
+    assert ">friday" not in lines[0]["title"]
+    assert "@alex" in lines[0]["title"]
+    assert lines[0]["title"] == "lunch with @alex"
+
+
+def test_extract_task_lines_unknown_due_token_left_in_title():
+    body = "[] do thing >someday"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    assert lines[0]["due"] is None
+    assert ">someday" in lines[0]["title"]
+
+
+def test_extract_task_lines_empty_title_skipped():
+    body = "[]\n[]   \n[] real"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    assert [l["title"] for l in lines] == ["real"]
+
+
+def test_extract_task_lines_only_due_token_is_empty_title_skipped():
+    body = "[] >friday"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    assert lines == []
+
+
+def test_extract_task_lines_excludes_linked_lines():
+    body = "[task:abc123] already linked\n[] fresh one"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    assert [l["title"] for l in lines] == ["fresh one"]
+
+
+def test_extract_task_lines_document_order():
+    body = "[] first\nsome prose\n[] second\n[] third"
+    lines = journal.extract_task_lines(body, {}, _due_parser)
+    assert [l["title"] for l in lines] == ["first", "second", "third"]
+
+
+def test_extract_task_lines_dedupes_tags():
+    body = "[] @alex and @alex >tomorrow"
+    lines = journal.extract_task_lines(body, _mention_idx(), _due_parser)
+    assert lines[0]["tags"] == ["alex"]
+
+
+def test_rewrite_task_lines_in_order():
+    body = "[] first\n[] second"
+    out = journal.rewrite_task_lines(body, ["id1", "id2"])
+    assert out == "[task:id1] first\n[task:id2] second"
+
+
+def test_rewrite_task_lines_leaves_linked_and_skipped_untouched():
+    body = "[task:zzz] linked\n[]\n[] real"
+    out = journal.rewrite_task_lines(body, ["newid"])
+    # linked line untouched; empty-title [] untouched; only "real" rewritten.
+    assert "[task:zzz] linked" in out
+    assert "\n[]\n" in out
+    assert "[task:newid] real" in out
+
+
+def test_rewrite_task_lines_idempotent_on_linked_body():
+    body = "[task:abc] already linked\nprose"
+    assert journal.rewrite_task_lines(body, []) == body
+
+
+def test_rewrite_task_lines_preserves_marker_prefix():
+    body = "- [ ] dash task\n   [] indented"
+    out = journal.rewrite_task_lines(body, ["i1", "i2"])
+    assert "- [task:i1] dash task" in out
+    assert "   [task:i2] indented" in out
+
+
+def test_linked_task_ids_parses_ids():
+    body = "[task:aaa111] one\n[] fresh\n[task:bbb222] two"
+    assert journal.linked_task_ids(body) == {"aaa111", "bbb222"}
+
+
+def test_linked_task_ids_ignores_fresh_lines():
+    assert journal.linked_task_ids("[] not linked\nprose") == set()

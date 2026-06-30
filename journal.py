@@ -701,6 +701,127 @@ def merge_entry_tags(base, mentions):
 
 
 # --------------------------------------------------------------------------- #
+# Inline [] task spawning (Spec 2): body parsing + rewrite (all pure)
+# --------------------------------------------------------------------------- #
+
+# A *fresh* task line: optional leading whitespace, an optional "- ", then
+# `[]` or `[ ]`, whitespace, then the title. Multiline.
+_TASK_FRESH_RE = re.compile(r"^[ \t]*(?:-[ \t]+)?\[[ ]?\][ \t]+(.+)$", re.M)
+# A *linked* task line: same shape but `[task:<hexid>]` — never re-spawned.
+_TASK_LINKED_RE = re.compile(
+    r"^[ \t]*(?:-[ \t]+)?\[task:([0-9a-f]+)\][ \t]+(.+)$", re.M)
+# An inline `>due` token: `>` (at line start or after whitespace) immediately
+# followed by a non-space run, so prose `x > y` is unaffected.
+_DUE_TOKEN_RE = re.compile(r"(?:^|\s)>(\S+)")
+
+
+def extract_task_lines(body, mention_index, due_parser, now=None):
+    """Ordered list of fresh `[]` task lines to spawn, in document order.
+
+    Returns ``[{title, due, tags}]``:
+      - title: the line text minus the marker and the first `>due` token,
+        trimmed. `@mentions` are left verbatim.
+      - due:   ``due_parser(token, now)`` for the first `>token` on the line,
+        else None. An unparsed token is left in the title.
+      - tags:  resolved `@mention` names on that line (deduped, in first-seen
+        order), via ``mention_index`` ({normalized_name: section_id}).
+
+    Lines whose title is empty after stripping the marker and `>due` token are
+    skipped (so a bare ``[]`` or ``[] >friday`` spawns nothing). ``due_parser``
+    is injected (``todo.parse_due_token``) so this stays unit-testable without
+    importing the task date grammar. Walks fresh markers in the same order as
+    ``rewrite_task_lines`` so the route can zip extracted lines -> new ids.
+    """
+    out = []
+    for m in _TASK_FRESH_RE.finditer(body or ""):
+        rest = m.group(1)
+
+        # Pull the first >due token. Parse it for the `due` value; the token is
+        # stripped from the title only when it parses (an unrecognized token
+        # stays as plain text). For the *skip* decision a line that is ONLY a
+        # >token (no real title text) is empty either way and is skipped — this
+        # matches rewrite_task_lines, which has no parser.
+        due = None
+        title = rest
+        dm = _DUE_TOKEN_RE.search(rest)
+        if dm:
+            parsed = due_parser(dm.group(1), now)
+            without_token = (rest[:dm.start()] + rest[dm.end():])
+            if parsed is not None:
+                due = parsed
+                title = without_token
+            elif without_token.strip() == "":
+                # Only a >token, and it didn't parse — nothing to spawn.
+                continue
+            # Collapse the gap the (possibly) removed token left behind.
+            title = re.sub(r"[ \t]{2,}", " ", title)
+
+        title = title.strip()
+        if not title:
+            continue
+
+        # Resolve @mention tags on the line (mirror extract_mentions).
+        tags = []
+        for raw in _MENTION_RE.findall(rest):
+            n = _resolve_mention(raw, mention_index)
+            if n is not None and n not in tags:
+                tags.append(n)
+
+        out.append({"title": title, "due": due, "tags": tags})
+    return out
+
+
+def linked_task_ids(body):
+    """Set of task ids already linked in the body (`[task:<id>]`). Used for the
+    task-ref index and idempotency assertions; ignores fresh `[]` lines."""
+    return {m.group(1) for m in _TASK_LINKED_RE.finditer(body or "")}
+
+
+def rewrite_task_lines(body, task_ids):
+    """Replace each fresh `[]` marker, in document order, with `[task:<id>]`
+    using the matching id from ``task_ids`` (same order/length as the
+    non-skipped result of ``extract_task_lines``). Linked lines and skipped
+    (empty-title) lines are left untouched. Returns the new body.
+
+    Skipping logic mirrors ``extract_task_lines``: a fresh line whose title is
+    empty after stripping the marker + a leading `>due` token consumes no id.
+    """
+    ids = list(task_ids or [])
+    counter = {"i": 0}
+
+    def repl(m):
+        rest = m.group(1)
+        # Mirror extract_task_lines' "is this spawnable?" decision: strip a
+        # leading >due token only if it parses... but extract used a parser we
+        # don't have here. We replicate the *skip* condition instead: a line is
+        # skipped iff its title (after removing the FIRST >token, regardless of
+        # whether it parsed) is empty. extract only strips the token when it
+        # parses, but an empty-after-token title is empty either way, so this
+        # matches for the skip decision.
+        title = rest
+        dm = _DUE_TOKEN_RE.search(rest)
+        if dm:
+            stripped = (rest[:dm.start()] + rest[dm.end():]).strip()
+            if not stripped:
+                title = ""
+        if not title.strip():
+            return m.group(0)  # skipped: leave the marker untouched
+        if counter["i"] >= len(ids):
+            return m.group(0)  # no id available: leave untouched
+        tid = ids[counter["i"]]
+        counter["i"] += 1
+        if tid is None:
+            return m.group(0)  # spawn failed for this line: leave [] untouched
+        # Preserve the original marker prefix (leading ws + optional "- ").
+        prefix = m.group(0)[:m.start(1) - m.start(0)]
+        # Replace the bracket marker within the prefix with [task:<id>].
+        prefix = re.sub(r"\[[ ]?\]", "[task:%s]" % tid, prefix, count=1)
+        return prefix + rest
+
+    return _TASK_FRESH_RE.sub(repl, body or "")
+
+
+# --------------------------------------------------------------------------- #
 # Calendar helpers
 # --------------------------------------------------------------------------- #
 

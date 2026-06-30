@@ -467,6 +467,67 @@ def _default_due(recurrence, now):
     return target.replace(hour=23, minute=59, second=0, microsecond=0).isoformat()
 
 
+# Inline `>due` grammar for the journal `[]` task-spawning feature (Spec 2).
+# A relative token: +Nd (days), +Nw (weeks), +Nm (calendar months).
+_REL_DUE_RE = re.compile(r"^\+(\d+)([dwm])$")
+
+# Weekday names (full + 3-letter), Monday=0 .. Sunday=6 (matching weekday()).
+_WEEKDAYS = {
+    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "friday": 4, "fri": 4, "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6,
+}
+
+
+def parse_due_token(token, now=None):
+    """Parse an inline due token to an ISO datetime at 23:59 local, or None.
+
+    Accepts: 'YYYY-MM-DD'; 'today'; 'tomorrow'; weekday names (full or
+    3-letter, resolving to the next occurrence ON or after today);
+    relative '+Nd' / '+Nw' / '+Nm'. Case-insensitive. Pure; `now` injectable.
+    Reuses _add_one_month for +Nm. An unrecognized token returns None (the
+    caller then leaves the `>token` as plain text in the title).
+    """
+    if not token:
+        return None
+    now = now or datetime.now()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tok = token.strip().lower()
+
+    target = None
+    if tok == "today":
+        target = today
+    elif tok == "tomorrow":
+        target = today + timedelta(days=1)
+    elif tok in _WEEKDAYS:
+        # Next occurrence on/after today (0 days out if today is that weekday).
+        delta = (_WEEKDAYS[tok] - today.weekday()) % 7
+        target = today + timedelta(days=delta)
+    else:
+        m = _REL_DUE_RE.match(tok)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            if unit == "d":
+                target = today + timedelta(days=n)
+            elif unit == "w":
+                target = today + timedelta(weeks=n)
+            else:  # "m"
+                target = today
+                for _ in range(n):
+                    target = _add_one_month(target)
+        else:
+            # Fall back to a plain ISO date (e.g. 2026-07-04). Reject anything
+            # carrying a time component or otherwise non-date.
+            parsed = _parse(tok)
+            if parsed is not None and len(tok) == 10:
+                target = parsed.replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+
+    if target is None:
+        return None
+    return target.replace(hour=23, minute=59, second=0, microsecond=0).isoformat()
+
+
 def _advance_until_future(due_iso, recurrence, now):
     """Advance a recurring due date by its interval until it lands strictly
     after `now`. Returns the first future due ISO string.

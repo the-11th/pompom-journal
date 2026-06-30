@@ -238,6 +238,16 @@ separate field:
   = how much (numbers).** *Example:* `weighed in at #weight 175 today` logs `175`
   to your `weight` section.
 
+- **`[]` task spawning.** Start a line with `[]` (or `- [ ]`) to spawn a real
+  to-do on your active list when you save. An optional `>due` token sets the due
+  date — `>today`, `>tomorrow`, a weekday (`>friday`/`>fri`, next occurrence),
+  `>+3d`/`>+2w`/`>+1m`, or an ISO date (`>2026-07-04`) — all due at 23:59. Any
+  `@mention` on the line tags the **task** too, so it shows up under that tag
+  across both domains. Once saved, the marker becomes a live checkbox that
+  mirrors the task's done-state (✓ when completed elsewhere). *Example:*
+  `[] lunch with @alex >friday` spawns a task "lunch with @alex" due Friday,
+  tagged `alex`.
+
 - **Rich-text formatting (Discord-style).** Wrap text in `**bold**`, `*italic*`,
   `__underline__`, or `~~strikethrough~~`. The body shows the raw markup while
   you're typing and renders the formatted result the moment you click away — click
@@ -252,8 +262,5 @@ separate field:
   to open a popover summarizing that tag across **both** tasks and journal entries;
   **Expand →** jumps to the full **Tags** analytics view, pre-searched.
 
-> **More inline grammar is in design.** One companion to `@mention`/`#numeric` is
-> specced under `docs/superpowers/specs/` and will be documented here as it ships:
-> **`[]`** (e.g. `[] call dentist >friday` to spawn a real to-do from the journal).
-> The intended mnemonic: **`@` tags the day · `#` logs a number · `[]` spawns a
-> task.**
+> The inline-grammar mnemonic: **`@` tags the day · `#` logs a number · `[]`
+> spawns a task.**

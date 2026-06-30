@@ -1208,3 +1208,61 @@ def test_todo_tag_overview_unknown_tag_empty():
     assert ov["cooccurring"] == []
     assert ov["timeline"] == []
     assert ov["first"] is None and ov["last"] is None
+
+
+# --------------------------------------------------------------------------- #
+# parse_due_token — inline >due grammar (Spec 2: [] task spawning)
+# NOW is 2026-06-15 (a Monday) at 12:00.
+# --------------------------------------------------------------------------- #
+
+def test_parse_due_token_iso():
+    assert todo.parse_due_token("2026-07-04", now=NOW) == "2026-07-04T23:59:00"
+
+
+def test_parse_due_token_today():
+    assert todo.parse_due_token("today", now=NOW) == "2026-06-15T23:59:00"
+
+
+def test_parse_due_token_tomorrow():
+    assert todo.parse_due_token("tomorrow", now=NOW) == "2026-06-16T23:59:00"
+
+
+def test_parse_due_token_weekday_full():
+    # NOW is Monday 06-15; "friday" -> next Friday 06-19.
+    assert todo.parse_due_token("friday", now=NOW) == "2026-06-19T23:59:00"
+
+
+def test_parse_due_token_weekday_3letter():
+    assert todo.parse_due_token("fri", now=NOW) == "2026-06-19T23:59:00"
+
+
+def test_parse_due_token_weekday_today_is_that_weekday():
+    # NOW is Monday; "monday"/"mon" resolve to today (on/after today).
+    assert todo.parse_due_token("monday", now=NOW) == "2026-06-15T23:59:00"
+    assert todo.parse_due_token("mon", now=NOW) == "2026-06-15T23:59:00"
+
+
+def test_parse_due_token_relative_days():
+    assert todo.parse_due_token("+3d", now=NOW) == "2026-06-18T23:59:00"
+
+
+def test_parse_due_token_relative_weeks():
+    assert todo.parse_due_token("+2w", now=NOW) == "2026-06-29T23:59:00"
+
+
+def test_parse_due_token_relative_months():
+    # +1m reuses _add_one_month: 06-15 -> 07-15.
+    assert todo.parse_due_token("+1m", now=NOW) == "2026-07-15T23:59:00"
+
+
+def test_parse_due_token_case_insensitive():
+    assert todo.parse_due_token("Tomorrow", now=NOW) == "2026-06-16T23:59:00"
+    assert todo.parse_due_token("FRI", now=NOW) == "2026-06-19T23:59:00"
+
+
+def test_parse_due_token_invalid_returns_none():
+    assert todo.parse_due_token("someday", now=NOW) is None
+    assert todo.parse_due_token("2026-13-99", now=NOW) is None
+    assert todo.parse_due_token("+5x", now=NOW) is None
+    assert todo.parse_due_token("", now=NOW) is None
+    assert todo.parse_due_token(None, now=NOW) is None

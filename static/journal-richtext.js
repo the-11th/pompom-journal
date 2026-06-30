@@ -41,6 +41,15 @@
     catch (e) { NUM_INDEX = {}; }
   }
 
+  // Task-ref index: {id: {done, status, title}} for [task:<id>] tokens. Drives
+  // the live checkbox state on linked task lines.
+  var taskIndexEl = document.getElementById('task-ref-index');
+  var TASK_INDEX  = {};
+  if (taskIndexEl) {
+    try { TASK_INDEX = JSON.parse(taskIndexEl.textContent || '{}') || {}; }
+    catch (e) { TASK_INDEX = {}; }
+  }
+
   /* ------------------------------------------------------------------ */
   /* Helpers                                                              */
   /* ------------------------------------------------------------------ */
@@ -140,15 +149,82 @@
     });
   }
 
-  function render(raw, index) {
-    INDEX = index || INDEX;
-    var html = escapeHtml(raw);
+  // The shared inline pipeline (escape -> markers -> mentions -> numbers) for
+  // a single run of text. Used for whole non-task lines and for task-line
+  // labels alike.
+  function inlineFormat(text) {
+    var html = escapeHtml(text);
     html = applyMarkers(html);
     html = applyMentions(html);
     html = applyNumbers(html);
-    // Preserve author line breaks in the rendered (block) view.
-    html = html.replace(/\n/g, '<br>');
     return html;
+  }
+
+  // Mirror journal._TASK_LINKED_RE and _TASK_FRESH_RE (single-line; the body is
+  // split on newlines first). The prefix (leading ws + optional "- ") is kept
+  // out of the captured label so we can render the label through the pipeline.
+  var TASK_LINKED_RE = /^([ \t]*(?:-[ \t]+)?)\[task:([0-9a-f]+)\][ \t]+(.+)$/;
+  var TASK_FRESH_RE  = /^([ \t]*(?:-[ \t]+)?)\[[ ]?\][ \t]+(.+)$/;
+
+  // Build a themed checkbox span for a task line. `cls` adds a state modifier;
+  // `mark` is the glyph (☑ / ☐). When `href` is set the checkbox links to the
+  // task. The label is already-rendered (safe) HTML.
+  function taskLineHtml(prefixHtml, cls, mark, labelHtml, href) {
+    var checkOpen, checkClose;
+    if (href) {
+      checkOpen = '<a class="task-check ' + cls + '" href="' + href +
+        '" title="Open task">';
+      checkClose = '</a>';
+    } else {
+      checkOpen = '<span class="task-check ' + cls + '">';
+      checkClose = '</span>';
+    }
+    return prefixHtml + checkOpen + mark + checkClose +
+      ' <span class="task-label">' + labelHtml + '</span>';
+  }
+
+  // Render one body line. Linked/fresh task lines become a themed checkbox +
+  // formatted label; everything else goes through the inline pipeline.
+  function renderLine(line) {
+    var m = TASK_LINKED_RE.exec(line);
+    if (m) {
+      var prefixHtml = escapeHtml(m[1]);
+      var id = m[2];
+      var label = inlineFormat(m[3]);
+      var info = TASK_INDEX[id];
+      var status = info ? info.status : 'missing';
+      var done = info ? !!info.done : false;
+      if (status === 'done') {
+        return taskLineHtml(prefixHtml, 'done', '☑', label, '/archive');
+      }
+      if (status === 'expired') {
+        return taskLineHtml(prefixHtml, 'expired', '☐', label, '/');
+      }
+      if (status === 'missing') {
+        return taskLineHtml(prefixHtml, 'missing', '☐', label, null);
+      }
+      // active
+      return taskLineHtml(prefixHtml, '', done ? '☑' : '☐',
+        label, '/');
+    }
+    var f = TASK_FRESH_RE.exec(line);
+    if (f) {
+      // Pre-save fresh marker: a plain unchecked themed checkbox + label.
+      return taskLineHtml(escapeHtml(f[1]), 'fresh', '☐',
+        inlineFormat(f[2]), null);
+    }
+    return inlineFormat(line);
+  }
+
+  function render(raw, index) {
+    INDEX = index || INDEX;
+    var lines = String(raw == null ? '' : raw).split('\n');
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      out.push(renderLine(lines[i]));
+    }
+    // Preserve author line breaks in the rendered (block) view.
+    return out.join('<br>');
   }
 
   // Reflect recognized #name value tokens into their numeric section's

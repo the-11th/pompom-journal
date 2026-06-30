@@ -595,6 +595,26 @@ h2 {
   padding: 0 0.2em;
   border-radius: 3px;
 }
+/* Inline [] task lines: a themed checkbox glyph + label rendered in the body.
+   No native <input> — a styled span/anchor, per the theming mandate. */
+.task-check {
+  display: inline-block;
+  font-family: inherit;
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  margin-right: 0.15em;
+}
+.task-check.done { color: var(--accent); }
+.task-check.fresh { color: var(--muted); cursor: default; }
+.task-check.missing { color: var(--muted); cursor: default; }
+.task-check.expired { color: var(--danger); }
+a.task-check:hover { filter: brightness(1.2); }
+/* Done/expired labels read as "settled": expired struck through, done muted. */
+.task-check.done + .task-label { color: var(--muted); }
+.task-check.expired + .task-label { color: var(--muted); text-decoration: line-through; }
+.task-check.missing + .task-label { color: var(--muted); }
+
 .label {
   font-size: 0.72rem; letter-spacing: 1px; text-transform: uppercase;
   color: var(--muted); margin: 0 0 0.5rem;

@@ -512,6 +512,31 @@ def _numeric_index(data):
     return out
 
 
+def _task_ref_index(entry):
+    """{id: {done, status, title}} for [task:<id>] tokens in the entry body.
+
+    Looked up across tasks.json active (-> active), archive (-> done), expired
+    (-> expired); an id with no matching task is `missing`. Drives the live
+    checkbox rendering in journal-richtext.js."""
+    ids = journal.linked_task_ids((entry or {}).get("body", ""))
+    if not ids:
+        return {}
+    tdata = todo.load(data_file())
+    by_id = {}
+    for t in tdata.get("active", []):
+        by_id[t.get("id")] = ("active", False, t)
+    for t in tdata.get("archive", []):
+        by_id[t.get("id")] = ("done", True, t)
+    for t in tdata.get("expired", []):
+        by_id[t.get("id")] = ("expired", False, t)
+    out = {}
+    for tid in ids:
+        status, done, t = by_id.get(tid, ("missing", False, None))
+        out[tid] = {"done": done, "status": status,
+                    "title": (t or {}).get("title", "")}
+    return out
+
+
 def _render_entry(data, date):
     istore = integrations.load(integrations_file())
     entry = journal.get_entry_by_date(data, date)
@@ -522,6 +547,7 @@ def _render_entry(data, date):
         entry_dates=journal.entry_dates(data),
         mention_index=_mention_index(data),
         numeric_index=_numeric_index(data),
+        task_ref_index=_task_ref_index(entry),
         google_connected=integrations.is_connected(istore, "google"),
         google_last_sync=integrations.last_sync(istore, "google"),
         sleep=(entry or {}).get("sleep"),
@@ -685,6 +711,25 @@ def journal_save():
         body_numbers = journal.extract_numbers(body, nidx)
         for sid, val in body_numbers.items():
             base_numbers.setdefault(sid, val)   # explicit field value wins
+        # Inline [] task spawning: each fresh `[]` line becomes an active task,
+        # then its marker is rewritten to a linked [task:<id>] token so it never
+        # re-spawns. The line's @mentions tag the task too (unified by name).
+        to_spawn = journal.extract_task_lines(body, idx, todo.parse_due_token)
+        if to_spawn:
+            tdata = todo.load(data_file())
+            new_ids = []
+            for t in to_spawn:
+                try:
+                    todo.add_task(tdata, t["title"], due=t["due"], tags=t["tags"])
+                    new_ids.append(tdata["active"][-1]["id"])
+                except ValueError:
+                    # Isolate a bad line (e.g. empty title) so one failure never
+                    # aborts the rest; its [] marker is left un-rewritten.
+                    new_ids.append(None)
+            todo.save(data_file(), tdata)
+            # new_ids aligns 1:1 with the non-skipped fresh markers; a None
+            # entry (failed spawn) leaves that line's [] marker untouched.
+            body = journal.rewrite_task_lines(body, new_ids)
         journal.upsert_entry(data, date, title, body,
                              tags=base_tags, numbers=base_numbers, mood=mood)
         journal.save(journal_file(), data)
