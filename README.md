@@ -216,3 +216,36 @@ logs. Use **Disconnect** on the Integrations page to remove the stored tokens.
 ```bash
 pytest
 ```
+
+## Special features — journal power input
+
+The journal entry body is more than a plain text box. A few inline conventions
+let you capture structured data without leaving the keyboard or reaching for a
+separate field:
+
+- **`@mention` tagging.** Type `@alex` in your entry — if `alex` is an existing
+  tag, it's highlighted in that tag's color and added to the day's tags when you
+  save. Underscores match multi-word tags: `@alex_dad` → the `alex dad` tag.
+  Mentions are **additive** — they never remove a tag you picked from the chips.
+  *Example:* `lunch with @alex, then @gym` tags the day `alex` and `gym`.
+
+- **Rich-text formatting (Discord-style).** Wrap text in `**bold**`, `*italic*`,
+  `__underline__`, or `~~strikethrough~~`. The body shows the raw markup while
+  you're typing and renders the formatted result the moment you click away — click
+  the rendered text again to edit it.
+
+- **Mood quick-pick.** Choose a **1–7** mood for the day from the row of
+  Pompompurin faces on the "What happened today" line; click the chosen face
+  again to clear it. Your mood powers the **Mood** analytics tab and the
+  cross-domain "what moves my mood" insights.
+
+- **Tag backlinks.** Click any tag chip (on the Archive page or in journal search)
+  to open a popover summarizing that tag across **both** tasks and journal entries;
+  **Expand →** jumps to the full **Tags** analytics view, pre-searched.
+
+> **More inline grammar is in design.** Two companions to `@mention` are specced
+> under `docs/superpowers/specs/` and will be documented here as they ship:
+> **`#numeric`** (e.g. `#weight 175` to log a numeric section inline) and
+> **`[]`** (e.g. `[] call dentist >friday` to spawn a real to-do from the journal).
+> The intended mnemonic: **`@` tags the day · `#` logs a number · `[]` spawns a
+> task.**
