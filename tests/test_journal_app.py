@@ -761,15 +761,24 @@ def test_suggestion_dismiss_records_dismissal(client):
 # Task 6: Integrations page + Fitbit OAuth routes
 # --------------------------------------------------------------------------- #
 
-def test_integrations_page_renders(client):
+def test_integrations_redirects_to_manage_section(client):
+    # The integrations UI now lives as a section on the journal Manage page;
+    # /integrations is kept as a redirect for old links/bookmarks.
     r = client.get("/integrations")
+    assert r.status_code == 302
+    assert "/journal/sections#sec-integrations" in r.headers["Location"]
+
+
+def test_manage_page_renders_integrations_section(client):
+    r = client.get("/journal/sections")
     assert r.status_code == 200
+    assert b'id="sec-integrations"' in r.data
     assert b"Fitbit" in r.data
 
 
-def test_integrations_page_loads_sync_script(client):
-    # The "Sync now" button needs integrations-sync.js loaded on this page to work.
-    r = client.get("/integrations")
+def test_manage_page_loads_sync_script(client):
+    # The "Sync now" buttons need integrations-sync.js loaded on the manage page.
+    r = client.get("/journal/sections")
     assert b"integrations-sync.js" in r.data
 
 
@@ -947,7 +956,7 @@ def test_rescuetime_disconnect(client, app):
 # --------------------------------------------------------------------------- #
 
 def test_integrations_page_has_rescuetime_card(client):
-    r = client.get("/integrations")
+    r = client.get("/journal/sections")
     assert b"RescueTime" in r.data
     assert b'name="api_key"' in r.data
 
@@ -1063,7 +1072,7 @@ def test_spotify_sync_refreshes_taste(client, app, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_integrations_page_has_spotify_card(client):
-    r = client.get("/integrations")
+    r = client.get("/journal/sections")
     assert b"Spotify" in r.data
 
 

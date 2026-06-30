@@ -1,7 +1,7 @@
-{% extends "base.html" %}
-{% block content %}
+{# Integration provider cards. Included by the journal Manage page
+   (#sec-integrations). Expects the integration context vars supplied by
+   _integrations_context() in app.py. #}
 <div class="integrations-wrap">
-  <h1>Integrations</h1>
   <section class="integration-card">
     <h2>Fitbit <span class="integration-status {{ 'on' if connected else 'off' }}">
       {{ 'Connected' if connected else 'Not connected' }}</span></h2>
@@ -72,8 +72,3 @@
     {% endif %}
   </section>
 </div>
-{% endblock %}
-
-{% block scripts %}
-  <script src="{{ url_for('static', filename='integrations-sync.js') }}" defer></script>
-{% endblock %}

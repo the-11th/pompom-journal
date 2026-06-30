@@ -718,7 +718,8 @@ def journal_sections():
                            sections=journal.active_sections(data),
                            temporary_tags=journal.temporary_tags(data),
                            suggestions=journal.tag_suggestions(data, limit=8),
-                           dormant=journal.dormant_tags(data))
+                           dormant=journal.dormant_tags(data),
+                           **_integrations_context())
 
 
 @app.route("/journal/sections/archive")
@@ -912,12 +913,13 @@ def _fitbit_redirect_uri():
     return url_for("fitbit_callback", _external=True)
 
 
-@app.route("/integrations")
-def integrations_page():
+def _integrations_context():
+    """Template vars for the integration provider cards (rendered as the
+    Integrations section on the journal Manage page)."""
     data = integrations.load(integrations_file())
     fb = integrations.get_provider(data, "fitbit")
-    return render_template(
-        "integrations.html",
+    sp = integrations.get_provider(data, "spotify")
+    return dict(
         connected=integrations.is_connected(data, "fitbit"),
         has_creds=bool(fb.get("client_id") and fb.get("client_secret")),
         client_id=fb.get("client_id", ""),
@@ -926,12 +928,18 @@ def integrations_page():
         rescuetime_connected=integrations.is_connected(data, "rescuetime"),
         rescuetime_last_sync=integrations.last_sync(data, "rescuetime"),
         spotify_connected=integrations.is_connected(data, "spotify"),
-        spotify_has_creds=bool(integrations.get_provider(data, "spotify").get("client_id")
-                               and integrations.get_provider(data, "spotify").get("client_secret")),
-        spotify_client_id=integrations.get_provider(data, "spotify").get("client_id", ""),
+        spotify_has_creds=bool(sp.get("client_id") and sp.get("client_secret")),
+        spotify_client_id=sp.get("client_id", ""),
         spotify_last_sync=integrations.last_sync(data, "spotify"),
         spotify_redirect_uri=_spotify_redirect_uri(),
     )
+
+
+@app.route("/integrations")
+def integrations_page():
+    # The integrations UI now lives as a section on the journal Manage page;
+    # keep this route as a redirect so existing links/bookmarks still work.
+    return redirect(url_for("journal_sections") + "#sec-integrations")
 
 
 @app.route("/integrations/fitbit/credentials", methods=["POST"])
