@@ -72,6 +72,21 @@
         <a class="muted" href="{{ url_for('integrations_page') }}">Connect RescueTime →</a>
       {% endif %}
     </div>
+    <div class="integ-row music-row" id="spotify-panel"
+         data-date="{{ date }}"
+         data-connected="{{ '1' if spotify_connected else '0' }}"
+         data-last-sync="{{ spotify_last_sync or '' }}">
+      {% if music %}
+        <span class="music-icon">🎧</span>
+        <span class="music-min">{{ music.minutes }} min</span>
+        <span class="music-tracks">{{ music.tracks }} tracks</span>
+        {% if music.top_artists %}<span class="music-artist">{{ music.top_artists[0].name }}</span>{% endif %}
+      {% elif spotify_connected %}
+        <span class="muted">No listening data for this day</span>
+      {% else %}
+        <a class="muted" href="{{ url_for('integrations_page') }}">Connect Spotify →</a>
+      {% endif %}
+    </div>
     <div class="body-field">
       <textarea name="body" class="body-input" placeholder="the day's events…">{{ entry.body if entry else '' }}</textarea>
       <div class="body-rendered" hidden></div>

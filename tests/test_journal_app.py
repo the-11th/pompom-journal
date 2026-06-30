@@ -1044,3 +1044,17 @@ def test_spotify_sync_refreshes_taste(client, app, monkeypatch):
     client.post("/integrations/spotify/sync")
     taste = I.get_taste(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
     assert taste["artists"]["short_term"] == ["X"]
+
+
+# --------------------------------------------------------------------------- #
+# Task 7: Spotify settings card + entry music panel row
+# --------------------------------------------------------------------------- #
+
+def test_integrations_page_has_spotify_card(client):
+    r = client.get("/integrations")
+    assert b"Spotify" in r.data
+
+
+def test_entry_shows_connect_spotify_when_not_connected(client):
+    r = client.get("/journal")
+    assert b"Connect Spotify" in r.data

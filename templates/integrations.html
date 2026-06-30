@@ -47,6 +47,30 @@
       </form>
     {% endif %}
   </section>
+
+  <section class="integration-card">
+    <h2>Spotify <span class="integration-status {{ 'on' if spotify_connected else 'off' }}">
+      {{ 'Connected' if spotify_connected else 'Not connected' }}</span></h2>
+    <p class="muted">Auto-fills daily listening (tracks, minutes, top artists, and
+      — when available — audio features) into your journal, plus a taste view.
+      Register an app at <code>developer.spotify.com</code> with redirect URL
+      <code>{{ spotify_redirect_uri }}</code>.</p>
+    <form method="post" action="{{ url_for('spotify_credentials') }}" class="integration-creds">
+      <label>Client ID <input name="client_id" value="{{ spotify_client_id }}"></label>
+      <label>Client Secret <input name="client_secret" type="password"></label>
+      <button type="submit">Save credentials</button>
+    </form>
+    {% if spotify_has_creds and not spotify_connected %}
+      <a class="btn" href="{{ url_for('spotify_connect') }}">Connect to Spotify</a>
+    {% elif spotify_connected %}
+      <p class="muted">Last synced: {{ spotify_last_sync or 'never' }}</p>
+      <button type="button" id="spotify-sync-now" class="btn">Sync now</button>
+      <form method="post" action="{{ url_for('spotify_disconnect') }}" style="display:inline">
+        <button type="submit" class="btn danger"
+                data-confirm="Disconnect Spotify and remove stored tokens?">Disconnect</button>
+      </form>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}
 

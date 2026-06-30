@@ -2162,6 +2162,11 @@ a.tl-date:hover { color: var(--accent); }
 .rt-row .rt-pulse { color:var(--text); }
 .rt-row .rt-prod { color:var(--accent); }
 
+.music-row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap;
+  font-size:.85rem; color:var(--muted); margin:.4rem 0; }
+.music-row .music-min { color:var(--text); }
+.music-row .music-artist { color:var(--accent); }
+
 /* ----- Sleep analytics tab ----- */
 /* Stage legend: a row of color-swatch + label items */
 .sleep-stage-legend {

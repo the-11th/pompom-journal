@@ -512,6 +512,9 @@ def _render_entry(data, date):
         rescuetime_connected=integrations.is_connected(istore, "rescuetime"),
         rescuetime_last_sync=integrations.last_sync(istore, "rescuetime"),
         rescuetime=(entry or {}).get("rescuetime"),
+        spotify_connected=integrations.is_connected(istore, "spotify"),
+        spotify_last_sync=integrations.last_sync(istore, "spotify"),
+        music=(entry or {}).get("music"),
     )
 
 

@@ -27,12 +27,22 @@
       span("rt-pulse", `Pulse ${r.pulse}`),
       span("rt-prod", `${Math.round(r.productive_min / 60 * 10) / 10}h productive`));
   }
+  function renderMusic(panel, m) {
+    if (!m) return;
+    const kids = [span("music-icon", "🎧"),
+                  span("music-min", `${m.minutes} min`),
+                  span("music-tracks", `${m.tracks} tracks`)];
+    if (m.top_artists && m.top_artists[0]) kids.push(span("music-artist", m.top_artists[0].name));
+    panel.replaceChildren(...kids);
+  }
 
   const PROVIDERS = [
     { name: "fitbit", panelId: "sleep-panel", key: "sleep",
       syncPath: "/integrations/fitbit/sync", render: renderSleep },
     { name: "rescuetime", panelId: "rescuetime-panel", key: "data",
       syncPath: "/integrations/rescuetime/sync", render: renderRescuetime },
+    { name: "spotify", panelId: "spotify-panel", key: "music",
+      syncPath: "/integrations/spotify/sync", render: renderMusic },
   ];
 
   function sync(p, panel) {
