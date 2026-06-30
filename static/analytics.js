@@ -3327,11 +3327,14 @@
       U.drawAxis(svg2, pad2, 10, w2 - pad2 - 10, h2 - pad2 - 10, FEAT_LABELS, c);
       container.appendChild(svg2);
 
+      // Stats row shows the RAW averages (tempo in BPM), so label tempo "(bpm)"
+      // not "(norm.)" — only the bar chart above plots the normalized tempo.
+      var STAT_LABELS = ["valence", "energy", "danceability", "tempo (bpm)"];
       U.statsRow(container, FEAT_KEYS.map(function (k, i) {
         var raw = buckets[k].length
           ? buckets[k].reduce(function (a, x) { return a + x; }, 0) / buckets[k].length
           : null;
-        return [FEAT_LABELS[i].toLowerCase(), raw != null ? U.fmt(raw) : null];
+        return [STAT_LABELS[i], raw != null ? U.fmt(raw) : null];
       }));
     },
   });
