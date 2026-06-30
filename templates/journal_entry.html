@@ -45,17 +45,17 @@
     </div>
     <div class="sleep-panel" id="sleep-panel"
          data-date="{{ date }}"
-         data-connected="{{ '1' if fitbit_connected else '0' }}"
-         data-last-sync="{{ fitbit_last_sync or '' }}">
+         data-connected="{{ '1' if google_connected else '0' }}"
+         data-last-sync="{{ google_last_sync or '' }}">
       {% if sleep %}
         <span class="sleep-icon">🛌</span>
         <span class="sleep-times">{{ sleep.start }} → {{ sleep.end }}</span>
         <span class="sleep-dur">{{ (sleep.duration_min // 60) }}h {{ (sleep.duration_min % 60) }}m</span>
         <span class="sleep-qual">{{ 'Quality' if sleep.score is not none else 'Quality (efficiency)' }} {{ sleep.quality }}</span>
-      {% elif fitbit_connected %}
+      {% elif google_connected %}
         <span class="muted">No sleep data for this day</span>
       {% else %}
-        <a class="muted" href="{{ url_for('integrations_page') }}">Connect Fitbit to auto-fill sleep →</a>
+        <a class="muted" href="{{ url_for('integrations_page') }}">Connect Google Health to auto-fill sleep →</a>
       {% endif %}
     </div>
     <div class="integ-row rt-row" id="rescuetime-panel"

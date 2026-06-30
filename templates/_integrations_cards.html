@@ -3,27 +3,28 @@
    _integrations_context() in app.py. #}
 <div class="integrations-wrap">
   <section class="integration-card">
-    <h2>Fitbit <span class="integration-status {{ 'on' if connected else 'off' }}">
-      {{ 'Connected' if connected else 'Not connected' }}</span></h2>
+    <h2>Google Health <span class="integration-status {{ 'on' if google_connected else 'off' }}">
+      {{ 'Connected' if google_connected else 'Not connected' }}</span></h2>
     <p class="muted">Auto-fills nightly sleep (bedtime, wake, duration, quality,
-      stages) into your journal. Register a personal app at
-      <code>dev.fitbit.com</code> with redirect URL
-      <code>{{ redirect_uri }}</code> and scope <code>sleep</code>.</p>
+      stages) into your journal. Register an OAuth app at
+      <code>console.cloud.google.com</code> with redirect URL
+      <code>{{ google_redirect_uri }}</code> and scope
+      <code>googlehealth.sleep.readonly</code>.</p>
 
-    <form method="post" action="{{ url_for('fitbit_credentials') }}" class="integration-creds">
-      <label>Client ID <input name="client_id" value="{{ client_id }}"></label>
+    <form method="post" action="{{ url_for('google_credentials') }}" class="integration-creds">
+      <label>Client ID <input name="client_id" value="{{ google_client_id }}"></label>
       <label>Client Secret <input name="client_secret" type="password"></label>
       <button type="submit">Save credentials</button>
     </form>
 
-    {% if has_creds and not connected %}
-      <a class="btn" href="{{ url_for('fitbit_connect') }}">Connect to Fitbit</a>
-    {% elif connected %}
-      <p class="muted">Last synced: {{ last_sync or 'never' }}</p>
-      <button type="button" id="fitbit-sync-now" class="btn">Sync now</button>
-      <form method="post" action="{{ url_for('fitbit_disconnect') }}" style="display:inline">
+    {% if google_has_creds and not google_connected %}
+      <a class="btn" href="{{ url_for('google_connect') }}">Connect Google Health</a>
+    {% elif google_connected %}
+      <p class="muted">Last synced: {{ google_last_sync or 'never' }}</p>
+      <button type="button" id="google-sync-now" class="btn">Sync now</button>
+      <form method="post" action="{{ url_for('google_disconnect') }}" style="display:inline">
         <button type="submit" class="btn danger"
-                data-confirm="Disconnect Fitbit and remove stored tokens?">Disconnect</button>
+                data-confirm="Disconnect Google Health and remove stored tokens?">Disconnect</button>
       </form>
     {% endif %}
   </section>

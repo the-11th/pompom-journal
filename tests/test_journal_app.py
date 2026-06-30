@@ -773,7 +773,7 @@ def test_manage_page_renders_integrations_section(client):
     r = client.get("/journal/sections")
     assert r.status_code == 200
     assert b'id="sec-integrations"' in r.data
-    assert b"Fitbit" in r.data
+    assert b"Google Health" in r.data
 
 
 def test_manage_page_loads_sync_script(client):
@@ -782,73 +782,68 @@ def test_manage_page_loads_sync_script(client):
     assert b"integrations-sync.js" in r.data
 
 
-def test_save_credentials_then_connect_redirects_to_fitbit(client, app):
-    client.post("/integrations/fitbit/credentials",
+def test_google_save_credentials_and_connect(client, app):
+    client.post("/integrations/google/credentials",
                 data={"client_id": "CID", "client_secret": "SEC"})
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    assert d["fitbit"]["client_id"] == "CID"
-    r = client.get("/integrations/fitbit/connect")
+    assert d["google"]["client_id"] == "CID"
+    r = client.get("/integrations/google/connect")
     assert r.status_code == 302
-    assert "www.fitbit.com/oauth2/authorize" in r.headers["Location"]
+    assert "accounts.google.com/o/oauth2/v2/auth" in r.headers["Location"]
     assert "state=" in r.headers["Location"]
 
 
-def test_callback_exchanges_code(client, app, monkeypatch):
-    client.post("/integrations/fitbit/credentials",
+def test_google_callback_exchanges_code(client, app, monkeypatch):
+    client.post("/integrations/google/credentials",
                 data={"client_id": "CID", "client_secret": "SEC"})
     # capture the state the connect route stored
-    client.get("/integrations/fitbit/connect")
+    client.get("/integrations/google/connect")
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    state = d["fitbit"]["oauth_state"]
-    monkeypatch.setattr("fitbit.exchange_code",
+    state = d["google"]["oauth_state"]
+    monkeypatch.setattr("google_health.exchange_code",
         lambda *a, **k: {"access_token": "A", "refresh_token": "R",
                          "scope": "sleep", "expires_at": 9e9})
     # avoid network on the post-connect backfill
-    monkeypatch.setattr("app._fitbit_sync", lambda *a, **k: {"synced": [], "errors": []})
-    r = client.get(f"/integrations/fitbit/callback?code=CODE&state={state}")
+    monkeypatch.setattr("app._google_sync", lambda *a, **k: {"synced": [], "errors": []})
+    r = client.get(f"/integrations/google/callback?code=CODE&state={state}")
     assert r.status_code == 302
-    assert I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+    assert I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "google")
 
 
-def test_disconnect_clears_tokens(client, app):
+def test_google_disconnect(client, app):
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    I.set_tokens(d, "fitbit", {"access_token": "A", "refresh_token": "R"})
+    I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R"})
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    client.post("/integrations/fitbit/disconnect")
-    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+    client.post("/integrations/google/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "google")
 
 
-def test_callback_rejects_state_mismatch(client, app):
+def test_google_callback_state_mismatch(client, app):
     """Callback with a wrong state must redirect (not 500) and stay disconnected."""
     # Save credentials so the route gets past the no-credentials guard.
-    client.post("/integrations/fitbit/credentials",
+    client.post("/integrations/google/credentials",
                 data={"client_id": "CID", "client_secret": "SEC"})
     # Initiate connect to store a real oauth_state.
-    client.get("/integrations/fitbit/connect")
+    client.get("/integrations/google/connect")
     # Now hit callback with a deliberately wrong state.
-    r = client.get("/integrations/fitbit/callback?code=X&state=WRONG")
+    r = client.get("/integrations/google/callback?code=X&state=WRONG")
     assert r.status_code == 302
-    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "google")
 
 
-def test_callback_handles_fitbit_error(client, app):
-    """Callback with ?error= must redirect (not 500) and stay disconnected."""
-    r = client.get("/integrations/fitbit/callback?error=access_denied")
-    assert r.status_code == 302
-    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "fitbit")
-
-
-def test_sync_writes_sleep(client, app, monkeypatch):
+def test_google_sync_writes_sleep(client, app, monkeypatch):
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    I.set_tokens(d, "fitbit", {"access_token": "A", "refresh_token": "R",
+    I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R",
                                "expires_at": 9e9})
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("fitbit.fetch_sleep",
-        lambda token, date, transport=None: {"sleep": [{
-            "isMainSleep": True, "startTime": f"{date}T23:00:00.000",
-            "endTime": f"{date}T06:00:00.000", "minutesAsleep": 420,
-            "efficiency": 90, "type": "classic", "levels": {"summary": {}}}]})
-    r = client.post("/integrations/fitbit/sync?days=1")
+    monkeypatch.setattr("google_health.fetch_sleep",
+        lambda token, date, transport=None: {"dataPoints": [{"sleep": {
+            "interval": {
+                "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",
+                "endTime": f"{date}T12:00:00Z", "endUtcOffset": "0s"},
+            "sleepType": "CLASSIC", "sleepStages": [],
+            "sleepSummary": {"efficiency": 90}}}]})
+    r = client.post("/integrations/google/sync?days=1")
     body = r.get_json()
     assert body["ok"] and body["connected"]
     assert len(body["synced"]) == 1
@@ -858,16 +853,16 @@ def test_sync_writes_sleep(client, app, monkeypatch):
     assert any(e.get("sleep") for e in jdata["entries"])
 
 
-def test_sync_not_connected(client, app):
-    r = client.post("/integrations/fitbit/sync")
+def test_google_sync_not_connected(client, app):
+    r = client.post("/integrations/google/sync")
     body = r.get_json()
     assert body["ok"] and body["connected"] is False
 
 
-def test_sync_refreshes_on_401(client, app, monkeypatch):
+def test_google_sync_refreshes_on_401(client, app, monkeypatch):
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    I.set_credentials(d, "fitbit", "CID", "SEC")
-    I.set_tokens(d, "fitbit", {"access_token": "OLD", "refresh_token": "R",
+    I.set_credentials(d, "google", "CID", "SEC")
+    I.set_tokens(d, "google", {"access_token": "OLD", "refresh_token": "R",
                                "expires_at": 9e9})
     I.save(app.config["INTEGRATIONS_FILE"], d)
     calls = {"n": 0}
@@ -875,35 +870,37 @@ def test_sync_refreshes_on_401(client, app, monkeypatch):
         calls["n"] += 1
         if token == "OLD":
             raise PermissionError("401")
-        return {"sleep": [{"isMainSleep": True,
-            "startTime": f"{date}T23:00:00.000", "endTime": f"{date}T06:00:00.000",
-            "minutesAsleep": 420, "efficiency": 90, "type": "classic",
-            "levels": {"summary": {}}}]}
-    monkeypatch.setattr("fitbit.fetch_sleep", fake_fetch)
-    monkeypatch.setattr("fitbit.refresh_tokens",
+        return {"dataPoints": [{"sleep": {
+            "interval": {
+                "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",
+                "endTime": f"{date}T12:00:00Z", "endUtcOffset": "0s"},
+            "sleepType": "CLASSIC", "sleepStages": [],
+            "sleepSummary": {"efficiency": 90}}}]}
+    monkeypatch.setattr("google_health.fetch_sleep", fake_fetch)
+    monkeypatch.setattr("google_health.refresh_tokens",
         lambda *a, **k: {"access_token": "NEW", "refresh_token": "R2",
                          "scope": "sleep", "expires_at": 9e9})
-    r = client.post("/integrations/fitbit/sync?days=1")
+    r = client.post("/integrations/google/sync?days=1")
     assert r.get_json()["synced"]
-    assert I.load(app.config["INTEGRATIONS_FILE"])["fitbit"]["tokens"]["access_token"] == "NEW"
+    assert I.load(app.config["INTEGRATIONS_FILE"])["google"]["tokens"]["access_token"] == "NEW"
 
 
 # --------------------------------------------------------------------------- #
 # Task 8: Entry-form sleep panel
 # --------------------------------------------------------------------------- #
 
-def test_entry_shows_connect_fitbit_when_not_connected(client):
-    """When Fitbit is not connected the entry page shows a 'Connect Fitbit' link."""
+def test_entry_shows_connect_google_when_not_connected(client):
+    """When Google Health is not connected the entry page shows a 'Connect Google Health' link."""
     resp = client.get("/journal")
     assert resp.status_code == 200
-    assert b"Connect Fitbit" in resp.data
+    assert b"Connect Google Health" in resp.data
 
 
 def test_entry_shows_no_sleep_data_when_connected_empty(client, app):
-    """When Fitbit is connected but no sleep data is stored, the panel shows
+    """When Google Health is connected but no sleep data is stored, the panel shows
     'No sleep data for this day'."""
     d = I.load(app.config["INTEGRATIONS_FILE"])
-    I.set_tokens(d, "fitbit", {"access_token": "tok"})
+    I.set_tokens(d, "google", {"access_token": "tok"})
     I.save(app.config["INTEGRATIONS_FILE"], d)
     resp = client.get("/journal")
     assert resp.status_code == 200

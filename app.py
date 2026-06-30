@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
-import fitbit
+import google_health
 import integrations
 import journal
 import rescuetime
@@ -506,8 +506,8 @@ def _render_entry(data, date):
         date=date, sections=journal.active_sections(data),
         entry_dates=journal.entry_dates(data),
         mention_index=_mention_index(data),
-        fitbit_connected=integrations.is_connected(istore, "fitbit"),
-        fitbit_last_sync=integrations.last_sync(istore, "fitbit"),
+        google_connected=integrations.is_connected(istore, "google"),
+        google_last_sync=integrations.last_sync(istore, "google"),
         sleep=(entry or {}).get("sleep"),
         rescuetime_connected=integrations.is_connected(istore, "rescuetime"),
         rescuetime_last_sync=integrations.last_sync(istore, "rescuetime"),
@@ -852,18 +852,18 @@ def _recent_dates(days, now=None):
     return [(today - timedelta(days=i)).isoformat() for i in range(days)]
 
 
-def _fitbit_sync(days=7, force=False, focus_date=None, now=None):
+def _google_sync(days=7, force=False, focus_date=None, now=None):
     istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "fitbit"):
+    if not integrations.is_connected(istore, "google"):
         return {"connected": False, "synced": [], "errors": []}
-    fb = integrations.get_provider(istore, "fitbit")
-    tokens = fb["tokens"]
-    cid, secret = fb.get("client_id"), fb.get("client_secret")
+    gh = integrations.get_provider(istore, "google")
+    tokens = gh["tokens"]
+    cid, csecret = gh.get("client_id"), gh.get("client_secret")
 
-    if fitbit.token_expired(tokens) and tokens.get("refresh_token") and cid:
+    if google_health.token_expired(tokens) and tokens.get("refresh_token") and cid:
         try:
-            tokens = fitbit.refresh_tokens(cid, secret, tokens["refresh_token"])
-            integrations.set_tokens(istore, "fitbit", tokens)
+            tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
+            integrations.set_tokens(istore, "google", tokens)
         except Exception:  # noqa: BLE001
             pass
 
@@ -875,15 +875,15 @@ def _fitbit_sync(days=7, force=False, focus_date=None, now=None):
             continue
         try:
             try:
-                raw = fitbit.fetch_sleep(tokens["access_token"], date)
+                raw = google_health.fetch_sleep(tokens["access_token"], date)
             except PermissionError:
                 if cid and tokens.get("refresh_token"):
-                    tokens = fitbit.refresh_tokens(cid, secret, tokens["refresh_token"])
-                    integrations.set_tokens(istore, "fitbit", tokens)
-                    raw = fitbit.fetch_sleep(tokens["access_token"], date)
+                    tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
+                    integrations.set_tokens(istore, "google", tokens)
+                    raw = google_health.fetch_sleep(tokens["access_token"], date)
                 else:
                     raise
-            sleep = fitbit.parse_sleep(raw)
+            sleep = google_health.parse_sleep(raw)
             if sleep:
                 journal.set_entry_sleep(jdata, date, sleep)
                 synced.append(date)
@@ -891,17 +891,17 @@ def _fitbit_sync(days=7, force=False, focus_date=None, now=None):
             errors.append(f"{date}: {exc}")
 
     journal.save(journal_file(), jdata)
-    integrations.set_last_sync(istore, "fitbit",
+    integrations.set_last_sync(istore, "google",
                                (now or datetime.now()).replace(microsecond=0).isoformat())
     integrations.save(integrations_file(), istore)
     return {"connected": True, "synced": synced, "errors": errors}
 
 
-@app.route("/integrations/fitbit/sync", methods=["POST"])
-def fitbit_sync_route():
+@app.route("/integrations/google/sync", methods=["POST"])
+def google_sync_route():
     days = request.args.get("days", type=int) or 7
     focus = request.args.get("date")
-    result = _fitbit_sync(days=days, focus_date=focus)
+    result = _google_sync(days=days, focus_date=focus)
     sleep = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
@@ -909,22 +909,22 @@ def fitbit_sync_route():
     return jsonify({"ok": True, **result, "sleep": sleep})
 
 
-def _fitbit_redirect_uri():
-    return url_for("fitbit_callback", _external=True)
+def _google_redirect_uri():
+    return url_for("google_callback", _external=True)
 
 
 def _integrations_context():
     """Template vars for the integration provider cards (rendered as the
     Integrations section on the journal Manage page)."""
     data = integrations.load(integrations_file())
-    fb = integrations.get_provider(data, "fitbit")
+    gh = integrations.get_provider(data, "google")
     sp = integrations.get_provider(data, "spotify")
     return dict(
-        connected=integrations.is_connected(data, "fitbit"),
-        has_creds=bool(fb.get("client_id") and fb.get("client_secret")),
-        client_id=fb.get("client_id", ""),
-        last_sync=integrations.last_sync(data, "fitbit"),
-        redirect_uri=_fitbit_redirect_uri(),
+        google_connected=integrations.is_connected(data, "google"),
+        google_has_creds=bool(gh.get("client_id") and gh.get("client_secret")),
+        google_client_id=gh.get("client_id", ""),
+        google_last_sync=integrations.last_sync(data, "google"),
+        google_redirect_uri=_google_redirect_uri(),
         rescuetime_connected=integrations.is_connected(data, "rescuetime"),
         rescuetime_last_sync=integrations.last_sync(data, "rescuetime"),
         spotify_connected=integrations.is_connected(data, "spotify"),
@@ -942,64 +942,64 @@ def integrations_page():
     return redirect(url_for("journal_sections") + "#sec-integrations")
 
 
-@app.route("/integrations/fitbit/credentials", methods=["POST"])
-def fitbit_credentials():
+@app.route("/integrations/google/credentials", methods=["POST"])
+def google_credentials():
     data = integrations.load(integrations_file())
     integrations.set_credentials(
-        data, "fitbit",
+        data, "google",
         request.form.get("client_id", "").strip(),
         request.form.get("client_secret", "").strip())
     integrations.save(integrations_file(), data)
-    flash("Fitbit credentials saved.")
+    flash("Google Health credentials saved.")
     return redirect(url_for("integrations_page"))
 
 
-@app.route("/integrations/fitbit/connect")
-def fitbit_connect():
+@app.route("/integrations/google/connect")
+def google_connect():
     data = integrations.load(integrations_file())
-    fb = integrations.get_provider(data, "fitbit")
-    if not (fb.get("client_id") and fb.get("client_secret")):
-        flash("Enter your Fitbit Client ID and Secret first.")
+    gh = integrations.get_provider(data, "google")
+    if not (gh.get("client_id") and gh.get("client_secret")):
+        flash("Enter your Google Client ID and Secret first.")
         return redirect(url_for("integrations_page"))
     state = secrets.token_urlsafe(16)
-    fb["oauth_state"] = state
+    gh["oauth_state"] = state
     integrations.save(integrations_file(), data)
-    url = fitbit.build_authorize_url(
-        fb["client_id"], _fitbit_redirect_uri(), state)
+    url = google_health.build_authorize_url(
+        gh["client_id"], _google_redirect_uri(), state)
     return redirect(url)
 
 
-@app.route("/integrations/fitbit/callback")
-def fitbit_callback():
+@app.route("/integrations/google/callback")
+def google_callback():
     data = integrations.load(integrations_file())
-    fb = integrations.get_provider(data, "fitbit")
+    gh = integrations.get_provider(data, "google")
     if request.args.get("error"):
-        flash(f"Fitbit authorization failed: {request.args.get('error')}")
+        flash(f"Google authorization failed: {request.args.get('error')}")
         return redirect(url_for("integrations_page"))
-    if not request.args.get("state") or request.args.get("state") != fb.get("oauth_state"):
-        flash("Fitbit authorization state mismatch; please try again.")
+    if not request.args.get("state") or request.args.get("state") != gh.get("oauth_state"):
+        flash("Google authorization state mismatch; please try again.")
         return redirect(url_for("integrations_page"))
     try:
-        tokens = fitbit.exchange_code(
-            fb["client_id"], fb["client_secret"],
-            request.args.get("code"), _fitbit_redirect_uri())
+        tokens = google_health.exchange_code(
+            gh["client_id"], gh["client_secret"],
+            request.args.get("code"), _google_redirect_uri())
     except Exception as exc:  # noqa: BLE001 - surface as a flash, never 500
-        flash(f"Fitbit connection failed: {exc}")
+        flash(f"Google Health connection failed: {exc}")
         return redirect(url_for("integrations_page"))
-    integrations.set_tokens(data, "fitbit", tokens)
-    fb.pop("oauth_state", None)
+    integrations.set_tokens(data, "google", tokens)
+    gh.pop("oauth_state", None)
     integrations.save(integrations_file(), data)
-    _fitbit_sync(days=30)  # one-time backfill
-    flash("Fitbit connected. Sleep data backfilled.")
+    _google_sync(days=30)  # one-time backfill
+    flash("Google Health connected. Sleep data backfilled.")
     return redirect(url_for("integrations_page"))
 
 
-@app.route("/integrations/fitbit/disconnect", methods=["POST"])
-def fitbit_disconnect():
+@app.route("/integrations/google/disconnect", methods=["POST"])
+def google_disconnect():
     data = integrations.load(integrations_file())
-    integrations.clear_provider(data, "fitbit")
+    integrations.clear_provider(data, "google")
     integrations.save(integrations_file(), data)
-    flash("Fitbit disconnected.")
+    flash("Google Health disconnected.")
     return redirect(url_for("integrations_page"))
 
 

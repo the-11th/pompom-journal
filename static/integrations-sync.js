@@ -37,8 +37,8 @@
   }
 
   const PROVIDERS = [
-    { name: "fitbit", panelId: "sleep-panel", key: "sleep",
-      syncPath: "/integrations/fitbit/sync", render: renderSleep },
+    { name: "google", panelId: "sleep-panel", key: "sleep",
+      syncPath: "/integrations/google/sync", render: renderSleep },
     { name: "rescuetime", panelId: "rescuetime-panel", key: "data",
       syncPath: "/integrations/rescuetime/sync", render: renderRescuetime },
     { name: "spotify", panelId: "spotify-panel", key: "music",
