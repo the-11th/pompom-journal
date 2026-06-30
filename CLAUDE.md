@@ -761,6 +761,51 @@ and radar views degrade gracefully to the muted-note state.
 All three planned integrations (Google Health sleep, RescueTime productivity,
 Spotify music) are now shipped.
 
+### Things to look out for (unverified against live APIs)
+
+All three connectors are **unit/route-tested with fake transports only — none
+has been exercised against a real account yet.** When testing live, watch for:
+
+- **Google Health `parse_sleep` field names.** `google_health.parse_sleep`
+  reads `sleepSummary` duration/efficiency keys **defensively** because Google's
+  exact field names aren't in the public docs. On the first real connection,
+  confirm the Sleep-tab values are right; if a key differs, adjust the
+  `summary.get(...)` keys in `parse_sleep` (it already degrades gracefully:
+  duration falls back to summed stage minutes then interval length, efficiency
+  to `None`). Add a fixture from the real response.
+- **Google testing-mode 7-day token expiry.** The `googlehealth.sleep.readonly`
+  scope is Restricted, so until a Google security review the app is in Testing
+  mode and the **refresh token expires ~weekly** — sync then fails with
+  `invalid_grant` and the user must re-click **Connect Google Health**. Expected,
+  documented in the README.
+- **`now` parameter type mismatch (latent footgun).** `google_health.parse_sleep`
+  treats `now` as a `datetime`; `oauth.normalize_token_response` treats `now` as
+  a float epoch. Both are correct for their callers today (the route never passes
+  `now` to `parse_sleep`), but don't cross the wires. Add a docstring noting the
+  expected type if you touch either.
+- **Spotify is forward-only.** Recently-played caps at ~50 tracks / ~24h, so
+  per-day music accumulates from connect onward (no backfill); daily totals are
+  best-effort. **Audio features** (valence/energy/…) 403 for apps created after
+  Nov 2024 → those fields are `null` and the Music tab hides the feature charts.
+- **Analytics charts are not browser-verified.** The Sleep / Productivity / Music
+  tabs are covered by payload + `node -c` checks and the route layer, but the
+  actual SVG rendering hasn't been eyeballed in a browser. Worth a visual pass
+  once real data exists.
+- **Benign leftover `"fitbit"` strings.** A few test fixtures use
+  `"source": "fitbit"` and `test_integrations.py` uses `"fitbit"` as a generic
+  provider name — harmless (provider-agnostic), tidy if convenient.
+
+### Next steps
+
+1. **Test the live API integrations** — connect a real Google Health, RescueTime,
+   and Spotify account; confirm each connector's data lands correctly on journal
+   days (especially the Google `parse_sleep` field-name check above) and that
+   reconnect works.
+2. **Analyze the existing analytics** — review/verify the analytics tabs and
+   charts (Overview, Mood, Sleep, Productivity, Music, Tags, Numeric, the Task
+   lens) with real data: do a browser pass, sanity-check the numbers against the
+   pure helpers, and note any rendering or correctness gaps.
+
 ---
 
 ## Testing convention
