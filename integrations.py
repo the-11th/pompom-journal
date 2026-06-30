@@ -78,12 +78,32 @@ def set_api_key(data, name, key):
     return data
 
 
+def set_taste(data, name, taste):
+    get_provider(data, name)["taste"] = taste
+    return data
+
+
+def get_taste(data, name):
+    return get_provider(data, name).get("taste")
+
+
+def set_plays_buffer(data, name, buffer):
+    get_provider(data, name)["plays_buffer"] = buffer
+    return data
+
+
+def get_plays_buffer(data, name):
+    return get_provider(data, name).get("plays_buffer") or {}
+
+
 def clear_provider(data, name):
     p = get_provider(data, name)
     p.pop("tokens", None)
     p.pop("last_sync", None)
     p.pop("oauth_state", None)
     p.pop("api_key", None)
+    p.pop("taste", None)
+    p.pop("plays_buffer", None)
     return data
 
 

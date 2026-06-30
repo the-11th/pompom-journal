@@ -77,3 +77,19 @@ def test_clear_provider_removes_key():
     I.clear_provider(d, "rescuetime")
     assert I.is_connected(d, "rescuetime") is False
     assert "api_key" not in I.get_provider(d, "rescuetime")
+
+
+def test_taste_roundtrip():
+    d = I._empty()
+    assert I.get_taste(d, "spotify") is None
+    I.set_taste(d, "spotify", {"genres": {"short_term": ["indie"]}})
+    assert I.get_taste(d, "spotify")["genres"]["short_term"] == ["indie"]
+
+
+def test_plays_buffer_roundtrip_and_clear():
+    d = I._empty()
+    assert I.get_plays_buffer(d, "spotify") == {}
+    I.set_plays_buffer(d, "spotify", {"2026-06-29": {"ts": {"track_id": "t1"}}})
+    assert "2026-06-29" in I.get_plays_buffer(d, "spotify")
+    I.clear_provider(d, "spotify")
+    assert I.get_plays_buffer(d, "spotify") == {} and I.get_taste(d, "spotify") is None
