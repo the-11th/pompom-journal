@@ -86,6 +86,7 @@ def load(path):
             e.setdefault("mood", None)
             e.setdefault("sleep", None)
             e.setdefault("rescuetime", None)
+            e.setdefault("music", None)
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -539,6 +540,20 @@ def set_entry_rescuetime(data, date, value, now=None):
     if entry is None:
         entry = upsert_entry(data, date, date, "", now=now)
     entry["rescuetime"] = value
+    entry["updated"] = now.isoformat()
+    return entry
+
+
+def set_entry_music(data, date, value, now=None):
+    """Set (or clear, with value=None) the auto-filled Spotify music dict for
+    `date`. Same get-or-create rule as set_entry_sleep."""
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    entry["music"] = value
     entry["updated"] = now.isoformat()
     return entry
 
@@ -1281,6 +1296,81 @@ def rescuetime_stats(entries, start=None, end=None):
     }
 
 
+def _entry_music(entry):
+    m = entry.get("music")
+    if isinstance(m, dict) and m.get("tracks"):
+        return m
+    return None
+
+
+def music_minutes_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if m:
+            out.append({"date": e["date"], "minutes": m.get("minutes", 0)})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def music_tracks_series(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if m:
+            out.append({"date": e["date"], "tracks": m.get("tracks", 0)})
+    out.sort(key=lambda d: d["date"])
+    return out
+
+
+def music_top_artists(entries, start=None, end=None):
+    counts = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if not m:
+            continue
+        for a in m.get("top_artists") or []:
+            counts[a["name"]] = counts.get(a["name"], 0) + a.get("count", 0)
+    rows = [{"name": n, "count": c} for n, c in counts.items()]
+    rows.sort(key=lambda d: d["count"], reverse=True)
+    return rows[:10]
+
+
+def music_feature_averages(entries, start=None, end=None):
+    keys = ("valence", "energy", "danceability", "tempo")
+    buckets = {k: [] for k in keys}
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if not m:
+            continue
+        for k in keys:
+            if m.get(k) is not None:
+                buckets[k].append(m[k])
+    return {k: (round(sum(v) / len(v), 3 if k != "tempo" else 1) if v else None)
+            for k, v in buckets.items()}
+
+
+def music_mood_pairs(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        mood = _entry_mood(e)
+        if m and m.get("valence") is not None and mood is not None:
+            out.append({"valence": m["valence"], "mood": mood})
+    return out
+
+
+def music_stats(entries, start=None, end=None):
+    rows = [_entry_music(e) for e in _filter_entries_by_date(entries, start, end)]
+    rows = [m for m in rows if m]
+    if not rows:
+        return {"avg_minutes": None, "total_tracks": 0, "days": 0}
+    mins = [m.get("minutes", 0) for m in rows]
+    return {"avg_minutes": round(sum(mins) / len(mins)),
+            "total_tracks": sum(m.get("tracks", 0) for m in rows),
+            "days": len(rows)}
+
+
 def mood_series(entries, start, end):
     """[{date, mood}] of recorded moods, date-filtered and sorted by date.
     Entries with no mood are omitted."""
@@ -1806,6 +1896,7 @@ def analytics_payload(data):
             "mood": _entry_mood(e),
             "sleep": _entry_sleep(e),
             "rescuetime": _entry_rescuetime(e),
+            "music": _entry_music(e),
         }
         for e in data.get("entries", [])
     ]

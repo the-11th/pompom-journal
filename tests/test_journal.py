@@ -1186,3 +1186,74 @@ def test_payload_carries_rescuetime():
     journal.set_entry_rescuetime(data, "2026-06-28", {"pulse": 70, "total_min": 100})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["rescuetime"]["pulse"] == 70
+
+
+# --------------------------------------------------------------------------- #
+# Music helpers
+# --------------------------------------------------------------------------- #
+
+def _entry_music(date, minutes, tracks=10, valence=None, artists=None):
+    return {"date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+            "sleep": None, "rescuetime": None,
+            "music": {"tracks": tracks, "minutes": minutes, "distinct": tracks,
+                      "top_artists": artists or [{"name": "Phoebe Bridgers", "count": 3}],
+                      "valence": valence, "energy": None, "danceability": None,
+                      "tempo": None, "source": "spotify", "fetched": "x"}}
+
+
+def test_set_entry_music_create_update_clear():
+    data = journal._seeded()
+    journal.set_entry_music(data, "2026-06-29", {"tracks": 10, "minutes": 40})
+    assert journal.get_entry_by_date(data, "2026-06-29")["music"]["minutes"] == 40
+    journal.set_entry_music(data, "2026-06-29", {"tracks": 12, "minutes": 55})
+    assert journal.get_entry_by_date(data, "2026-06-29")["music"]["minutes"] == 55
+    assert sum(e["date"] == "2026-06-29" for e in data["entries"]) == 1
+    journal.set_entry_music(data, "2026-06-29", None)
+    assert journal.get_entry_by_date(data, "2026-06-29")["music"] is None
+
+
+def test_music_minutes_series_sorted():
+    entries = [_entry_music("2026-06-29", 40), _entry_music("2026-06-28", 90)]
+    assert journal.music_minutes_series(entries) == [
+        {"date": "2026-06-28", "minutes": 90}, {"date": "2026-06-29", "minutes": 40}]
+
+
+def test_music_top_artists_aggregated():
+    e1 = _entry_music("2026-06-28", 40, artists=[{"name": "Phoebe Bridgers", "count": 3}])
+    e2 = _entry_music("2026-06-29", 50, artists=[{"name": "Phoebe Bridgers", "count": 2},
+                                                 {"name": "Boygenius", "count": 4}])
+    top = journal.music_top_artists([e1, e2])
+    assert top[0] == {"name": "Phoebe Bridgers", "count": 5}
+    assert {"name": "Boygenius", "count": 4} in top
+
+
+def test_music_mood_pairs_requires_valence_and_mood():
+    e1 = _entry_music("2026-06-28", 40, valence=0.6); e1["mood"] = 5
+    e2 = _entry_music("2026-06-29", 50, valence=None); e2["mood"] = 4  # no valence
+    assert journal.music_mood_pairs([e1, e2]) == [{"valence": 0.6, "mood": 5}]
+
+
+def test_music_feature_averages_skip_none():
+    e1 = _entry_music("2026-06-28", 40, valence=0.6)
+    e2 = _entry_music("2026-06-29", 50, valence=0.4)
+    avg = journal.music_feature_averages([e1, e2])
+    assert avg["valence"] == 0.5 and avg["energy"] is None
+
+
+def test_music_stats_empty():
+    assert journal.music_stats([]) == {"avg_minutes": None, "total_tracks": 0, "days": 0}
+
+
+def test_load_defaults_music(tmp_path):
+    p = tmp_path / "j.json"
+    data = journal._seeded()
+    journal.upsert_entry(data, "2026-06-29", "Day", "b")
+    journal.save(str(p), data)
+    assert journal.load(str(p))["entries"][0]["music"] is None
+
+
+def test_payload_carries_music():
+    data = journal._seeded()
+    journal.set_entry_music(data, "2026-06-29", {"tracks": 10, "minutes": 40})
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["music"]["minutes"] == 40
