@@ -50,3 +50,43 @@ def test_token_error_raises():
     with pytest.raises(RuntimeError):
         oauth.exchange_code("https://x/token", "C", "S", "CODE", "cb",
                             transport=_fake("token", {"error": "bad"}, status=400))
+
+
+def test_build_authorize_url_extra_params():
+    url = oauth.build_authorize_url(
+        "https://accounts.google.com/o/oauth2/v2/auth", "CID", "http://127.0.0.1/cb",
+        "st8", "scope.x", extra={"access_type": "offline", "prompt": "consent"})
+    q = parse_qs(urlparse(url).query)
+    assert q["access_type"] == ["offline"] and q["prompt"] == ["consent"]
+    assert q["scope"] == ["scope.x"] and q["state"] == ["st8"]
+
+
+def test_exchange_code_body_auth_puts_creds_in_body():
+    resp = {"access_token": "A", "refresh_token": "R", "scope": "s", "expires_in": 3600}
+    sink = []
+    def t(method, url, headers, body):
+        sink.append((headers, body)); return 200, resp
+    tok = oauth.exchange_code("https://x/token", "CID", "SEC", "CODE", "cb",
+                              transport=t, now=1000.0, client_auth="body")
+    headers, body = sink[0]
+    assert "Authorization" not in headers
+    assert "client_id=CID" in body and "client_secret=SEC" in body
+    assert tok["access_token"] == "A"
+
+
+def test_refresh_preserves_prev_refresh_token():
+    # Google omits refresh_token on refresh; keep the stored one.
+    resp = {"access_token": "A2", "scope": "s", "expires_in": 3600}  # no refresh_token
+    def t(method, url, headers, body):
+        return 200, resp
+    tok = oauth.refresh_tokens("https://x/token", "CID", "SEC", "OLDR",
+                               transport=t, now=5.0, client_auth="body",
+                               prev={"refresh_token": "OLDR"})
+    assert tok["access_token"] == "A2"
+    assert tok["refresh_token"] == "OLDR"
+
+
+def test_normalize_keeps_response_refresh_token_over_prev():
+    raw = {"access_token": "A", "refresh_token": "NEW", "expires_in": 10}
+    tok = oauth.normalize_token_response(raw, now=0.0, prev={"refresh_token": "OLD"})
+    assert tok["refresh_token"] == "NEW"
