@@ -2,7 +2,7 @@
 
 Zero Flask imports. Network is isolated behind an injectable `transport`
 callable so no test hits the network. Endpoint URLs are passed in by each
-provider (fitbit.py, spotify.py).
+provider (google_health.py, spotify.py).
 """
 import base64
 import json

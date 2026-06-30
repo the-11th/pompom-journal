@@ -73,31 +73,46 @@ browser automatically. Close the Terminal window (or press `Ctrl+C`) to stop.
 (First time: right-click → Open → Open to get past the unidentified-developer
 warning.)
 
-## Fitbit sleep integration
+## Google Health sleep integration
 
-Connect a Fitbit account once and each night's sleep (bedtime, wake time,
-duration, and quality) auto-fills onto the matching journal day, with a
+Connect a Google Health account once and each night's sleep (bedtime, wake time,
+duration, quality, and stages) auto-fills onto the matching journal day, with a
 dedicated **Sleep** tab in analytics. No data is entered by hand. Everything
-runs locally — your Fitbit credentials and tokens live only in
-`data/integrations.json`, which is gitignored.
+runs locally — your Google credentials and tokens live only in
+`data/integrations.json`, which is gitignored. The legacy Fitbit Web API has
+been removed (it turns down September 2026); Google Health is now the sole sleep
+source.
 
 ### One-time setup
 
-1. **Register a personal Fitbit app.** Sign in at
-   [dev.fitbit.com](https://dev.fitbit.com/apps/new) and create an app with:
-   - **OAuth 2.0 Application Type:** `Personal`
-   - **Callback URL:** `http://127.0.0.1:5001/integrations/fitbit/callback`
-   - **Default Access Type:** `Read-Only`
+1. **Create a Google Cloud project and enable the Google Health API.** Go to
+   [console.cloud.google.com](https://console.cloud.google.com), create or
+   select a project, and enable the **Google Health API** for it.
 
-   After saving, copy the app's **OAuth 2.0 Client ID** and **Client Secret**.
+2. **Create an OAuth 2.0 Client ID.** In the project's **APIs & Services →
+   Credentials**, create a credential of type **Web application**. Set the
+   **Authorized redirect URI** to:
+   ```
+   http://127.0.0.1:5001/integrations/google/callback
+   ```
+   After saving, copy the **Client ID** and **Client Secret**.
 
-2. **Connect from the app.** Start todo·pup (`flask --app app run --port 5001`),
-   open http://127.0.0.1:5001/, go to the **journal** → **Manage**, and scroll to
-   the **Integrations** section at the bottom. Paste the Client ID and Client
-   Secret into the Fitbit card, click **Save credentials**, then
-   **Connect to Fitbit**. Approve the `sleep` permission on Fitbit's page.
+3. **Add the sleep scope.** On the **Data Access** page, add the scope:
+   ```
+   https://www.googleapis.com/auth/googlehealth.sleep.readonly
+   ```
 
-3. You're done. On connect, the last **30 days** of sleep are backfilled.
+4. **Add your Google account as a test user.** On the **Audience** page
+   (publishing status: **Testing**, user type: **External**), add your own
+   Google account under **Test users**.
+
+### Connect
+
+Start todo·pup, open http://127.0.0.1:5001/, go to **journal → Manage →
+Integrations** (bottom of the page). Paste the Client ID and Client Secret into
+the **Google Health** card, click **Save credentials**, then **Connect Google
+Health**. Approve the permissions on Google's consent screen. On connect, the
+last **30 days** of sleep are backfilled automatically.
 
 ### Day-to-day
 
@@ -108,13 +123,17 @@ runs locally — your Fitbit credentials and tokens live only in
   data exists — duration and quality trends, bedtime/wake consistency, sleep
   stages, a sleep-vs-mood comparison, and coverage.
 
-> **Note on "quality":** Fitbit's public API exposes sleep **efficiency**
-> (0–100) and the stage breakdown, but not the in-app Sleep Score for most apps.
-> Quality shows efficiency (labeled accordingly), and uses the Score
-> automatically if your app does return it.
+> **Note on testing-mode token expiry:** The `googlehealth.sleep.readonly` scope
+> is Restricted, so until a Google security review the app runs in Testing mode.
+> In Testing mode, OAuth refresh tokens **expire after approximately 7 days**. When
+> sync stops working, simply reconnect via the same **Connect Google Health** flow
+> (your saved credentials stay in place — just click Connect again and approve).
+> Passing Google's security review grants non-expiring tokens (out of scope for
+> personal use).
 
-The Fitbit **Client Secret** is never displayed back in the page or written to
-logs. Use **Disconnect** on the Integrations page to remove the stored tokens.
+The Google Health **Client Secret** is never displayed back in the page or
+written to logs. Use **Disconnect** on the Integrations page to remove the
+stored tokens.
 
 ## RescueTime productivity integration
 

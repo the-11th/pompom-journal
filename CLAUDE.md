@@ -36,15 +36,22 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   `todo.py`. Imports only `todo.py`'s pure validators (`_HEX_COLOR_RE`,
   `_TAG_NAME_RE`) so hex/name validation has a single source of truth.
 - **`oauth.py`** — generic OAuth2 Authorization-Code-Grant helpers (zero Flask).
-  Extracted from `fitbit.py` so every OAuth provider shares the same transport
-  seam without duplication. Functions: `build_authorize_url(authorize_url, ...)`,
-  `exchange_code(token_url, ...)`, `refresh_tokens(token_url, ...)`,
-  `token_expired(tokens, now=None)`, `normalize_token_response(raw, now=None)`,
-  `urllib_transport`. Fitbit and Spotify both delegate all OAuth calls to it
-  (thin wrappers, same public signatures).
-- **`fitbit.py`** — Fitbit-specific client (zero Flask). OAuth delegated to
-  `oauth.py`; only sleep-specific `fetch_sleep` / `parse_sleep` live here. See
-  the Integrations section below.
+  Shared by all OAuth providers (Google Health, Spotify) without duplication.
+  Functions: `build_authorize_url(authorize_url, ..., extra=None)` (`extra` dict
+  merged into the authorize query — Google passes `{"access_type":"offline",
+  "prompt":"consent"}`), `exchange_code(token_url, ..., client_auth="basic")`,
+  `refresh_tokens(token_url, ..., client_auth="basic", prev=None)` (when
+  `client_auth="body"` credentials go in the POST body instead of HTTP Basic;
+  `prev` preserves the stored refresh token when the provider omits it on
+  refresh), `token_expired(tokens, now=None)`,
+  `normalize_token_response(raw, now=None, prev=None)` (falls back to `prev`'s
+  `refresh_token` when the response omits one), `urllib_transport`. Google Health
+  and Spotify both delegate all OAuth calls to it (thin wrappers, same public
+  signatures).
+- **`google_health.py`** — Google Health sleep client (zero Flask). OAuth
+  delegated to `oauth.py` with `client_auth="body"` and authorize extras
+  `{"access_type":"offline","prompt":"consent"}`. Only sleep-specific
+  `fetch_sleep` / `parse_sleep` live here. See the Integrations section below.
 - **`rescuetime.py`** — RescueTime API client (zero Flask, API-key auth). Network
   behind an injectable `transport` (default `oauth.urllib_transport`); tests pass
   a fake. See the Integrations section below.
@@ -73,7 +80,7 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   (structured dict or null), and a `music` field (structured dict or null), all
   defaulted to `None` by `load()`.
 - **`data/integrations.json`** — third-party credential/token store (gitignored
-  via the existing `data/*` rule). Top-level keys: `fitbit` (OAuth tokens +
+  via the existing `data/*` rule). Top-level keys: `google` (OAuth tokens +
   credentials), `rescuetime` (api_key + last_sync), `spotify` (OAuth tokens +
   credentials + `taste` snapshot + `plays_buffer`). `rescuetime.api_key` is
   populated by `integrations.set_api_key`; Spotify tokens by
@@ -256,8 +263,8 @@ row — includes a `sleep-panel`, `rescuetime-panel`, and `spotify-panel` row wh
 the respective provider is connected), `journal_search.html` (live search),
 `journal_sections.html` (section management — its bottom `#sec-integrations`
 section includes `_integrations_cards.html`), `journal_sections_archive.html`
-(archived sections & tags), `_integrations_cards.html` (partial: Fitbit OAuth
-card, RescueTime API-key card, and Spotify OAuth card, each with connect/
+(archived sections & tags), `_integrations_cards.html` (partial: Google Health
+OAuth card, RescueTime API-key card, and Spotify OAuth card, each with connect/
 disconnect, last-synced, "Sync now"; rendered on the Manage page via
 `_integrations_context()`).
 
@@ -282,17 +289,19 @@ disconnect, last-synced, "Sync now"; rendered on the Manage page via
 - **`journal-richtext.js`**: click-to-edit body rendering (inline formatting +
   color-coded `@mentions`) and live mention→chip reflection.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
-- **`integrations-sync.js`** (renamed from `fitbit-sync.js`; loaded on the journal
-  entry page and the journal Manage page's `#sec-integrations` section): a self-contained per-provider
+- **`integrations-sync.js`** (loaded on the journal entry page and the journal
+  Manage page's `#sec-integrations` section): a self-contained per-provider
   registry (`PROVIDERS` array). Each entry has `{name, panelId, key, syncPath,
-  render}`. Three providers: Fitbit (`sleep-panel` / `renderSleep`), RescueTime
-  (`rescuetime-panel` / `renderRescuetime`), and Spotify (`spotify-panel` /
-  `renderMusic`; `key: "music"`). For each connected provider the entry page
-  auto-syncs in the background on load (throttled to once per hour via
-  `data-last-sync` on the panel) and re-renders the read-only panel row in place
-  (built via `textContent`; Spotify row shows 🎧 icon + minutes + tracks +
-  top artist). `#<name>-sync-now` buttons on the settings page call the same sync
-  path then `location.reload()`; button wiring works even when no panel is present.
+  render}`. Three providers: Google Health (`{ name: "google", panelId:
+  "sleep-panel", key: "sleep", syncPath: "/integrations/google/sync",
+  render: renderSleep }`), RescueTime (`rescuetime-panel` / `renderRescuetime`),
+  and Spotify (`spotify-panel` / `renderMusic`; `key: "music"`). For each
+  connected provider the entry page auto-syncs in the background on load
+  (throttled to once per hour via `data-last-sync` on the panel) and re-renders
+  the read-only panel row in place (built via `textContent`; Spotify row shows 🎧
+  icon + minutes + tracks + top artist). `#<name>-sync-now` buttons on the
+  settings page call the same sync path then `location.reload()`; button wiring
+  works even when no panel is present.
 - **`journal-sections.js`**: drag-and-drop tag reassignment on the manage page
   (native HTML5 DnD). Drop a chip in the Permanent/Temporary zone to promote/
   demote; submits a POST form (PRG reload). Progressive enhancement over the
@@ -450,24 +459,28 @@ the app: all provider logic lives in dedicated pure modules; `app.py` only route
 
 ### `oauth.py` — shared OAuth2 helpers (zero Flask)
 
-Extracted from `fitbit.py` so future OAuth providers (Spotify / Plan B) reuse the
-same transport seam without duplication. `fitbit.py` now delegates all OAuth
-operations to it; its own public signatures are unchanged.
+Shared by all OAuth providers (Google Health, Spotify) without duplication.
+Spotify and Google Health both delegate all OAuth operations to it.
 
-- `build_authorize_url(authorize_url, client_id, redirect_uri, state, scope)` → redirect URL (Authorization Code flow).
-- `exchange_code(token_url, client_id, client_secret, code, redirect_uri, transport=None, now=None)` — exchanges an authorization code for tokens via HTTP Basic auth.
-- `refresh_tokens(token_url, client_id, client_secret, refresh_token, transport=None, now=None)` — refreshes using the same Basic-auth endpoint.
+- `build_authorize_url(authorize_url, client_id, redirect_uri, state, scope, extra=None)` → redirect URL (Authorization Code flow). `extra` dict is merged into the query (Google passes `{"access_type": "offline", "prompt": "consent"}`).
+- `exchange_code(token_url, client_id, client_secret, code, redirect_uri, transport=None, now=None, client_auth="basic")` — exchanges an authorization code for tokens. `client_auth="body"` puts credentials in the POST body instead of HTTP Basic (required by Google).
+- `refresh_tokens(token_url, client_id, client_secret, refresh_token, transport=None, now=None, client_auth="basic", prev=None)` — refreshes tokens. Passes `prev` through to `normalize_token_response` so Google's omitted refresh token is preserved.
 - `token_expired(tokens, now=None)` → bool. 60-second skew margin against `expires_at`.
-- `normalize_token_response(raw, now=None)` → `{access_token, refresh_token, scope, expires_at, fetched}`.
+- `normalize_token_response(raw, now=None, prev=None)` → `{access_token, refresh_token, scope, expires_at, fetched}`. Falls back to `prev`'s `refresh_token` when the response omits one.
 - `urllib_transport(method, url, headers, body)` — default real transport; tests swap in a fake.
 
-### `fitbit.py` — Fitbit client (zero Flask)
+### `google_health.py` — Google Health sleep client (zero Flask)
 
-OAuth delegated to `oauth.py` (thin wrappers, same signatures). Only Fitbit-
-specific `fetch_sleep` and `parse_sleep` live here.
+OAuth delegated to `oauth.py` with `client_auth="body"` and authorize extras
+`{"access_type":"offline","prompt":"consent"}`. Only Google Health-specific
+`fetch_sleep` and `parse_sleep` live here.
 
-- `fetch_sleep(access_token, date, transport=None)` → raw API JSON. Calls `GET https://api.fitbit.com/1.2/user/-/sleep/date/<YYYY-MM-DD>.json`; raises `PermissionError` on 401.
-- `parse_sleep(api_json, now=None)` → sleep dict or `None`. Pure. Picks the record with `isMainSleep == true`, falls back to the longest by `minutesAsleep`; naps are ignored. `quality = score if score is not None else efficiency`. `stages` (`{deep, light, rem, wake}` minutes) is `None` for classic (non-staged) sleep.
+- `build_authorize_url(client_id, redirect_uri, state)` → authorize URL. Wraps `oauth.build_authorize_url` with the Google authorize endpoint, `_SCOPE`, and the offline/consent extras.
+- `exchange_code(client_id, client_secret, code, redirect_uri, transport=None, now=None)` — thin wrapper around `oauth.exchange_code` with `client_auth="body"`.
+- `refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None, prev=None)` — thin wrapper around `oauth.refresh_tokens` with `client_auth="body"`, `prev` threaded through.
+- `token_expired(tokens, now=None)` → `oauth.token_expired`.
+- `fetch_sleep(access_token, date, transport=None)` → raw API JSON. `GET https://health.googleapis.com/v4/users/me/dataTypes/sleep/dataPoints?pageSize=25&filter=<civil_end_time filter>`; raises `PermissionError` on 401, `RuntimeError` on other non-200.
+- `parse_sleep(api_json, now=None)` → sleep dict or `None`. Pure, defensive. Selects the longest record by interval when multiple data points exist. `start`/`end` are local-clock `"HH:MM"` derived from interval times + UTC offsets. `duration_min` from `sleepSummary` total if present, else sum of non-AWAKE stage seconds, else interval length. `stages` (`{deep, light, rem, wake}` minutes) is `None` when `sleepType == "CLASSIC"`. `efficiency` from `sleepSummary` if present, else `None`; `score` is always `None` (Google Health exposes no sleep score); `quality = score if score is not None else efficiency`. `source: "google"`.
 
 ### `rescuetime.py` — RescueTime client (zero Flask, API-key auth)
 
@@ -482,7 +495,7 @@ injectable callable, defaulting to `oauth.urllib_transport`.
 
 Same forgiving-load/atomic-save pattern as `journal.py`.
 
-- `_empty()` → `{"fitbit": {}, "rescuetime": {}, "spotify": {}}`.
+- `_empty()` → `{"google": {}, "rescuetime": {}, "spotify": {}}`.
 - `load(path)` / `save(path, data)` — forgiving read (missing → empty; corrupt → `.bak` + empty), atomic write.
 - Accessors: `get_provider`, `set_credentials`, `set_tokens`, `set_api_key`
   (stores `api_key` on a provider dict — used by RescueTime), `clear_provider`
@@ -494,9 +507,9 @@ Stored in `data/integrations.json` (covered by the existing `data/*` gitignore).
 
 ### Entry `sleep` field
 
-Added by auto-sync; `None` when no Fitbit data. `journal.load()` defaults every
-entry's `sleep` to `None` (`e.setdefault("sleep", None)`). Read-only on the form;
-a re-sync overwrites it.
+Added by auto-sync; `None` when no Google Health data. `journal.load()` defaults
+every entry's `sleep` to `None` (`e.setdefault("sleep", None)`). Read-only on
+the form; a re-sync overwrites it.
 
 ```json
 "sleep": {
@@ -504,17 +517,19 @@ a re-sync overwrites it.
   "end": "06:58",
   "duration_min": 431,
   "efficiency": 92,
-  "score": 84,
-  "quality": 84,
+  "score": null,
+  "quality": 92,
   "stages": {"deep": 71, "light": 240, "rem": 90, "wake": 30},
-  "source": "fitbit",
+  "source": "google",
   "fetched": "2026-06-29T08:12:00"
 }
 ```
 
-`score` is `null` when the API does not expose it; `stages` is `null` for classic
-sleep. **Date attribution:** Fitbit's `dateOfSleep` (morning of waking) maps to
-the journal date — last night's sleep lands on today's entry.
+`score` is always `null` (Google Health exposes no sleep score); `efficiency`
+comes from `sleepSummary` when present, else `null`; `quality = efficiency` (or
+`null`). `stages` is `null` for classic (non-staged) sleep. **Date attribution:**
+Google Health's `civil_end_time` (morning of waking) maps to the journal date —
+last night's sleep lands on today's entry.
 
 Writer: `journal.set_entry_sleep(data, date, sleep, now=None)` — get-or-creates
 the entry, sets `entry["sleep"]`, bumps `updated`. `sleep=None` clears it.
@@ -552,20 +567,25 @@ fed by `_integrations_context()`; there is no standalone integrations nav link.
 | Route | Method | Purpose |
 |---|---|---|
 | `GET /integrations` | GET | Redirect to `/journal/sections#sec-integrations` (back-compat; the UI now lives in the Manage page section). |
-| `POST /integrations/fitbit/credentials` | POST | Save Client ID/Secret (PRG + flash). |
-| `GET /integrations/fitbit/connect` | GET | Generate random `state`, build authorize URL, redirect to Fitbit. |
-| `GET /integrations/fitbit/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick 30-day backfill, redirect to `/integrations`. |
-| `POST /integrations/fitbit/disconnect` | POST | Clear Fitbit tokens + state (confirmModal-guarded). |
-| `POST /integrations/fitbit/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], sleep:{<date>: sleep\|null}}`. |
+| `POST /integrations/google/credentials` | POST | Save Client ID/Secret (PRG + flash). |
+| `GET /integrations/google/connect` | GET | Generate random `state`, build authorize URL (with `access_type=offline`/`prompt=consent`), redirect to Google. |
+| `GET /integrations/google/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick 30-day backfill, redirect to `/integrations`. |
+| `POST /integrations/google/disconnect` | POST | Clear Google tokens + state (confirmModal-guarded). |
+| `POST /integrations/google/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], sleep:{<date>: sleep\|null}}`. |
 | `POST /integrations/rescuetime/key` | POST | Save the personal API key (PRG + flash). |
 | `POST /integrations/rescuetime/disconnect` | POST | Clear the key + last_sync (confirmModal-guarded). |
 | `POST /integrations/rescuetime/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], data:{<date>: rescuetime\|null}}`. |
 
-**Fitbit sync internals**: for each target date lacking `entry.sleep`, calls
-`fitbit.fetch_sleep` → `fitbit.parse_sleep` → `journal.set_entry_sleep`. On a
-401, calls `refresh_tokens` once and retries. Network/parse exceptions are caught
-per-day and reported in `errors` without aborting the rest. Sets `last_sync` on
-completion.
+**Google Health sync internals** (`_google_sync`): if not connected, returns early.
+Refreshes tokens (via `google_health.refresh_tokens`, passing stored tokens as
+`prev` to preserve Google's omitted refresh token) if expired. For each target
+date lacking `entry.sleep`, calls `google_health.fetch_sleep` →
+`google_health.parse_sleep` → `journal.set_entry_sleep`. On a 401, calls
+`refresh_tokens` once (with `prev`) and retries. Network/parse exceptions are
+caught per-day and reported in `errors` without aborting the rest. Sets
+`last_sync` on completion. Context helper: `_integrations_context()` exposes
+`google_connected`, `google_has_creds`, `google_client_id`, `google_last_sync`,
+`google_redirect_uri`.
 
 **RescueTime sync internals** (`_rescuetime_sync`): fetches the full recent feed
 once via `rescuetime.fetch_daily_summary`, then iterates rows. Skips dates that
@@ -738,8 +758,8 @@ for apps created after November 2024. All feature fields (`valence`/`energy`/
 `danceability`/`tempo`) will be `null` for those apps; all audio-feature charts
 and radar views degrade gracefully to the muted-note state.
 
-All three planned integrations (Fitbit sleep, RescueTime productivity, Spotify
-music) are now shipped.
+All three planned integrations (Google Health sleep, RescueTime productivity,
+Spotify music) are now shipped.
 
 ---
 
@@ -964,7 +984,7 @@ once via `/integrations` (settings page) and auto-syncs on journal page load
 (throttled to once/hour) and on-demand via "Sync now". See the Integrations section
 for full detail on routes, data models, and analytics helpers.
 
-- **Fitbit sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (Journal lens, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
+- **Google Health sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (Journal lens, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
 - **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (Journal lens, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
 - **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (Journal lens, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
 
@@ -976,11 +996,11 @@ subagent implementation, TDD). See the feature sections above for detail:
 - **Task notes + subtasks** (inline dropdown on the active list).
 - **Rich journal entries** — Discord-style inline formatting + `@mention` tagging.
 - **Mood quick-pick** — optional 1–7 per-entry mood via 7 Pompompurin GIFs.
-- **Fitbit sleep** — auto-filled `entry["sleep"]` + dedicated Sleep analytics tab.
+- **Google Health sleep** — auto-filled `entry["sleep"]` + dedicated Sleep analytics tab.
 - **RescueTime productivity** — auto-filled `entry["rescuetime"]` + Productivity analytics tab.
 - **Spotify music** — auto-filled `entry["music"]` + Music analytics tab (taste view + audio-feature charts with graceful 403 degradation).
 
-All three planned integrations (Fitbit, RescueTime, Spotify) are shipped.
+All three planned integrations (Google Health, RescueTime, Spotify) are shipped.
 
 ### Future features
 
