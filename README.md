@@ -92,8 +92,9 @@ runs locally — your Fitbit credentials and tokens live only in
    After saving, copy the app's **OAuth 2.0 Client ID** and **Client Secret**.
 
 2. **Connect from the app.** Start todo·pup (`flask --app app run --port 5001`),
-   open http://127.0.0.1:5001/, and click **Integrations** in the nav. Paste the
-   Client ID and Client Secret, click **Save credentials**, then
+   open http://127.0.0.1:5001/, go to the **journal** → **Manage**, and scroll to
+   the **Integrations** section at the bottom. Paste the Client ID and Client
+   Secret into the Fitbit card, click **Save credentials**, then
    **Connect to Fitbit**. Approve the `sleep` permission on Fitbit's page.
 
 3. You're done. On connect, the last **30 days** of sleep are backfilled.
@@ -129,9 +130,10 @@ only in `data/integrations.json` (gitignored).
    [rescuetime.com/anapi/manage](https://www.rescuetime.com/anapi/manage) and
    copy your **API key** (create one if you don't have it yet).
 
-2. **Connect from the app.** Start todo·pup, open http://127.0.0.1:5001/, click
-   **Integrations** in the nav, paste the key into the RescueTime card, and click
-   **Save key**. That's it — you're connected.
+2. **Connect from the app.** Start todo·pup, open http://127.0.0.1:5001/, go to
+   the **journal** → **Manage** → **Integrations** section at the bottom, paste the
+   key into the RescueTime card, and click **Save key**. That's it — you're
+   connected.
 
 ### Day-to-day
 
@@ -163,11 +165,11 @@ tokens live only in `data/integrations.json` (gitignored).
 
    After saving, copy the app's **Client ID** and **Client Secret** (Settings).
 
-2. **Connect from the app.** Start todo·pup, open http://127.0.0.1:5001/, click
-   **Integrations** in the nav, paste the Client ID and Client Secret into the
-   Spotify card, click **Save credentials**, then **Connect to Spotify**. Approve
-   the `user-read-recently-played` and `user-top-read` permissions on Spotify's
-   page.
+2. **Connect from the app.** Start todo·pup, open http://127.0.0.1:5001/, go to
+   the **journal** → **Manage** → **Integrations** section at the bottom, paste the
+   Client ID and Client Secret into the Spotify card, click **Save credentials**,
+   then **Connect to Spotify**. Approve the `user-read-recently-played` and
+   `user-top-read` permissions on Spotify's page.
 
 ### Day-to-day
 

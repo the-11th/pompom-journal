@@ -254,10 +254,12 @@ health, work.
 `journal_entry.html` (entry form with calendar, tag chips, numeric inputs, action
 row — includes a `sleep-panel`, `rescuetime-panel`, and `spotify-panel` row when
 the respective provider is connected), `journal_search.html` (live search),
-`journal_sections.html` (section management), `journal_sections_archive.html`
-(archived sections & tags), `integrations.html` (settings page: Fitbit OAuth card,
-RescueTime API-key card, and Spotify OAuth card, each with connect/disconnect,
-last-synced, "Sync now").
+`journal_sections.html` (section management — its bottom `#sec-integrations`
+section includes `_integrations_cards.html`), `journal_sections_archive.html`
+(archived sections & tags), `_integrations_cards.html` (partial: Fitbit OAuth
+card, RescueTime API-key card, and Spotify OAuth card, each with connect/
+disconnect, last-synced, "Sync now"; rendered on the Manage page via
+`_integrations_context()`).
 
 ### Static JS / CSS notes
 
@@ -281,7 +283,7 @@ last-synced, "Sync now").
   color-coded `@mentions`) and live mention→chip reflection.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
 - **`integrations-sync.js`** (renamed from `fitbit-sync.js`; loaded on the journal
-  entry page and the `/integrations` settings page): a self-contained per-provider
+  entry page and the journal Manage page's `#sec-integrations` section): a self-contained per-provider
   registry (`PROVIDERS` array). Each entry has `{name, panelId, key, syncPath,
   render}`. Three providers: Fitbit (`sleep-panel` / `renderSleep`), RescueTime
   (`rescuetime-panel` / `renderRescuetime`), and Spotify (`spotify-panel` /
@@ -542,11 +544,14 @@ get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
 
 ### Integrations routes (in `app.py`)
 
-`app.config["INTEGRATIONS_FILE"]` (default `data/integrations.json`) + `integrations_file()` helper, mirroring `data_file()` / `journal_file()`.
+`app.config["INTEGRATIONS_FILE"]` (default `data/integrations.json`) + `integrations_file()` helper, mirroring `data_file()` / `journal_file()`. The
+integrations UI lives as the bottom **Integrations** section
+(`#sec-integrations`) of the journal **Manage** page (`journal_sections.html`),
+fed by `_integrations_context()`; there is no standalone integrations nav link.
 
 | Route | Method | Purpose |
 |---|---|---|
-| `GET /integrations` | GET | Settings page: credentials form, connect/disconnect, last-synced, "Sync now". |
+| `GET /integrations` | GET | Redirect to `/journal/sections#sec-integrations` (back-compat; the UI now lives in the Manage page section). |
 | `POST /integrations/fitbit/credentials` | POST | Save Client ID/Secret (PRG + flash). |
 | `GET /integrations/fitbit/connect` | GET | Generate random `state`, build authorize URL, redirect to Fitbit. |
 | `GET /integrations/fitbit/callback` | GET | Validate `state` + `?error=`, exchange code, store tokens, kick 30-day backfill, redirect to `/integrations`. |
