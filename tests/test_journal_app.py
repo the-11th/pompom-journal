@@ -588,6 +588,18 @@ def test_analytics_data_entries_carry_rescuetime(client, app):
     assert any(e.get("rescuetime") for e in body["entries"])
 
 
+def test_analytics_data_entries_carry_music(client, app):
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_music(jdata, "2026-06-29",
+        {"tracks": 10, "minutes": 40, "distinct": 9, "top_artists": [],
+         "valence": None, "energy": None, "danceability": None, "tempo": None,
+         "source": "spotify", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    body = client.get("/journal/analytics/data").get_json()
+    assert any(e.get("music") for e in body["entries"])
+
+
 def test_analytics_route_not_shadowed_by_date_route(client):
     """`/journal/analytics` must hit the analytics page, not be parsed as a
     date by /journal/<date>."""

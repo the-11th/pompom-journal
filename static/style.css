@@ -2192,6 +2192,61 @@ a.tl-date:hover { color: var(--accent); }
   flex-shrink: 0;
 }
 
+/* ----- Music analytics tab ----- */
+/* Muted placeholder text inside chart panels */
+.chart-muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+/* Sub-heading inside a multi-section chart panel */
+.chart-subtitle {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 1.2rem 0 0.4rem;
+}
+/* Taste view: one block per time range */
+.music-taste-section {
+  margin: 1rem 0;
+}
+.music-taste-heading {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 0.5rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.25rem;
+}
+/* Three-column grid inside each taste range block */
+.music-taste-grid {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+.music-taste-col {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.music-taste-col-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.3rem;
+}
+.music-taste-list {
+  list-style: decimal;
+  padding-left: 1.2rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text);
+  line-height: 1.6;
+}
+
 /* ----- Integrations page ----- */
 .integrations-wrap { max-width: 640px; }
 .integration-card { margin-top: 1.2rem; padding: 1rem 1.2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }

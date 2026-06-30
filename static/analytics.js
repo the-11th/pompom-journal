@@ -31,6 +31,7 @@
     { id: "mood", label: "Mood", lens: ["journal"], needs: hasMood },
     { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
     { id: "productivity", label: "Productivity", lens: ["journal"], needs: hasRescueTime },
+    { id: "music", label: "Music", lens: ["journal"], needs: hasMusic },
     { id: "consistency", label: "Consistency", lens: ["journal"] },
     { id: "tags", label: "Tags", lens: ["journal", "task"] },
     { id: "numeric", label: "Numeric", lens: ["journal"], needs: hasNumeric },
@@ -67,6 +68,10 @@
 
   function hasRescueTime() {
     return _data.entries.some(function (e) { return rescueTimeOf(e); });
+  }
+
+  function hasMusic() {
+    return _data.entries.some(function (e) { return e && e.music && e.music.tracks; });
   }
 
   // Tasks completed within the active date range, by completed-day.
@@ -3012,6 +3017,322 @@
         ["pairs", pairs.length],
         ["correlation r", r == null ? null : U.fmt(r)],
       ]);
+    },
+  });
+
+  // ========================= Music tab charts ============================== //
+  // Mirrors the Productivity tab pattern.  All series derived from e.music
+  // (filtered by _entry_music logic: must have truthy tracks).
+
+  // Cache for the /integrations/spotify/taste endpoint.
+  var _tasteCache = null;
+
+  // Return the music dict if it has a usable tracks count, else null.
+  // Mirrors journal._entry_music.
+  function musicOf(e) {
+    var m = e && e.music;
+    if (m && typeof m === "object" && m.tracks) return m;
+    return null;
+  }
+
+  // Stat cards: avg minutes/day, total tracks, days tracked.
+  // Mirrors journal.music_stats.
+  CHARTS.push({
+    id: "music-stat-cards", panel: "music", title: "Music at a glance",
+    render: function (container, entries, sections, c) {
+      var musicEntries = entries.filter(function (e) { return musicOf(e); });
+      if (!musicEntries.length) {
+        U.empty(container, "No music data in this range."); return;
+      }
+      var mins = musicEntries.map(function (e) { return musicOf(e).minutes || 0; });
+      var avgMin = mins.reduce(function (a, b) { return a + b; }, 0) / mins.length;
+      var totalTracks = musicEntries.reduce(function (acc, e) {
+        return acc + (musicOf(e).tracks || 0);
+      }, 0);
+
+      var grid = document.createElement("div");
+      grid.className = "stat-cards";
+      statCard(grid, Math.round(avgMin) + " min", "avg per day", null);
+      statCard(grid, totalTracks, "total tracks", null);
+      statCard(grid, musicEntries.length, "days tracked", null);
+      container.appendChild(grid);
+    },
+  });
+
+  // Minutes listened over time with 7-day rolling average.
+  // Mirrors sleep-duration / productivity-pulse chart.
+  CHARTS.push({
+    id: "music-minutes", panel: "music", title: "Minutes listened over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return musicOf(e); })
+        .map(function (e) { return { date: e.date, minutes: musicOf(e).minutes || 0 }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No music data in this range."); return; }
+      var vals = series.map(function (s) { return s.minutes; });
+      var max = Math.max.apply(null, vals) || 1, min = 0, span = max - min;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
+        return { x: x, y: y };
+      }
+      var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+      var pts = series.map(function (s, i) { return ptAt(i, s.minutes); });
+      U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
+      U.drawLine(svg, pts, c.accent, 1.5);
+      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      U.text(svg, 0, 14, Math.round(max) + "m", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0m", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", Math.round(d.mean) + " min"], ["median", Math.round(d.median) + " min"],
+        ["min", Math.round(d.min) + " min"], ["max", Math.round(d.max) + " min"],
+        ["days", d.count],
+      ]);
+    },
+  });
+
+  // Top artists: horizontal bars for the top 10 aggregated across the range.
+  // Mirrors productivity-categories / music_top_artists.
+  CHARTS.push({
+    id: "music-top-artists", panel: "music", title: "Top artists",
+    render: function (container, entries, sections, c) {
+      var totals = {};
+      entries.forEach(function (e) {
+        var m = musicOf(e);
+        if (!m) return;
+        (m.top_artists || []).forEach(function (a) {
+          totals[a.name] = (totals[a.name] || 0) + (a.count || 0);
+        });
+      });
+      var rows = Object.keys(totals).map(function (k) { return { name: k, count: totals[k] }; });
+      rows.sort(function (a, b) { return b.count - a.count; });
+      rows = rows.slice(0, 10);
+      if (!rows.length) { U.empty(container, "No artist data in this range."); return; }
+
+      var maxV = rows[0].count || 1;
+      var w = 600, h = Math.max(120, rows.length * 28 + 20), pad = 0;
+      var svg = U.svg(w, h);
+      var barW = w - 180;
+      rows.forEach(function (row, i) {
+        var y = i * 28 + 10;
+        var bw = barW * (row.count / maxV);
+        U.drawBar(svg, 170, y, bw, 18, c.accent);
+        U.text(svg, 164, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, 170 + bw + 4, y + 13, String(row.count), c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
+    },
+  });
+
+  // Taste view: async fetch of /integrations/spotify/taste, rendered as themed
+  // lists of top artists / tracks / genres for short/medium/long term.
+  // Cached once per page load.
+  CHARTS.push({
+    id: "music-taste", panel: "music", title: "Your Spotify taste",
+    render: function (container, entries, sections, c) {
+      var placeholder = document.createElement("p");
+      placeholder.className = "chart-muted";
+      placeholder.textContent = "Loading taste data…";
+      container.appendChild(placeholder);
+
+      function renderTaste(taste) {
+        container.removeChild(placeholder);
+        var terms = ["short_term", "medium_term", "long_term"];
+        var termLabels = { short_term: "Last 4 weeks", medium_term: "Last 6 months", long_term: "All time" };
+        var hasAny = taste && terms.some(function (t) {
+          var td = taste[t];
+          return td && ((td.artists && td.artists.length) ||
+                        (td.tracks && td.tracks.length) ||
+                        (td.genres && td.genres.length));
+        });
+        if (!hasAny) {
+          var none = document.createElement("p");
+          none.className = "chart-muted";
+          none.textContent = "No taste data yet — connect Spotify and sync to see your listening profile.";
+          container.appendChild(none);
+          return;
+        }
+
+        terms.forEach(function (term) {
+          var td = taste[term];
+          if (!td) return;
+          var section = document.createElement("div");
+          section.className = "music-taste-section";
+          var heading = document.createElement("h4");
+          heading.className = "music-taste-heading";
+          heading.textContent = termLabels[term];
+          section.appendChild(heading);
+
+          var grid = document.createElement("div");
+          grid.className = "music-taste-grid";
+
+          function renderList(title, items, key) {
+            if (!items || !items.length) return;
+            var col = document.createElement("div");
+            col.className = "music-taste-col";
+            var t = document.createElement("div");
+            t.className = "music-taste-col-title";
+            t.textContent = title;
+            col.appendChild(t);
+            var ol = document.createElement("ol");
+            ol.className = "music-taste-list";
+            items.slice(0, 5).forEach(function (item) {
+              var li = document.createElement("li");
+              li.textContent = typeof item === "string" ? item : (item[key] || item.name || String(item));
+              ol.appendChild(li);
+            });
+            col.appendChild(ol);
+            grid.appendChild(col);
+          }
+
+          renderList("Top Artists", td.artists, "name");
+          renderList("Top Tracks", td.tracks, "name");
+          renderList("Top Genres", td.genres, "name");
+
+          section.appendChild(grid);
+          container.appendChild(section);
+        });
+      }
+
+      if (_tasteCache !== null) {
+        renderTaste(_tasteCache);
+        return;
+      }
+      fetch("/integrations/spotify/taste")
+        .then(function (resp) { return resp.ok ? resp.json() : null; })
+        .then(function (data) {
+          _tasteCache = data || {};
+          renderTaste(_tasteCache);
+        })
+        .catch(function () {
+          _tasteCache = {};
+          renderTaste(_tasteCache);
+        });
+    },
+  });
+
+  // Audio-feature charts: valence↔mood scatter + feature averages bar.
+  // Only rendered when entries have feature data (valence != null).
+  // When features are absent, renders a single muted note instead.
+  CHARTS.push({
+    id: "music-audio-features", panel: "music", title: "Audio features",
+    render: function (container, entries, sections, c) {
+      var hasFeatures = entries.some(function (e) {
+        return musicOf(e) && musicOf(e).valence != null;
+      });
+
+      if (!hasFeatures) {
+        var note = document.createElement("p");
+        note.className = "chart-muted";
+        note.textContent = "Audio features unavailable for this Spotify app.";
+        container.appendChild(note);
+        return;
+      }
+
+      // Valence ↔ mood scatter with Pearson r. Mirrors sleep-mood-scatter.
+      var pairs = entries.filter(function (e) {
+        return musicOf(e) && musicOf(e).valence != null && e.mood != null;
+      }).map(function (e) {
+        return { x: musicOf(e).valence, y: Number(e.mood) };
+      });
+
+      var scatterTitle = document.createElement("div");
+      scatterTitle.className = "chart-subtitle";
+      scatterTitle.textContent = "Valence vs. mood";
+      container.appendChild(scatterTitle);
+
+      if (pairs.length < 2) {
+        U.empty(container, "Need 2+ days with both valence and mood data.");
+      } else {
+        var xs = pairs.map(function (p) { return p.x; });
+        var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+        var xSpan = xMax - xMin || 1;
+        var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+        var w = 600, h = 240, pad = 36;
+        var svg = U.svg(w, h);
+        U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+        pairs.forEach(function (p) {
+          var x = xSpan === 0
+            ? pad + (w - pad - 10) / 2
+            : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
+          var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
+          U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
+        });
+        U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+        U.text(svg, w / 2, h - 2, "valence (x)  vs  mood (y)", c.muted,
+               { anchor: "middle", size: 9 });
+        container.appendChild(svg);
+        var r = pearson(xs, pairs.map(function (p) { return p.y; }));
+        U.statsRow(container, [
+          ["pairs", pairs.length],
+          ["correlation r", r == null ? null : U.fmt(r)],
+        ]);
+      }
+
+      // Audio-feature averages bar chart: valence/energy/danceability + normalized tempo.
+      // Mirrors music_feature_averages.
+      var FEAT_KEYS = ["valence", "energy", "danceability", "tempo"];
+      var FEAT_LABELS = ["Valence", "Energy", "Danceability", "Tempo (norm.)"];
+      var buckets = { valence: [], energy: [], danceability: [], tempo: [] };
+      entries.forEach(function (e) {
+        var m = musicOf(e);
+        if (!m) return;
+        FEAT_KEYS.forEach(function (k) {
+          var v = m[k];
+          if (v != null) buckets[k].push(v);
+        });
+      });
+      var avgs = FEAT_KEYS.map(function (k) {
+        var b = buckets[k];
+        return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
+      });
+
+      // Normalize tempo to 0–1 for display (typical BPM range 60–200).
+      var tempoIdx = 3;
+      if (avgs[tempoIdx] != null) {
+        avgs[tempoIdx] = Math.min(1, Math.max(0, (avgs[tempoIdx] - 60) / 140));
+      }
+
+      var hasAvgs = avgs.some(function (a) { return a != null; });
+      if (!hasAvgs) { return; }
+
+      var avgTitle = document.createElement("div");
+      avgTitle.className = "chart-subtitle";
+      avgTitle.textContent = "Average audio features";
+      container.appendChild(avgTitle);
+
+      var maxV = 1;
+      var w2 = 600, h2 = 180, pad2 = 34;
+      var svg2 = U.svg(w2, h2);
+      U.drawGrid(svg2, pad2, 10, w2 - pad2 - 10, h2 - pad2 - 10, 4, c);
+      var FEAT_COLORS = [c.accent, U.colorMix(c.accent, 70),
+                         U.colorMix(c.accent, 50), U.colorMix(c.muted, 70)];
+      var bw2 = (w2 - pad2 - 10) / FEAT_KEYS.length;
+      avgs.forEach(function (a, i) {
+        if (a == null) return;
+        var bh = (h2 - pad2 - 10) * (a / maxV);
+        U.drawBar(svg2, pad2 + i * bw2 + 3, 10 + (h2 - pad2 - 10) - bh, bw2 - 6, bh, FEAT_COLORS[i]);
+        U.text(svg2, pad2 + i * bw2 + bw2 / 2, 10 + (h2 - pad2 - 10) - bh - 3,
+               U.fmt(a), c.muted, { anchor: "middle", size: 9 });
+      });
+      U.drawAxis(svg2, pad2, 10, w2 - pad2 - 10, h2 - pad2 - 10, FEAT_LABELS, c);
+      container.appendChild(svg2);
+
+      U.statsRow(container, FEAT_KEYS.map(function (k, i) {
+        var raw = buckets[k].length
+          ? buckets[k].reduce(function (a, x) { return a + x; }, 0) / buckets[k].length
+          : null;
+        return [FEAT_LABELS[i].toLowerCase(), raw != null ? U.fmt(raw) : null];
+      }));
     },
   });
 

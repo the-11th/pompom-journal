@@ -955,3 +955,18 @@ def test_payload_includes_rescuetime():
          "source": "rescuetime", "fetched": "x"})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["rescuetime"]["pulse"] == 70
+
+
+# Music analytics tab — payload regression test
+# --------------------------------------------------------------------------- #
+
+def test_payload_includes_music():
+    import journal
+    data = journal._seeded()
+    journal.set_entry_music(data, "2026-06-29",
+        {"tracks": 10, "minutes": 40, "distinct": 9,
+         "top_artists": [{"name": "Phoebe Bridgers", "count": 3}],
+         "valence": 0.6, "energy": 0.7, "danceability": 0.5, "tempo": 118,
+         "source": "spotify", "fetched": "x"})
+    p = journal.analytics_payload(data)
+    assert p["entries"][0]["music"]["minutes"] == 40
