@@ -251,6 +251,20 @@ health, work.
   (`@alex_dad` → `alex dad`); the rendered highlight drops the `@`. Lookup index
   via `tag_section_index`; parsing via `extract_mentions`; mentions reflect live
   in the chip area on blur (ticking existing chips / injecting temporary ones).
+- **Inline `#numeric` capture**: `#weight 175` in the body fills a matching
+  **active numeric section** (underscores→spaces, last-write-wins; unknown names
+  ignored). Index `numeric_section_index`; parse `extract_numbers`; `journal_save`
+  merges via `base_numbers.setdefault(sid, val)` (explicit `num:` field wins, body
+  fills gaps); client highlights + reflects the value into the section field on
+  blur (`numeric-index` blob; `.numeric-highlight`).
+- **Inline `[]` task spawning**: a `[] title >due @tag` line spawns a real to-do
+  on save (`data["active"]`). Helpers `extract_task_lines`/`linked_task_ids`/
+  `rewrite_task_lines` (journal.py) + `todo.parse_due_token` (ISO/`today`/
+  `tomorrow`/weekday/`+Nd|w|m` → 23:59 local). `journal_save` spawns tasks,
+  rewrites each `[]` marker to `[task:<id>]` (**idempotent** — linked lines never
+  re-spawn), inheriting the line's `>due` + `@mention` tags; renders as a live
+  checkbox mirroring the task's done-state via the `task-ref-index` blob
+  (`.task-check*`). Inline-grammar mnemonic: **`@` tag · `#` number · `[]` task**.
 - **Mood** (`journal-mood.js`): an optional **1–7** mood per entry, picked from
   seven Pompompurin GIFs (`static/img/N-pompom.gif`) on the "What happened today"
   line, right-justified. Single-select, click again to deselect; the chosen GIF
@@ -287,7 +301,8 @@ disconnect, last-synced, "Sync now"; rendered on the Manage page via
   dependency on `analytics.js`. Origin marks: ☑ for a task occurrence, a
   section-colored ● dot for a journal one.
 - **`journal-richtext.js`**: click-to-edit body rendering (inline formatting +
-  color-coded `@mentions`) and live mention→chip reflection.
+  color-coded `@mentions`, `#numeric` highlights, and `[]`/`[task:id]` checkboxes)
+  plus live blur reflection — mention→chip, `#numeric`→field, task→checkbox.
 - **`journal-mood.js`**: the 7-GIF mood picker (select/deselect, dims the rest).
 - **`integrations-sync.js`** (loaded on the journal entry page and the journal
   Manage page's `#sec-integrations` section): a self-contained per-provider
@@ -412,7 +427,7 @@ upgrade it). The lens swaps the deeper tabs:
 | Lens | Tabs |
 |---|---|
 | Shared (always) | **Overview** · **Tags** |
-| **Journal** | Mood · Sleep · Productivity · Music · Consistency · Numeric · Coverage |
+| **Journal** | Mood · Sleep · Productivity · Music · Leading · Consistency · Numeric · Coverage |
 | **Task** | Throughput · Timeliness · Adherence · Difficulty |
 
 The old single **"Tasks"** tab was **refactored** into the Task-lens sub-tabs
@@ -922,12 +937,20 @@ What exists today:
   Suggestions section (see below), not the analytics Overview — `analytics_payload`
   no longer carries `suggestions`/`dormant`; the `journal_sections` route computes
   them directly.
+  **Leading-indicators helpers** (lagged predictor → next-day mood):
+  `lagged_correlation`, `lagged_tag_uplift`, `lagged_difficulty_effect`,
+  `leading_indicators` (ranked board), `lag_profile`, plus
+  `_predictor_by_date`/`_shift_date`/`lagged_pairs`. No new payload fields — the
+  **Leading** tab computes client-side from the existing streams (JS mirrors).
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
   (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
   recorded mood via `hasMood`), **Sleep** (gated on `hasSleep`, Journal lens
   only — see Integrations below), **Productivity** (gated on `hasRescueTime`,
   Journal lens only — see Integrations below), **Music** (gated on `hasMusic`,
-  Journal lens only — see Integrations below), Consistency (entry calendar,
+  Journal lens only — see Integrations below), **Leading** (gated on `hasLeading`
+  = mood + ≥2 predictor streams + a predictor with ≥`min_n`=5 lagged pairs;
+  Journal lens only: lag selector 0–3, ranked indicator board, lagged scatter,
+  lag-profile chart), Consistency (entry calendar,
   words/entry, gaps, time-of-day), the cross-domain **Tags** tab (journal
   frequency, trend, per-tag heatmap, co-occurrence, then task-tag frequency —
   shown in both lenses), the expanded **Numeric** tab (see below), Coverage, plus
