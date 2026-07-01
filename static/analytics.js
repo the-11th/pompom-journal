@@ -21,6 +21,9 @@
   // Section scope filter for the Numeric & Tags tabs. null = all shown; else an
   // array of selected section ids of that type. Keyed by section type.
   var _secSel = { numeric: null, tag: null };
+  // Leading-indicators tab state: selectable lag (0..3) and the currently
+  // selected indicator (a leadingIndicators row) for the detail panel.
+  var _lead = { lag: 1, selected: null };
 
   // Panel definitions. `needs` optionally gates a tab's visibility.
   // `lens` scopes a tab to one lens; tabs with no lens are shared (Overview),
@@ -29,6 +32,7 @@
     { id: "overview", label: "Overview" },
     // Journal lens
     { id: "mood", label: "Mood", lens: ["journal"], needs: hasMood },
+    { id: "leading", label: "Leading", lens: ["journal"], needs: hasLeading },
     { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
     { id: "productivity", label: "Productivity", lens: ["journal"], needs: hasRescueTime },
     { id: "music", label: "Music", lens: ["journal"], needs: hasMusic },
@@ -73,6 +77,34 @@
   function hasMusic() {
     return _data.entries.some(function (e) { return e && e.music && e.music.tracks; });
   }
+
+  // The Leading tab needs a mood target, >= 2 available predictor streams, and
+  // >= LEAD_MIN_N lagged pairs for at least one predictor at the default lag.
+  // Mirrors the Python gating from the Spec-3 design.
+  function hasLeading() {
+    if (!hasMood()) return false;
+    var entries = filterEntries();
+    var streams = availableContinuousPredictors(entries);
+    // Categorical streams count toward the "predictor stream" total too.
+    var catStreams = 0;
+    if (tagStreamsPresent(entries)) catStreams++;
+    if (hardTaskDates().length) catStreams++;
+    if (streams.length + catStreams < 2) return false;
+    // At least one predictor must reach LEAD_MIN_N lagged pairs at lag 1.
+    var target = moodByDate(entries);
+    var anyQualifies = streams.some(function (p) {
+      var pred = predictorByDate(entries, p.predictor);
+      return laggedPairs(pred, target, 1).length >= LEAD_MIN_N;
+    });
+    if (anyQualifies) return true;
+    // Or a categorical predictor with >= LEAD_MIN_N after-days.
+    var upl = laggedTagUplift(entries, target, 1, LEAD_MIN_N);
+    if (upl.length) return true;
+    var de = laggedDifficultyEffect(entries, target, 1, LEAD_MIN_N);
+    return !!de;
+  }
+
+  var LEAD_MIN_N = 5;   // minimum lagged pairs to report an indicator
 
   // Tasks completed within the active date range, by completed-day.
   function taskThroughput() {
@@ -3339,6 +3371,459 @@
     },
   });
 
+  // ================== Leading indicators tab (Spec 3) ==================== //
+  // "What predicts tomorrow's mood?" — lagged cross-domain correlations. JS
+  // mirrors of the pure journal.py helpers (_predictor_by_date / lagged_pairs /
+  // lagged_correlation / lagged_tag_uplift / lagged_difficulty_effect /
+  // leading_indicators / lag_profile). Bespoke render (like the Tags tab):
+  // a themed lag selector, a ranked board, and a detail panel (lagged scatter +
+  // lag profile). Computes entirely client-side from the existing payload.
+
+  var LEAD_LAGS = [0, 1, 2, 3];
+
+  // Human labels + origin kinds for the fixed continuous predictor descriptors.
+  var CONT_PREDICTOR_META = [
+    { predictor: ["sleep", "hours"], label: "Sleep duration", kind: "sleep" },
+    { predictor: ["sleep", "quality"], label: "Sleep quality", kind: "sleep" },
+    { predictor: ["rescuetime", "pulse"], label: "Productivity pulse", kind: "rescuetime" },
+    { predictor: ["rescuetime", "productive_min"], label: "Productive minutes", kind: "rescuetime" },
+    { predictor: ["music", "minutes"], label: "Music minutes", kind: "music" },
+    { predictor: ["music", "valence"], label: "Music valence", kind: "music" },
+  ];
+
+  // {date: value} for a continuous predictor over a set of entries. Mirrors
+  // journal._predictor_by_date. `predictor` is a [kind, key] pair.
+  function predictorByDate(entries, predictor) {
+    var kind = predictor[0], key = predictor[1];
+    var out = {};
+    entries.forEach(function (e) {
+      if (!e.date) return;
+      var v = null;
+      if (kind === "numeric") {
+        var nums = e.numbers || {};
+        if (nums[key] != null) v = Number(nums[key]);
+      } else if (kind === "sleep") {
+        var s = sleepOf(e);
+        if (s) {
+          if (key === "hours") v = s.duration_min / 60;
+          else if (s[key] != null) v = Number(s[key]);
+        }
+      } else if (kind === "rescuetime") {
+        var r = rescueTimeOf(e);
+        if (r && r[key] != null) v = Number(r[key]);
+      } else if (kind === "music") {
+        var m = musicOf(e);
+        if (m && m[key] != null) v = Number(m[key]);
+      }
+      if (v != null) out[e.date] = v;
+    });
+    return out;
+  }
+
+  // [[x, y]] pairs where x=predByDate[D], y=targetByDate[D+lag]. Mirrors
+  // journal.lagged_pairs (lag=0 = same day).
+  function laggedPairs(predByDate, targetByDate, lag) {
+    var out = [];
+    Object.keys(predByDate).forEach(function (d) {
+      var y = targetByDate[isoShift(d, lag)];
+      if (y != null) out.push([predByDate[d], y]);
+    });
+    return out;
+  }
+
+  // {r, n} lagged Pearson for one continuous predictor. Mirrors
+  // journal.lagged_correlation. Target is mood-by-date.
+  function laggedCorrelation(entries, predictor, target, lag) {
+    var pairs = laggedPairs(predictorByDate(entries, predictor), target, lag);
+    return {
+      r: pearson(pairs.map(function (p) { return p[0]; }),
+                 pairs.map(function (p) { return p[1]; })),
+      n: pairs.length,
+      pairs: pairs,
+    };
+  }
+
+  // [{name, section_id, after_mean, baseline, uplift, n}] — mean target on days
+  // AFTER a tag vs baseline. Mirrors journal.lagged_tag_uplift.
+  function laggedTagUplift(entries, target, lag, minN) {
+    var baseVals = Object.keys(target).map(function (d) { return target[d]; });
+    if (!baseVals.length) return [];
+    var baseline = baseVals.reduce(function (a, b) { return a + b; }, 0) / baseVals.length;
+    var byTag = {};   // "name|sid" -> [after-values]
+    entries.forEach(function (e) {
+      if (!e.date) return;
+      var after = target[isoShift(e.date, lag)];
+      if (after == null) return;
+      var tags = e.tags || {};
+      Object.keys(tags).forEach(function (sid) {
+        var seen = {};
+        (tags[sid] || []).forEach(function (raw) {
+          var n = String(raw).trim().toLowerCase();
+          if (!n || seen[n]) return;
+          seen[n] = true;
+          (byTag[n + "|" + sid] = byTag[n + "|" + sid] || []).push(after);
+        });
+      });
+    });
+    var out = [];
+    Object.keys(byTag).forEach(function (key) {
+      var vals = byTag[key];
+      if (vals.length < minN) return;
+      var sep = key.lastIndexOf("|");
+      var am = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+      out.push({
+        name: key.slice(0, sep), section_id: key.slice(sep + 1),
+        after_mean: am, baseline: baseline, uplift: am - baseline, n: vals.length,
+      });
+    });
+    out.sort(function (a, b) { return Math.abs(b.uplift) - Math.abs(a.uplift); });
+    return out;
+  }
+
+  // Set of YYYY-MM-DD dates a hard task was completed on.
+  function hardTaskDates() {
+    var out = [];
+    (_data.tasks ? _data.tasks.archive : []).forEach(function (t) {
+      if (t.difficulty === "hard" && t.completed) out.push(t.completed.slice(0, 10));
+    });
+    return out;
+  }
+
+  // {after_mean, baseline, uplift, n} the day AFTER a hard task vs baseline, or
+  // null under minN. Mirrors journal.lagged_difficulty_effect.
+  function laggedDifficultyEffect(entries, target, lag, minN) {
+    var baseVals = Object.keys(target).map(function (d) { return target[d]; });
+    if (!baseVals.length) return null;
+    var baseline = baseVals.reduce(function (a, b) { return a + b; }, 0) / baseVals.length;
+    var after = [];
+    hardTaskDates().forEach(function (d) {
+      var v = target[isoShift(d, lag)];
+      if (v != null) after.push(v);
+    });
+    if (after.length < minN) return null;
+    var am = after.reduce(function (a, b) { return a + b; }, 0) / after.length;
+    return { after_mean: am, baseline: baseline, uplift: am - baseline, n: after.length };
+  }
+
+  // Any tag used on any in-range entry (a categorical predictor stream exists).
+  function tagStreamsPresent(entries) {
+    return entries.some(function (e) {
+      var tags = e.tags || {};
+      return Object.keys(tags).some(function (sid) {
+        return (tags[sid] || []).some(function (t) { return String(t).trim(); });
+      });
+    });
+  }
+
+  // [{predictor, label, kind, key}] for every continuous stream with >= 1 usable
+  // value in range. Numeric predictors derived from section ids in `numbers`.
+  function availableContinuousPredictors(entries) {
+    var out = [];
+    var seen = {};
+    entries.forEach(function (e) {
+      var nums = e.numbers || {};
+      Object.keys(nums).forEach(function (sid) { if (nums[sid] != null) seen[sid] = true; });
+    });
+    Object.keys(seen).sort().forEach(function (sid) {
+      out.push({ predictor: ["numeric", sid], label: sectionNameOf(sid) || sid,
+                 kind: "numeric", key: sid });
+    });
+    CONT_PREDICTOR_META.forEach(function (m) {
+      var by = predictorByDate(entries, m.predictor);
+      if (Object.keys(by).length) {
+        out.push({ predictor: m.predictor, label: m.label, kind: m.kind,
+                   key: m.predictor[1] });
+      }
+    });
+    return out;
+  }
+
+  // Ranked leading indicators. Mirrors journal.leading_indicators. Each row:
+  // {label, kind, key, r|uplift, n, direction, predictor|section_id, mag}.
+  function leadingIndicators(entries, target, lag, minN) {
+    var rows = [];
+    availableContinuousPredictors(entries).forEach(function (p) {
+      var res = laggedCorrelation(entries, p.predictor, target, lag);
+      if (res.r == null || res.n < minN) return;
+      rows.push({ label: p.label, kind: p.kind, key: p.key, predictor: p.predictor,
+                  r: res.r, n: res.n, direction: res.r >= 0 ? "+" : "-",
+                  mag: Math.abs(res.r) });
+    });
+    laggedTagUplift(entries, target, lag, minN).forEach(function (u) {
+      rows.push({ label: u.name, kind: "tag", key: u.name, section_id: u.section_id,
+                  uplift: u.uplift, n: u.n, direction: u.uplift >= 0 ? "+" : "-",
+                  mag: Math.abs(u.uplift) / 6 });
+    });
+    var de = laggedDifficultyEffect(entries, target, lag, minN);
+    if (de) {
+      rows.push({ label: "Hard task done", kind: "difficulty", key: "hard",
+                  uplift: de.uplift, n: de.n, direction: de.uplift >= 0 ? "+" : "-",
+                  mag: Math.abs(de.uplift) / 6 });
+    }
+    rows.sort(function (a, b) { return b.mag - a.mag; });
+    return rows;
+  }
+
+  // [{lag, r, n}] for one row across LEAD_LAGS. Mirrors journal.lag_profile
+  // (categorical rows carry signed uplift in place of r).
+  function lagProfile(entries, row, target) {
+    return LEAD_LAGS.map(function (lag) {
+      if (row.kind === "tag") {
+        var m = laggedTagUplift(entries, target, lag, 1).filter(function (u) {
+          return u.name === row.key && u.section_id === row.section_id;
+        })[0];
+        return { lag: lag, r: m ? m.uplift : null, n: m ? m.n : 0 };
+      }
+      if (row.kind === "difficulty") {
+        var de = laggedDifficultyEffect(entries, target, lag, 1);
+        return { lag: lag, r: de ? de.uplift : null, n: de ? de.n : 0 };
+      }
+      var res = laggedCorrelation(entries, row.predictor, target, lag);
+      return { lag: lag, r: res.r, n: res.n };
+    });
+  }
+
+  // Origin mark for a leading-indicator row: task glyph for difficulty, a
+  // section-colored dot for tags, a stream glyph for sleep/productivity/music,
+  // a numeric-section dot otherwise.
+  var STREAM_GLYPH = { sleep: "☾", rescuetime: "◆", music: "♪" };
+  function leadOriginMark(row) {
+    if (row.kind === "difficulty") return originTaskMark();
+    if (row.kind === "tag") return originDot(sectionColorOf(row.section_id));
+    if (row.kind === "numeric") return originDot(sectionColorOf(row.key));
+    var s = document.createElement("span");
+    s.className = "lead-glyph";
+    s.textContent = STREAM_GLYPH[row.kind] || "•";
+    return s;
+  }
+
+  // The row's phrased effect + r/uplift + n text.
+  function leadEffectText(row) {
+    var sign = row.direction === "+" ? "+" : "";
+    if (row.r != null && row.uplift == null) {
+      return "next-day mood r=" + sign + U.fmt(row.r) + " (n=" + row.n + ")";
+    }
+    return "next-day mood " + sign + U.fmt(row.uplift) + " (n=" + row.n + ")";
+  }
+
+  function renderLeadTab(host, c) {
+    var entries = filterEntries();
+    var target = moodByDate(entries);
+
+    var panel = document.createElement("div");
+    panel.className = "analytics-panel";
+    var h3 = document.createElement("h3");
+    h3.textContent = "What predicts my mood?";
+    panel.appendChild(h3);
+
+    // Lag selector — themed segmented control (reuses .kind-toggle).
+    var lagRow = document.createElement("div");
+    lagRow.className = "lead-lagrow";
+    var lagLbl = document.createElement("span");
+    lagLbl.className = "lead-lag-label";
+    lagLbl.textContent = "lag (days):";
+    lagRow.appendChild(lagLbl);
+    var toggle = document.createElement("div");
+    toggle.className = "kind-toggle lead-lag-toggle";
+    LEAD_LAGS.forEach(function (lag) {
+      var opt = document.createElement("label");
+      opt.className = "kind-opt";
+      var input = document.createElement("input");
+      input.type = "radio"; input.name = "lead-lag";
+      input.value = lag; input.checked = (lag === _lead.lag);
+      input.addEventListener("change", function () {
+        _lead.lag = lag;
+        _lead.selected = null;   // re-rank; selection may no longer qualify
+        renderActivePanel();
+      });
+      opt.appendChild(input);
+      opt.appendChild(document.createTextNode(String(lag)));
+      toggle.appendChild(opt);
+    });
+    lagRow.appendChild(toggle);
+    panel.appendChild(lagRow);
+    host.appendChild(panel);
+
+    var rows = leadingIndicators(entries, target, _lead.lag, LEAD_MIN_N);
+    if (!rows.length) {
+      U.empty(host, "Not enough paired days yet to surface a leading indicator " +
+                    "at this lag. Keep journaling — it fills in over time.");
+      appendLeadFootnote(host);
+      return;
+    }
+
+    // Keep a valid selection; default to the top-ranked indicator.
+    var sel = null;
+    if (_lead.selected) {
+      sel = rows.filter(function (r) {
+        return r.kind === _lead.selected.kind && r.key === _lead.selected.key &&
+               r.section_id === _lead.selected.section_id;
+      })[0];
+    }
+    if (!sel) sel = rows[0];
+    _lead.selected = sel;
+
+    // Ranked board (reuses .drivers-list / .driver-*).
+    var boardPanel = document.createElement("div");
+    boardPanel.className = "analytics-panel";
+    var bh = document.createElement("h3");
+    bh.textContent = "Leading indicators";
+    boardPanel.appendChild(bh);
+    var list = document.createElement("div");
+    list.className = "drivers-list";
+    rows.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "driver-row lead-row" +
+        (r === sel ? " lead-selected" : "");
+      var nm = document.createElement("span");
+      nm.className = "driver-name";
+      nm.appendChild(leadOriginMark(r));
+      nm.appendChild(document.createTextNode(" " + r.label));
+      var tx = document.createElement("span");
+      tx.className = "driver-effect";
+      tx.textContent = leadEffectText(r);
+      row.appendChild(nm); row.appendChild(tx);
+      makeClickable(row, function () { _lead.selected = r; renderActivePanel(); });
+      list.appendChild(row);
+    });
+    boardPanel.appendChild(list);
+    host.appendChild(boardPanel);
+
+    // Detail panel: lagged scatter + lag profile for the selected indicator.
+    renderLeadDetail(host, entries, target, sel, c);
+    appendLeadFootnote(host);
+  }
+
+  function appendLeadFootnote(host) {
+    var f = document.createElement("p");
+    f.className = "lead-footnote";
+    f.textContent = "Correlation, not causation. Lag = " + _lead.lag +
+                    " day" + (_lead.lag === 1 ? "" : "s") + ".";
+    host.appendChild(f);
+  }
+
+  function renderLeadDetail(host, entries, target, row, c) {
+    var panel = document.createElement("div");
+    panel.className = "analytics-panel";
+    var h3 = document.createElement("h3");
+    h3.textContent = "Detail: " + row.label;
+    panel.appendChild(h3);
+
+    // Lagged scatter — only for continuous predictors (categorical has no x).
+    if (row.predictor) {
+      var res = laggedCorrelation(entries, row.predictor, target, _lead.lag);
+      var pairs = res.pairs;
+      if (pairs.length >= 2) {
+        var w = 600, h = 240, pad = 36;
+        var svg = U.svg(w, h);
+        var xs = pairs.map(function (p) { return p[0]; });
+        var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+        var xSpan = (xMax - xMin) || 1;
+        var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+        U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+        var color = row.kind === "numeric" ? (sectionColorOf(row.key) || c.accent) : c.accent;
+        function px(x) {
+          return (xMax - xMin) === 0 ? pad + (w - pad - 10) / 2
+            : pad + (w - pad - 10) * ((x - xMin) / xSpan);
+        }
+        function py(y) { return 10 + (h - pad - 10) * (1 - (y - yMin) / ySpan); }
+        pairs.forEach(function (p) {
+          U.drawDot(svg, px(p[0]), py(p[1]), 3, U.colorMix(color, 80));
+        });
+        // Least-squares line over the (x, mood) pairs.
+        var lr = leastSquares(xs, pairs.map(function (p) { return p[1]; }));
+        if (lr) {
+          U.drawLine(svg, [
+            { x: px(xMin), y: py(lr.slope * xMin + lr.intercept) },
+            { x: px(xMax), y: py(lr.slope * xMax + lr.intercept) },
+          ], c.accent, 1.5);
+        }
+        U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+        U.text(svg, w / 2, h - 2,
+               row.label + " (day D)  vs  mood (day D+" + _lead.lag + ")",
+               c.muted, { anchor: "middle", size: 9 });
+        panel.appendChild(svg);
+        U.statsRow(panel, [["points", res.n],
+                           ["correlation r", res.r == null ? null : U.fmt(res.r)]]);
+      } else {
+        U.empty(panel, "Not enough lagged pairs to plot at this lag.");
+      }
+    } else {
+      // Categorical: show after-vs-baseline means.
+      var stat = row.kind === "tag"
+        ? laggedTagUplift(entries, target, _lead.lag, 1).filter(function (u) {
+            return u.name === row.key && u.section_id === row.section_id; })[0]
+        : laggedDifficultyEffect(entries, target, _lead.lag, 1);
+      if (stat) {
+        U.statsRow(panel, [
+          ["mood after", U.fmt(stat.after_mean)],
+          ["baseline", U.fmt(stat.baseline)],
+          ["uplift", (stat.uplift >= 0 ? "+" : "") + U.fmt(stat.uplift)],
+          ["days", stat.n],
+        ]);
+      } else {
+        U.empty(panel, "No after-days at this lag.");
+      }
+    }
+
+    // Lag-profile mini-chart: r (or uplift) at each lag, peak highlighted.
+    var prof = lagProfile(entries, row, target);
+    var withVal = prof.filter(function (p) { return p.r != null; });
+    if (withVal.length) {
+      var sub = document.createElement("div");
+      sub.className = "chart-subtitle";
+      sub.textContent = row.predictor ? "Correlation by lag (peak highlighted)"
+                                      : "Uplift by lag (peak highlighted)";
+      panel.appendChild(sub);
+      var pw = 320, ph = 150, ppad = 28;
+      var psvg = U.svg(pw, ph);
+      var vals = withVal.map(function (p) { return p.r; });
+      var absMax = Math.max.apply(null, vals.map(Math.abs)) || 1;
+      var lo = -absMax, hi = absMax, span = hi - lo;
+      // zero baseline
+      var y0 = 10 + (ph - ppad - 10) * (1 - (0 - lo) / span);
+      psvg.appendChild(U.svgEl("line", {
+        x1: ppad, y1: y0, x2: pw - 10, y2: y0, stroke: c.border, "stroke-width": 1 }));
+      var peak = withVal.reduce(function (a, b) {
+        return Math.abs(b.r) > Math.abs(a.r) ? b : a; });
+      var n = prof.length;
+      var pts = [];
+      prof.forEach(function (p, i) {
+        var x = ppad + (pw - ppad - 10) * (n === 1 ? 0.5 : i / (n - 1));
+        if (p.r == null) return;
+        var y = 10 + (ph - ppad - 10) * (1 - (p.r - lo) / span);
+        pts.push({ x: x, y: y });
+        var isPeak = (p.lag === peak.lag);
+        U.drawDot(psvg, x, y, isPeak ? 4.5 : 3, isPeak ? c.accent : c.muted);
+      });
+      U.drawLine(psvg, pts, c.accent, 1.2);
+      U.drawAxis(psvg, ppad, 10, pw - ppad - 10, ph - ppad - 10,
+                 prof.map(function (p) { return "L" + p.lag; }), c);
+      panel.appendChild(psvg);
+    }
+
+    host.appendChild(panel);
+  }
+
+  // Ordinary least-squares over parallel x/y arrays -> {slope, intercept} or
+  // null. (linearRegression above works over day-indexed series; this variant
+  // fits mood against an arbitrary predictor value.)
+  function leastSquares(xs, ys) {
+    var n = xs.length;
+    if (n < 2) return null;
+    var mx = xs.reduce(function (a, b) { return a + b; }, 0) / n;
+    var my = ys.reduce(function (a, b) { return a + b; }, 0) / n;
+    var sxx = 0, sxy = 0;
+    for (var i = 0; i < n; i++) {
+      sxx += (xs[i] - mx) * (xs[i] - mx);
+      sxy += (xs[i] - mx) * (ys[i] - my);
+    }
+    if (sxx === 0) return null;
+    var slope = sxy / sxx;
+    return { slope: slope, intercept: my - slope * mx };
+  }
+
   // ===================== Tags tab (search + overview) ==================== //
   // A dedicated, bespoke renderer (not part of the CHARTS loop): a search box +
   // datalist of all known tag names, an async per-tag fetch of
@@ -3959,6 +4444,12 @@
     // search results replace), so it bypasses the generic CHARTS loop.
     if (_activeTab === "tags") {
       renderTagsTab(host, c);
+      return;
+    }
+
+    // The Leading tab is bespoke too (lag selector + ranked board + detail).
+    if (_activeTab === "leading") {
+      renderLeadTab(host, c);
       return;
     }
 

@@ -258,6 +258,14 @@ separate field:
   again to clear it. Your mood powers the **Mood** analytics tab and the
   cross-domain "what moves my mood" insights.
 
+- **Leading-indicators analytics.** A **Leading** analytics tab (under the
+  *Journal* lens) answers *"what predicts tomorrow's mood?"* — it correlates each
+  predictor stream (sleep, productivity, music, journal numbers, tags, and
+  hard-task completions) on day *D* against your mood on day *D+lag*, ranks the
+  strongest leading indicators, and shows a lag-profile so you can see whether an
+  effect is same-day or genuinely predictive. Every row shows `r`/uplift and `n`;
+  it reports correlation, not causation.
+
 - **Tag backlinks.** Click any tag chip (on the Archive page or in journal search)
   to open a popover summarizing that tag across **both** tasks and journal entries;
   **Expand →** jumps to the full **Tags** analytics view, pre-searched.

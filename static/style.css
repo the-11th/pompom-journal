@@ -1550,6 +1550,17 @@ input[type="number"]::-webkit-inner-spin-button {
 .driver-name { color: var(--text); }
 .driver-effect { color: var(--accent); white-space: nowrap; }
 
+/* Leading-indicators tab (Spec 3): lag selector, ranked board, footnote. */
+.lead-lagrow { display: flex; align-items: center; gap: 0.6rem; margin: 0.2rem 0 0.4rem; flex-wrap: wrap; }
+.lead-lag-label { color: var(--muted); font-size: 0.82rem; }
+.lead-row { cursor: pointer; }
+.lead-row.lead-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.lead-glyph { color: var(--muted); }
+.lead-footnote { color: var(--muted); font-size: 0.75rem; font-style: italic; margin-top: 0.6rem; }
+
 /* Combined activity heatmap legend. */
 .heat-legend {
   display: flex;

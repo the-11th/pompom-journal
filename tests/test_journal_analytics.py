@@ -970,3 +970,227 @@ def test_payload_includes_music():
          "source": "spotify", "fetched": "x"})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["music"]["minutes"] == 40
+
+
+# --------------------------------------------------------------------------- #
+# Leading-indicators analytics (Spec 3): lagged correlations / uplift
+# --------------------------------------------------------------------------- #
+
+def _sleep_entry(date, hours=None, quality=None, mood=None):
+    e = _entry(date, mood=mood)
+    if hours is not None or quality is not None:
+        e["sleep"] = {
+            "duration_min": (hours * 60) if hours is not None else 420,
+            "quality": quality,
+            "source": "test", "fetched": "x",
+        }
+    return e
+
+
+def test_shift_date_forward_and_backward():
+    assert journal._shift_date("2026-06-01", 1) == "2026-06-02"
+    assert journal._shift_date("2026-06-30", 1) == "2026-07-01"
+    assert journal._shift_date("2026-06-01", -1) == "2026-05-31"
+    assert journal._shift_date("2026-06-01", 0) == "2026-06-01"
+
+
+def test_lagged_pairs_only_when_both_exist():
+    pred = {"2026-06-01": 5.0, "2026-06-02": 6.0, "2026-06-03": 7.0}
+    target = {"2026-06-02": 3.0, "2026-06-03": 4.0}  # no 06-01 target
+    # lag=1: pred[D] vs target[D+1]
+    got = journal.lagged_pairs(pred, target, 1)
+    # 06-01 -> 06-02 (5,3); 06-02 -> 06-03 (6,4); 06-03 -> 06-04 missing
+    assert sorted(got) == [(5.0, 3.0), (6.0, 4.0)]
+
+
+def test_lagged_pairs_lag_zero_is_same_day():
+    pred = {"2026-06-01": 5.0, "2026-06-02": 6.0}
+    target = {"2026-06-01": 3.0, "2026-06-02": 4.0}
+    got = journal.lagged_pairs(pred, target, 0)
+    assert sorted(got) == [(5.0, 3.0), (6.0, 4.0)]
+
+
+def test_predictor_by_date_numeric():
+    sid = "sleep_num"
+    entries = [
+        _entry("2026-06-01", numbers={sid: 7.0}),
+        _entry("2026-06-02", numbers={}),
+        _entry("2026-06-03", numbers={sid: 8.0}),
+    ]
+    got = journal._predictor_by_date(entries, ("numeric", sid), None, None)
+    assert got == {"2026-06-01": 7.0, "2026-06-03": 8.0}
+
+
+def test_predictor_by_date_sleep_hours_and_quality():
+    entries = [
+        _sleep_entry("2026-06-01", hours=8, quality=90),
+        _sleep_entry("2026-06-02", hours=6, quality=None),
+    ]
+    hours = journal._predictor_by_date(entries, ("sleep", "hours"), None, None)
+    assert hours == {"2026-06-01": 8.0, "2026-06-02": 6.0}
+    qual = journal._predictor_by_date(entries, ("sleep", "quality"), None, None)
+    # quality None on 06-02 is skipped
+    assert qual == {"2026-06-01": 90}
+
+
+def test_lagged_correlation_matches_pearson():
+    sid = "n"
+    # pred[D] perfectly correlated with mood[D+1]
+    entries = [
+        _entry("2026-06-01", numbers={sid: 1.0}, mood=None),
+        _entry("2026-06-02", numbers={sid: 2.0}, mood=2),
+        _entry("2026-06-03", numbers={sid: 3.0}, mood=3),
+        _entry("2026-06-04", numbers={sid: 4.0}, mood=4),
+        _entry("2026-06-05", numbers={sid: None}, mood=5),
+    ]
+    got = journal.lagged_correlation(entries, ("numeric", sid), lag=1)
+    # pairs: (1,2),(2,3),(3,4),(4,5) -> perfect +1
+    assert got["n"] == 4
+    assert round(got["r"], 6) == 1.0
+    xs = [1.0, 2.0, 3.0, 4.0]
+    ys = [2, 3, 4, 5]
+    assert round(got["r"], 9) == round(journal._pearson(xs, ys), 9)
+
+
+def test_lagged_correlation_lag_changes_pairs():
+    sid = "n"
+    entries = [
+        _entry("2026-06-01", numbers={sid: 1.0}, mood=1),
+        _entry("2026-06-02", numbers={sid: 2.0}, mood=2),
+        _entry("2026-06-03", numbers={sid: 3.0}, mood=3),
+    ]
+    lag0 = journal.lagged_correlation(entries, ("numeric", sid), lag=0)
+    lag1 = journal.lagged_correlation(entries, ("numeric", sid), lag=1)
+    assert lag0["n"] == 3   # same-day: 3 pairs
+    assert lag1["n"] == 2   # shifted: 2 pairs
+
+
+def test_lagged_tag_uplift_after_mean_vs_baseline():
+    sid = "people"
+    # tag "gym" on 06-01, 06-03; the DAY AFTER (06-02, 06-04) has mood 6.
+    entries = [
+        _entry("2026-06-01", tags={sid: ["gym"]}, mood=3),
+        _entry("2026-06-02", tags={}, mood=6),
+        _entry("2026-06-03", tags={sid: ["gym"]}, mood=3),
+        _entry("2026-06-04", tags={}, mood=6),
+        _entry("2026-06-05", tags={}, mood=2),
+    ]
+    got = journal.lagged_tag_uplift(entries, lag=1, min_n=2)
+    row = [r for r in got if r["name"] == "gym"][0]
+    assert row["n"] == 2                 # 06-02 and 06-04 moods
+    assert row["after_mean"] == 6
+    # baseline = mean of all in-range moods with a value = (3+6+3+6+2)/5 = 4
+    assert row["baseline"] == 4
+    assert row["uplift"] == 2
+    assert row["section_id"] == sid
+
+
+def test_lagged_tag_uplift_min_n_gate():
+    sid = "people"
+    entries = [
+        _entry("2026-06-01", tags={sid: ["rare"]}, mood=3),
+        _entry("2026-06-02", tags={}, mood=6),
+    ]
+    got = journal.lagged_tag_uplift(entries, lag=1, min_n=2)
+    assert [r for r in got if r["name"] == "rare"] == []
+
+
+def test_lagged_difficulty_effect_after_hard_task():
+    # Hard task completed 06-01 and 06-03; day-after moods are high.
+    tasks = {
+        "archive": [
+            {"completed": "2026-06-01T20:00:00", "difficulty": "hard"},
+            {"completed": "2026-06-03T20:00:00", "difficulty": "hard"},
+            {"completed": "2026-06-02T20:00:00", "difficulty": "easy"},
+        ]
+    }
+    entries = [
+        _entry("2026-06-01", mood=3),
+        _entry("2026-06-02", mood=7),   # day after a hard task
+        _entry("2026-06-03", mood=3),
+        _entry("2026-06-04", mood=7),   # day after a hard task
+        _entry("2026-06-05", mood=1),
+    ]
+    got = journal.lagged_difficulty_effect(entries, tasks, lag=1, min_n=2)
+    assert got["n"] == 2
+    assert got["after_mean"] == 7
+    assert got["baseline"] == 4.2       # (3+7+3+7+1)/5
+    assert round(got["uplift"], 6) == round(7 - 4.2, 6)
+
+
+def test_lagged_difficulty_effect_min_n_gate():
+    tasks = {"archive": [{"completed": "2026-06-01T20:00:00", "difficulty": "hard"}]}
+    entries = [_entry("2026-06-01", mood=3), _entry("2026-06-02", mood=6)]
+    got = journal.lagged_difficulty_effect(entries, tasks, lag=1, min_n=2)
+    assert got is None
+
+
+def test_leading_indicators_ranks_and_drops_sub_min_n():
+    sid = "n"
+    # A strong numeric predictor with enough pairs, plus a weak/sparse one.
+    entries = [
+        _entry("2026-06-01", numbers={sid: 1.0}, mood=1),
+        _entry("2026-06-02", numbers={sid: 2.0}, mood=2),
+        _entry("2026-06-03", numbers={sid: 3.0}, mood=3),
+        _entry("2026-06-04", numbers={sid: 4.0}, mood=4),
+        _entry("2026-06-05", numbers={sid: 5.0}, mood=5),
+        _entry("2026-06-06", numbers={sid: 6.0}, mood=6),
+    ]
+    got = journal.leading_indicators(entries, lag=1, min_n=5)
+    # numeric predictor has 5 lagged pairs (D->D+1 for 06-01..06-05) -> qualifies
+    kinds = [row["kind"] for row in got]
+    assert "numeric" in kinds
+    num = [r for r in got if r["kind"] == "numeric"][0]
+    assert num["n"] == 5
+    assert num["key"] == sid
+    assert num["direction"] in ("+", "-")
+
+
+def test_leading_indicators_empty_when_nothing_qualifies():
+    entries = [
+        _entry("2026-06-01", numbers={"n": 1.0}, mood=1),
+        _entry("2026-06-02", numbers={"n": 2.0}, mood=2),
+    ]
+    # min_n high enough that no predictor reaches it
+    assert journal.leading_indicators(entries, lag=1, min_n=5) == []
+
+
+def test_leading_indicators_merges_continuous_and_categorical():
+    sid_num = "n"
+    sid_tag = "people"
+    tasks = {"archive": [
+        {"completed": "2026-06-0%dT20:00:00" % d, "difficulty": "hard"}
+        for d in range(1, 6)
+    ]}
+    entries = []
+    for i in range(1, 8):
+        d = "2026-06-%02d" % i
+        entries.append(_entry(d, numbers={sid_num: float(i)},
+                              tags={sid_tag: ["gym"]}, mood=i if i <= 7 else 7))
+    got = journal.leading_indicators(entries, lag=1, min_n=2, tasks=tasks)
+    kinds = set(r["kind"] for r in got)
+    assert "numeric" in kinds
+    assert "tag" in kinds
+    # sorted by magnitude descending
+    mags = [abs(r.get("r", r.get("uplift", 0))) for r in got]
+    assert mags == sorted(mags, reverse=True)
+
+
+def test_lag_profile_r_per_lag_and_peak():
+    sid = "n"
+    # Build so the correlation peaks at lag=1 (pred[D] == mood[D+1]).
+    entries = [
+        _entry("2026-06-01", numbers={sid: 1.0}, mood=9),
+        _entry("2026-06-02", numbers={sid: 2.0}, mood=1),
+        _entry("2026-06-03", numbers={sid: 3.0}, mood=2),
+        _entry("2026-06-04", numbers={sid: 4.0}, mood=3),
+        _entry("2026-06-05", numbers={sid: 5.0}, mood=4),
+        _entry("2026-06-06", numbers={sid: 6.0}, mood=5),
+    ]
+    prof = journal.lag_profile(entries, ("numeric", sid), lags=(0, 1, 2, 3))
+    lags = [p["lag"] for p in prof]
+    assert lags == [0, 1, 2, 3]
+    # lag=1 should give a perfect +1 (pred[D]=i -> mood[D+1]=i)
+    lag1 = [p for p in prof if p["lag"] == 1][0]
+    assert round(lag1["r"], 6) == 1.0
+    assert lag1["n"] == 5

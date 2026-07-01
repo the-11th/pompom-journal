@@ -2035,6 +2035,303 @@ def mood_tag_uplift(entries, start=None, end=None, min_n=2):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Leading-indicators analytics: lagged cross-domain correlations / uplift.
+# "What predicts tomorrow's mood?" — correlate a predictor on day D against the
+# target (mood) on day D+lag. All pure, injectable date bounds. Mirrors the
+# same-day Overview drivers board, shifted by `lag`. See the Spec-3 design doc.
+# --------------------------------------------------------------------------- #
+
+def _shift_date(d, days):
+    """A YYYY-MM-DD date string shifted by `days` (may be negative)."""
+    return (datetime.strptime(d, "%Y-%m-%d").date()
+            + timedelta(days=days)).isoformat()
+
+
+def _predictor_by_date(entries, predictor, start, end):
+    """{date: float} for a continuous predictor over date-filtered entries that
+    carry a usable value. `predictor` is a (kind, key) descriptor:
+
+        ("numeric", sid)        -> entry["numbers"][sid]
+        ("sleep", "hours")      -> _entry_sleep(e)["duration_min"] / 60
+        ("sleep", "quality")    -> _entry_sleep(e)["quality"]
+        ("rescuetime", field)   -> _entry_rescuetime(e)[field]   (pulse/productive_min)
+        ("music", "minutes")    -> _entry_music(e)["minutes"]
+        ("music", "valence")    -> _entry_music(e)["valence"]    (None when 403)
+
+    None/absent values are skipped so callers get only usable days."""
+    kind, key = predictor
+    out = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        date = e.get("date")
+        if not date:
+            continue
+        val = None
+        if kind == "numeric":
+            nums = e.get("numbers") or {}
+            if key in nums and nums[key] is not None:
+                val = float(nums[key])
+        elif kind == "sleep":
+            s = _entry_sleep(e)
+            if s:
+                if key == "hours":
+                    val = s["duration_min"] / 60
+                elif s.get(key) is not None:
+                    val = s[key]
+        elif kind == "rescuetime":
+            r = _entry_rescuetime(e)
+            if r and r.get(key) is not None:
+                val = r[key]
+        elif kind == "music":
+            m = _entry_music(e)
+            if m and m.get(key) is not None:
+                val = m[key]
+        if val is not None:
+            out[date] = val
+    return out
+
+
+def lagged_pairs(pred_by_date, target_by_date, lag):
+    """[(x, y)] where x = pred_by_date[D] and y = target_by_date[D+lag], for
+    every date D present in both after the shift. lag=0 is same-day pairing."""
+    out = []
+    for d, x in pred_by_date.items():
+        y = target_by_date.get(_shift_date(d, lag))
+        if y is not None:
+            out.append((x, y))
+    return out
+
+
+def _target_by_date(entries, target, start, end):
+    """{date: value} for the target stream. Only mood is supported today; the
+    signature keeps `target` so a future target (e.g. pulse) slots in."""
+    if target == "mood":
+        return mood_by_date(entries, start, end)
+    # Continuous target descriptors reuse the predictor machinery.
+    if isinstance(target, (tuple, list)):
+        return _predictor_by_date(entries, tuple(target), start, end)
+    return {}
+
+
+def lagged_correlation(entries, predictor, target="mood", lag=1,
+                       start=None, end=None):
+    """{r, n} for one continuous predictor at `lag`. `r` is the Pearson r over
+    the lagged (predictor[D], target[D+lag]) pairs, or None (n < 2 / zero
+    variance); `n` is the pair count."""
+    pred = _predictor_by_date(entries, predictor, start, end)
+    tgt = _target_by_date(entries, target, start, end)
+    pairs = lagged_pairs(pred, tgt, lag)
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    return {"r": _pearson(xs, ys), "n": len(pairs)}
+
+
+def lagged_tag_uplift(entries, target="mood", lag=1, start=None, end=None,
+                      min_n=2):
+    """[{name, section_id, after_mean, baseline, uplift, n}] per tag — the mean
+    target on days AFTER a tag appears vs the baseline mean over all in-range
+    target days. Lagged sibling of `mood_tag_uplift`; sorted by |uplift| desc,
+    then name. Only tags with `n >= min_n` after-days are kept."""
+    scoped = _filter_entries_by_date(entries, start, end)
+    tgt = _target_by_date(entries, target, start, end)
+    baseline_vals = list(tgt.values())
+    if not baseline_vals:
+        return []
+    baseline = sum(baseline_vals) / len(baseline_vals)
+
+    by_tag = {}  # (name, section_id) -> [after-values]
+    for e in scoped:
+        date = e.get("date")
+        if not date:
+            continue
+        after = tgt.get(_shift_date(date, lag))
+        if after is None:
+            continue
+        for sid, names in (e.get("tags") or {}).items():
+            for raw in set(_normalize_name(n) for n in names or [] if n):
+                by_tag.setdefault((raw, sid), []).append(after)
+
+    out = []
+    for (name, sid), vals in by_tag.items():
+        if len(vals) < min_n:
+            continue
+        after_mean = sum(vals) / len(vals)
+        out.append({
+            "name": name,
+            "section_id": sid,
+            "after_mean": after_mean,
+            "baseline": baseline,
+            "uplift": after_mean - baseline,
+            "n": len(vals),
+        })
+    out.sort(key=lambda r: (-abs(r["uplift"]), r["name"]))
+    return out
+
+
+def _hard_task_dates(tasks):
+    """Set of YYYY-MM-DD dates on which a `hard` task was completed. `tasks` is
+    the merged task payload (or raw store) — reads its `archive` bucket."""
+    out = set()
+    for t in (tasks or {}).get("archive", []):
+        diff = (t.get("difficulty") or "").strip().lower()
+        if diff == "hard" and t.get("completed"):
+            out.add(t["completed"][:10])
+    return out
+
+
+def lagged_difficulty_effect(entries, tasks, target="mood", lag=1,
+                             start=None, end=None, min_n=2):
+    """{after_mean, baseline, uplift, n} — the mean target the day AFTER a hard
+    task was completed vs the baseline over all in-range target days. Returns
+    None when fewer than `min_n` after-days qualify. Task completion dates come
+    from the merged task payload (`tasks["archive"]`)."""
+    tgt = _target_by_date(entries, target, start, end)
+    baseline_vals = list(tgt.values())
+    if not baseline_vals:
+        return None
+    baseline = sum(baseline_vals) / len(baseline_vals)
+    hard_dates = _hard_task_dates(tasks)
+    after = []
+    for d in hard_dates:
+        v = tgt.get(_shift_date(d, lag))
+        if v is not None:
+            after.append(v)
+    if len(after) < min_n:
+        return None
+    after_mean = sum(after) / len(after)
+    return {"after_mean": after_mean, "baseline": baseline,
+            "uplift": after_mean - baseline, "n": len(after)}
+
+
+# Human labels + origin kinds for the continuous predictor descriptors.
+_CONT_PREDICTOR_LABELS = {
+    ("sleep", "hours"): ("Sleep duration", "sleep"),
+    ("sleep", "quality"): ("Sleep quality", "sleep"),
+    ("rescuetime", "pulse"): ("Productivity pulse", "rescuetime"),
+    ("rescuetime", "productive_min"): ("Productive minutes", "rescuetime"),
+    ("music", "minutes"): ("Music minutes", "music"),
+    ("music", "valence"): ("Music valence", "music"),
+}
+
+
+def _available_continuous_predictors(entries, start, end):
+    """[(predictor, label, kind, key)] for every continuous stream that has at
+    least one usable value in range. Numeric predictors are derived from the
+    section ids that appear in entry `numbers`."""
+    out = []
+    # Numeric sections (by id) present in range.
+    seen_num = set()
+    for e in _filter_entries_by_date(entries, start, end):
+        for sid, v in (e.get("numbers") or {}).items():
+            if v is not None:
+                seen_num.add(sid)
+    for sid in sorted(seen_num):
+        out.append((("numeric", sid), None, "numeric", sid))
+    # Fixed continuous streams (sleep/rescuetime/music) when present.
+    for pred, (label, kind) in _CONT_PREDICTOR_LABELS.items():
+        if _predictor_by_date(entries, pred, start, end):
+            out.append((pred, label, kind, pred[1]))
+    return out
+
+
+def leading_indicators(entries, target="mood", lag=1, start=None, end=None,
+                       min_n=5, tasks=None):
+    """Ranked [{label, kind, key, r|uplift, n, direction}] merging continuous
+    (lagged Pearson over every available predictor) and categorical (lagged tag
+    uplift + hard-task difficulty effect) leading indicators for `target` at
+    `lag`. Rows below `min_n` lagged pairs/after-days are dropped. Sorted by
+    normalized effect magnitude desc (|r| for continuous; |uplift|/6 for the
+    1..7 mood scale). `kind` is one of numeric/sleep/rescuetime/music/tag/
+    difficulty (for the client's origin marks). `direction` is "+"/"-"."""
+    rows = []
+
+    # Continuous predictors.
+    for pred, label, kind, key in _available_continuous_predictors(
+            entries, start, end):
+        res = lagged_correlation(entries, pred, target=target, lag=lag,
+                                 start=start, end=end)
+        if res["r"] is None or res["n"] < min_n:
+            continue
+        rows.append({
+            "label": label if label is not None else key,
+            "kind": kind,
+            "key": key,
+            "r": res["r"],
+            "n": res["n"],
+            "direction": "+" if res["r"] >= 0 else "-",
+            "_mag": abs(res["r"]),
+        })
+
+    # Categorical: tag presence.
+    for u in lagged_tag_uplift(entries, target=target, lag=lag,
+                               start=start, end=end, min_n=min_n):
+        rows.append({
+            "label": u["name"],
+            "kind": "tag",
+            "key": u["name"],
+            "section_id": u["section_id"],
+            "uplift": u["uplift"],
+            "n": u["n"],
+            "direction": "+" if u["uplift"] >= 0 else "-",
+            "_mag": abs(u["uplift"]) / 6.0,
+        })
+
+    # Categorical: hard-task difficulty effect.
+    de = lagged_difficulty_effect(entries, tasks, target=target, lag=lag,
+                                  start=start, end=end, min_n=min_n)
+    if de is not None:
+        rows.append({
+            "label": "Hard task done",
+            "kind": "difficulty",
+            "key": "hard",
+            "uplift": de["uplift"],
+            "n": de["n"],
+            "direction": "+" if de["uplift"] >= 0 else "-",
+            "_mag": abs(de["uplift"]) / 6.0,
+        })
+
+    rows.sort(key=lambda r: -r["_mag"])
+    for r in rows:
+        r.pop("_mag", None)
+    return rows
+
+
+def lag_profile(entries, predictor, target="mood", lags=(0, 1, 2, 3),
+                start=None, end=None):
+    """[{lag, r, n}] for one predictor across `lags` — powers the lag-profile
+    chart. Accepts a continuous predictor descriptor (tuple) OR a categorical
+    key: ("tag", name, section_id) or ("difficulty",) — for those the row's
+    `r` carries the signed uplift magnitude in place of a correlation."""
+    out = []
+    is_cont = isinstance(predictor, (tuple, list)) and predictor[0] in (
+        "numeric", "sleep", "rescuetime", "music")
+    for lag in lags:
+        if is_cont:
+            res = lagged_correlation(entries, tuple(predictor), target=target,
+                                     lag=lag, start=start, end=end)
+            out.append({"lag": lag, "r": res["r"], "n": res["n"]})
+        elif predictor and predictor[0] == "tag":
+            name = _normalize_name(predictor[1])
+            match = [u for u in lagged_tag_uplift(
+                entries, target=target, lag=lag, start=start, end=end, min_n=1)
+                if u["name"] == name]
+            if match:
+                out.append({"lag": lag, "r": match[0]["uplift"],
+                            "n": match[0]["n"]})
+            else:
+                out.append({"lag": lag, "r": None, "n": 0})
+        elif predictor and predictor[0] == "difficulty":
+            de = lagged_difficulty_effect(entries, predictor[1] if len(predictor) > 1
+                                          else None, target=target, lag=lag,
+                                          start=start, end=end, min_n=1)
+            out.append({"lag": lag,
+                        "r": de["uplift"] if de else None,
+                        "n": de["n"] if de else 0})
+        else:
+            out.append({"lag": lag, "r": None, "n": 0})
+    return out
+
+
 def analytics_payload(data):
     """The full JSON payload for the analytics page.
 

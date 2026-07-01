@@ -656,6 +656,27 @@ def test_analytics_data_entries_carry_music(client, app):
     assert any(e.get("music") for e in body["entries"])
 
 
+def test_analytics_data_carries_leading_indicator_streams(client, app):
+    """The Leading tab computes client-side from the existing payload; assert it
+    still carries every stream the JS mirrors need (mood + the per-entry
+    predictor streams + the task payload with completed/difficulty)."""
+    import journal
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "", "mood": "5"})
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_sleep(jdata, "2026-06-15", {
+        "duration_min": 420, "quality": 90, "source": "test", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+
+    payload = client.get("/journal/analytics/data").get_json()
+    # Every entry object exposes the predictor + target fields (nullable).
+    for e in payload["entries"]:
+        for field in ("mood", "numbers", "sleep", "rescuetime", "music"):
+            assert field in e
+    # Task payload carries completion dates + difficulty (categorical predictor).
+    assert "archive" in payload["tasks"]
+
+
 def test_analytics_route_not_shadowed_by_date_route(client):
     """`/journal/analytics` must hit the analytics page, not be parsed as a
     date by /journal/<date>."""
