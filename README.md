@@ -73,6 +73,79 @@ browser automatically. Close the Terminal window (or press `Ctrl+C`) to stop.
 (First time: right-click → Open → Open to get past the unidentified-developer
 warning.)
 
+### macOS: Automator dock app (TodoPup.app)
+
+A proper macOS app that lives in `/Applications` and can be pinned to your
+Dock — no Terminal window. It starts the server in the background, opens your
+browser, and auto-quits ~2 seconds after you close the last tab.
+
+The app icon is the Pompompurin & Muffin GIF from `docs/automator/icon.gif`.
+
+#### One-time install
+
+**Step 1 — Complete the standard setup** (virtual environment + dependencies)
+if you haven't already:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Step 2 — Run the install script** from the repo root:
+
+```bash
+bash docs/automator/install.sh
+```
+
+This creates `/Applications/TodoPup.app` and copies the Automator workflow into
+it. It's safe to re-run (updates an existing app in place).
+
+**Step 3 — Bypass Gatekeeper on first launch.** macOS will block an app it
+hasn't verified. Right-click `TodoPup` in `/Applications` (or Finder), choose
+**Open**, then click **Open** in the dialog. You only need to do this once.
+
+**Step 4 — Add to your Dock** (optional). Drag `TodoPup.app` from
+`/Applications` into your Dock, or launch it once and right-click its Dock
+icon → **Options → Keep in Dock**.
+
+#### Setting the icon
+
+After installing, set the Pompompurin icon:
+
+1. Open **Finder** → navigate to `/Applications`
+2. Right-click `TodoPup` → **Get Info**
+3. Open `docs/automator/icon.gif` in **Preview**
+4. Press **⌘A** then **⌘C** to copy the image
+5. Click the small icon in the top-left of the Get Info window to select it
+6. Press **⌘V** to paste — the icon updates immediately
+
+#### Manual setup (Automator UI, if the script doesn't work)
+
+1. Open **Automator** → **New Document** → choose **Application**
+2. Search the action library for **Run Shell Script** and drag it in
+3. Set **Shell** to `/bin/bash`; set **Pass input** to `stdin`
+4. Paste the script from `docs/automator/document.wflow` (the
+   `COMMAND_STRING` value) into the action, replacing the placeholder — update
+   the `cd` path at the top to your repo location
+5. **File → Save** → save as **TodoPup** to `/Applications/`
+
+#### Updating after script changes
+
+Re-run the install script to push a new workflow into the existing app:
+
+```bash
+bash docs/automator/install.sh
+```
+
+To export changes you've made directly in Automator back to the repo:
+
+```bash
+cp /Applications/TodoPup.app/Contents/document.wflow docs/automator/document.wflow
+git add docs/automator/document.wflow
+git commit -m "Update Automator workflow"
+```
+
 ## Google Health sleep integration
 
 Connect a Google Health account once and each night's sleep (bedtime, wake time,
