@@ -36,6 +36,7 @@
     { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
     { id: "productivity", label: "Productivity", lens: ["journal"], needs: hasRescueTime },
     { id: "music", label: "Music", lens: ["journal"], needs: hasMusic },
+    { id: "usage", label: "Phone usage", lens: ["journal"], needs: hasUsage },
     { id: "consistency", label: "Consistency", lens: ["journal"] },
     { id: "tags", label: "Tags", lens: ["journal", "task"] },
     { id: "numeric", label: "Numeric", lens: ["journal"], needs: hasNumeric },
@@ -76,6 +77,10 @@
 
   function hasMusic() {
     return _data.entries.some(function (e) { return e && e.music && e.music.tracks; });
+  }
+
+  function hasUsage() {
+    return _data.entries.some(function (e) { return usageOf(e); });
   }
 
   // The Leading tab needs a mood target, >= 2 available predictor streams, and
@@ -3368,6 +3373,235 @@
           : null;
         return [STAT_LABELS[i], raw != null ? U.fmt(raw) : null];
       }));
+    },
+  });
+
+  // ======================= Phone usage tab charts ========================= //
+  // Mirrors the Productivity/Music tab pattern.  All series derived from
+  // e.usage (via usageOf, the JS mirror of usage._entry_usage).
+
+  // Return the usage dict if it has usable data, else null.
+  function usageOf(e) {
+    var u = e && e.usage;
+    if (u && typeof u === "object" && (u.screen_min || (u.top_apps && u.top_apps.length))) return u;
+    return null;
+  }
+
+  // Format screen minutes as "Xh Ym".
+  function fmtScreen(min) {
+    var m = Math.round(min);
+    var h = Math.floor(m / 60), rem = m % 60;
+    if (h === 0) return rem + "m";
+    return h + "h " + rem + "m";
+  }
+
+  // Stat cards: avg screen time/day, avg unlocks, days tracked.
+  // Mirrors usage.usage_stats.
+  CHARTS.push({
+    id: "usage-stat-cards", panel: "usage", title: "Phone usage at a glance",
+    render: function (container, entries, sections, c) {
+      var uEntries = entries.filter(function (e) { return usageOf(e); });
+      if (!uEntries.length) {
+        U.empty(container, "No phone-usage data in this range."); return;
+      }
+      var screen = uEntries.map(function (e) { return usageOf(e).screen_min || 0; });
+      var unlocks = uEntries.map(function (e) { return usageOf(e).unlocks || 0; });
+      var avgScreen = screen.reduce(function (a, b) { return a + b; }, 0) / screen.length;
+      var avgUnlocks = unlocks.reduce(function (a, b) { return a + b; }, 0) / unlocks.length;
+
+      var grid = document.createElement("div");
+      grid.className = "stat-cards";
+      statCard(grid, fmtScreen(avgScreen), "avg screen time/day", null);
+      statCard(grid, Math.round(avgUnlocks), "avg unlocks/day", null);
+      statCard(grid, uEntries.length, "days tracked", null);
+      container.appendChild(grid);
+    },
+  });
+
+  // Screen time over time with 7-day rolling average.
+  CHARTS.push({
+    id: "usage-screen-time", panel: "usage", title: "Screen time over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return usageOf(e); })
+        .map(function (e) { return { date: e.date, screen_min: usageOf(e).screen_min || 0 }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No screen-time data in this range."); return; }
+      var vals = series.map(function (s) { return s.screen_min; });
+      var max = Math.max.apply(null, vals) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = series.length === 1 ? pad + (w - pad - 10) / 2
+                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - v / max);
+        return { x: x, y: y };
+      }
+      var roll = rollingAvg(vals, 7).map(function (v, i) { return ptAt(i, v); });
+      var pts = series.map(function (s, i) { return ptAt(i, s.screen_min); });
+      U.drawLine(svg, roll, U.colorMix(c.muted, 90), 1);
+      U.drawLine(svg, pts, c.accent, 1.5);
+      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [series[0].date, series[series.length - 1].date], c);
+      U.text(svg, 0, 14, fmtScreen(max), c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", fmtScreen(d.mean)], ["median", fmtScreen(d.median)],
+        ["min", fmtScreen(d.min)], ["max", fmtScreen(d.max)],
+        ["days", d.count],
+      ]);
+    },
+  });
+
+  // Top apps aggregated over the range (bar chart). Mirrors usage.usage_top_apps.
+  CHARTS.push({
+    id: "usage-top-apps", panel: "usage", title: "Top apps",
+    render: function (container, entries, sections, c) {
+      var totals = {}, labels = {};
+      entries.forEach(function (e) {
+        var u = usageOf(e);
+        if (!u) return;
+        (u.top_apps || []).forEach(function (a) {
+          if (!a.name) return;
+          totals[a.name] = (totals[a.name] || 0) + (a.min || 0);
+          if (!labels[a.name]) labels[a.name] = a.label || a.name;
+        });
+      });
+      var rows = Object.keys(totals).map(function (k) {
+        return { name: labels[k], min: totals[k] };
+      });
+      rows.sort(function (a, b) { return b.min - a.min; });
+      rows = rows.slice(0, 8);
+      if (!rows.length) { U.empty(container, "No app data in this range."); return; }
+
+      var maxV = rows[0].min || 1;
+      var w = 600, h = Math.max(120, rows.length * 28 + 20);
+      var svg = U.svg(w, h);
+      var barW = w - 160;
+      rows.forEach(function (row, i) {
+        var y = i * 28 + 10;
+        var bw = barW * (row.min / maxV);
+        U.drawBar(svg, 150, y, bw, 18, c.accent);
+        U.text(svg, 144, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, 150 + bw + 4, y + 13, fmtScreen(row.min), c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
+    },
+  });
+
+  // Unlocks over time. Mirrors usage.usage_unlocks_series.
+  CHARTS.push({
+    id: "usage-unlocks", panel: "usage", title: "Unlocks over time",
+    render: function (container, entries, sections, c) {
+      var series = entries
+        .filter(function (e) { return usageOf(e); })
+        .map(function (e) { return { date: e.date, unlocks: usageOf(e).unlocks || 0 }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      if (!series.length) { U.empty(container, "No unlock data in this range."); return; }
+      var vals = series.map(function (s) { return s.unlocks; });
+      var max = Math.max.apply(null, vals) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var bw = (w - pad - 10) / series.length;
+      series.forEach(function (s, i) {
+        var bh = (h - pad - 10) * (s.unlocks / max);
+        U.drawBar(svg, pad + i * bw + 1, 10 + (h - pad - 10) - bh, Math.max(1, bw - 2), bh, c.accent);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 series.length > 1 ? [series[0].date, series[series.length - 1].date] : [series[0].date], c);
+      U.text(svg, 0, 14, String(max), c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+      container.appendChild(svg);
+      var d = U.describe(vals);
+      U.statsRow(container, [
+        ["mean", Math.round(d.mean)], ["median", Math.round(d.median)],
+        ["max", Math.round(d.max)], ["days", d.count],
+      ]);
+    },
+  });
+
+  // Average screen time by day of week. Mirrors usage.usage_dow_averages.
+  CHARTS.push({
+    id: "usage-dow", panel: "usage", title: "Average screen time by day of week",
+    render: function (container, entries, sections, c) {
+      var buckets = [[], [], [], [], [], [], []];
+      entries.forEach(function (e) {
+        var u = usageOf(e);
+        if (!u) return;
+        var dow = (new Date(e.date + "T00:00:00").getDay() + 6) % 7;  // Mon=0
+        buckets[dow].push(u.screen_min || 0);
+      });
+      var avgs = buckets.map(function (b) {
+        return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
+      });
+      if (avgs.every(function (a) { return a == null; })) {
+        U.empty(container, "No phone-usage data in this range."); return;
+      }
+      var nonNull = avgs.filter(function (a) { return a != null; });
+      var max = Math.max.apply(null, nonNull) || 1;
+      var w = 600, h = 180, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      var bw = (w - pad - 10) / 7;
+      avgs.forEach(function (a, i) {
+        if (a == null) return;
+        var bh = (h - pad - 10) * (a / max);
+        U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      container.appendChild(svg);
+      var ranked = DOW_NAMES
+        .map(function (n, i) { return [n, avgs[i]]; })
+        .filter(function (p) { return p[1] != null; })
+        .sort(function (a, b) { return b[1] - a[1]; });
+      U.statsRow(container, [
+        ["most", ranked[0][0] + " (" + fmtScreen(ranked[0][1]) + ")"],
+        ["least", ranked[ranked.length - 1][0] + " (" + fmtScreen(ranked[ranked.length - 1][1]) + ")"],
+      ]);
+    },
+  });
+
+  // Screen time ↔ mood scatter with Pearson r. Mirrors usage.usage_mood_pairs.
+  CHARTS.push({
+    id: "usage-mood-scatter", panel: "usage", title: "Screen time vs. mood",
+    render: function (container, entries, sections, c) {
+      var pairs = entries.filter(function (e) {
+        return usageOf(e) && e.mood != null;
+      }).map(function (e) {
+        return { x: usageOf(e).screen_min || 0, y: Number(e.mood) };
+      });
+      if (pairs.length < 2) {
+        U.empty(container, "Need 2+ days with both screen time and mood data."); return;
+      }
+      var xs = pairs.map(function (p) { return p.x; });
+      var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+      var xSpan = xMax - xMin || 1;
+      var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+      var w = 600, h = 240, pad = 36;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      pairs.forEach(function (p) {
+        var x = (xMax - xMin) === 0
+          ? pad + (w - pad - 10) / 2
+          : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
+        var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
+        U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
+      });
+      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, w / 2, h - 2, "screen min (x)  vs  mood (y)", c.muted,
+             { anchor: "middle", size: 9 });
+      container.appendChild(svg);
+      var r = pearson(xs, pairs.map(function (p) { return p.y; }));
+      U.statsRow(container, [
+        ["pairs", pairs.length],
+        ["correlation r", r == null ? null : U.fmt(r)],
+      ]);
     },
   });
 

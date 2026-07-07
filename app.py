@@ -12,7 +12,8 @@ import threading
 import time
 from datetime import datetime, timedelta
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import (Flask, flash, jsonify, redirect, render_template, request,
+                   session, url_for)
 
 import google_health
 import integrations
@@ -20,6 +21,7 @@ import journal
 import rescuetime
 import spotify
 import todo
+import usage
 
 app = Flask(__name__)
 
@@ -577,6 +579,8 @@ def _render_entry(data, date):
         spotify_connected=integrations.is_connected(istore, "spotify"),
         spotify_last_sync=integrations.last_sync(istore, "spotify"),
         music=(entry or {}).get("music"),
+        phone_connected=integrations.is_connected(istore, "phone"),
+        usage=(entry or {}).get("usage"),
     )
 
 
@@ -1019,7 +1023,18 @@ def _integrations_context():
         spotify_client_id=sp.get("client_id", ""),
         spotify_last_sync=integrations.last_sync(data, "spotify"),
         spotify_redirect_uri=_spotify_redirect_uri(),
+        phone_connected=integrations.is_connected(data, "phone"),
+        phone_last_sync=integrations.last_sync(data, "phone"),
+        phone_endpoint=_phone_endpoint(),
+        # Revealed exactly once, right after generation (never read from storage).
+        phone_token=session.pop("phone_token_once", None),
     )
+
+
+def _phone_endpoint():
+    """This request's origin + the ingest path, for display in the card and the
+    phone's config."""
+    return request.host_url.rstrip("/") + url_for("phone_ingest")
 
 
 @app.route("/integrations")
@@ -1292,6 +1307,55 @@ def rescuetime_sync_route():
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
         data = {focus: (entry or {}).get("rescuetime")}
     return jsonify({"ok": True, **result, "data": data})
+
+
+# --------------------------------------------------------------------------- #
+# Phone usage (Android push, RescueTime-style shared bearer token; no OAuth).
+# The phone POSTs usage stats to /integrations/phone/ingest; there is nothing to
+# pull, so there is no "Sync now" and no auto-sync.
+# --------------------------------------------------------------------------- #
+
+@app.route("/integrations/phone/ingest", methods=["POST"])
+def phone_ingest():
+    istore = integrations.load(integrations_file())
+    stored = integrations.get_token(istore, "phone")
+    header = request.headers.get("Authorization", "")
+    supplied = header[7:] if header.startswith("Bearer ") else ""
+    if not stored or not supplied or not secrets.compare_digest(supplied, stored):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    days = usage.parse_push(request.get_json(silent=True))
+    jdata = journal.load(journal_file())
+    written = []
+    for day in days:
+        journal.set_entry_usage(jdata, day["date"], day)
+        written.append(day["date"])
+    journal.save(journal_file(), jdata)
+    integrations.set_last_sync(istore, "phone",
+                               datetime.now().replace(microsecond=0).isoformat())
+    integrations.save(integrations_file(), istore)
+    return jsonify({"ok": True, "dates": written})
+
+
+@app.route("/integrations/phone/token", methods=["POST"])
+def phone_token():
+    data = integrations.load(integrations_file())
+    token = secrets.token_urlsafe(24)
+    integrations.set_token(data, "phone", token)
+    integrations.save(integrations_file(), data)
+    # Reveal once via the next Manage-page render (never stored in the URL/log).
+    session["phone_token_once"] = token
+    flash("Phone-usage token generated — copy it into the app now; "
+          "it won't be shown again.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/phone/disconnect", methods=["POST"])
+def phone_disconnect():
+    data = integrations.load(integrations_file())
+    integrations.clear_provider(data, "phone")
+    integrations.save(integrations_file(), data)
+    flash("Phone usage disconnected.")
+    return redirect(url_for("integrations_page"))
 
 
 if __name__ == "__main__":

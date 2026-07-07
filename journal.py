@@ -87,6 +87,7 @@ def load(path):
             e.setdefault("sleep", None)
             e.setdefault("rescuetime", None)
             e.setdefault("music", None)
+            e.setdefault("usage", None)
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -540,6 +541,20 @@ def set_entry_rescuetime(data, date, value, now=None):
     if entry is None:
         entry = upsert_entry(data, date, date, "", now=now)
     entry["rescuetime"] = value
+    entry["updated"] = now.isoformat()
+    return entry
+
+
+def set_entry_usage(data, date, value, now=None):
+    """Set (or clear, with value=None) the auto-filled phone-usage dict for
+    `date`. Same get-or-create rule as set_entry_sleep."""
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    entry["usage"] = value
     entry["updated"] = now.isoformat()
     return entry
 
@@ -1470,6 +1485,13 @@ def _entry_music(entry):
     return None
 
 
+def _entry_usage(entry):
+    u = entry.get("usage")
+    if isinstance(u, dict) and (u.get("screen_min") or u.get("top_apps")):
+        return u
+    return None
+
+
 def music_minutes_series(entries, start=None, end=None):
     out = []
     for e in _filter_entries_by_date(entries, start, end):
@@ -2361,6 +2383,7 @@ def analytics_payload(data):
             "sleep": _entry_sleep(e),
             "rescuetime": _entry_rescuetime(e),
             "music": _entry_music(e),
+            "usage": _entry_usage(e),
         }
         for e in data.get("entries", [])
     ]

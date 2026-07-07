@@ -1051,6 +1051,92 @@ def test_entry_shows_rescuetime_connect_when_not_connected(client):
 
 
 # --------------------------------------------------------------------------- #
+# Phone usage — ingest / token / disconnect (shared bearer token, no OAuth)
+# --------------------------------------------------------------------------- #
+
+def _connect_phone(app, token="TOK-123"):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_token(d, "phone", token)
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+
+
+def test_phone_generate_token(client, app):
+    r = client.post("/integrations/phone/token")
+    assert r.status_code == 302
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    assert I.get_token(d, "phone")
+    assert I.is_connected(d, "phone")
+
+
+def test_phone_ingest_requires_token(client, app):
+    _connect_phone(app)
+    r = client.post("/integrations/phone/ingest",
+                    json={"date": "2026-07-06", "screen_min": 100})
+    assert r.status_code == 401
+
+
+def test_phone_ingest_bad_token(client, app):
+    _connect_phone(app, "TOK-123")
+    r = client.post("/integrations/phone/ingest",
+                    json={"date": "2026-07-06", "screen_min": 100},
+                    headers={"Authorization": "Bearer WRONG"})
+    assert r.status_code == 401
+
+
+def test_phone_ingest_writes_day(client, app):
+    _connect_phone(app, "TOK-123")
+    r = client.post("/integrations/phone/ingest",
+                    json={"date": "2026-07-06", "screen_min": 312, "unlocks": 87,
+                          "top_apps": [{"name": "com.instagram.android",
+                                        "label": "Instagram", "min": 74}]},
+                    headers={"Authorization": "Bearer TOK-123"})
+    body = r.get_json()
+    assert body["ok"] and body["dates"] == ["2026-07-06"]
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    u = journal.get_entry_by_date(jdata, "2026-07-06")["usage"]
+    assert u["screen_min"] == 312 and u["source"] == "phone"
+    # last_sync recorded
+    assert I.last_sync(I.load(app.config["INTEGRATIONS_FILE"]), "phone")
+
+
+def test_phone_ingest_list_writes_multiple_days(client, app):
+    _connect_phone(app, "TOK-123")
+    r = client.post("/integrations/phone/ingest",
+                    json=[{"date": "2026-07-06", "screen_min": 300},
+                          {"date": "2026-07-05", "screen_min": 200},
+                          {"date": "2026-07-04", "screen_min": 100}],
+                    headers={"Authorization": "Bearer TOK-123"})
+    body = r.get_json()
+    assert set(body["dates"]) == {"2026-07-06", "2026-07-05", "2026-07-04"}
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    assert journal.get_entry_by_date(jdata, "2026-07-04")["usage"]["screen_min"] == 100
+
+
+def test_phone_disconnect(client, app):
+    _connect_phone(app, "TOK-123")
+    client.post("/integrations/phone/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "phone")
+
+
+def test_integrations_page_has_phone_card(client, app):
+    _connect_phone(app, "TOK-123")
+    r = client.get("/journal/sections")
+    assert b"Phone usage" in r.data
+    # endpoint URL surfaced for the phone config
+    assert b"/integrations/phone/ingest" in r.data
+
+
+def test_analytics_data_entries_carry_usage(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_usage(jdata, "2026-07-06",
+        {"date": "2026-07-06", "screen_min": 312, "unlocks": 87,
+         "top_apps": [], "source": "phone", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    body = client.get("/journal/analytics/data").get_json()
+    assert any(e.get("usage") for e in body["entries"])
+
+
+# --------------------------------------------------------------------------- #
 # Task 5: Spotify OAuth routes + taste endpoint
 # --------------------------------------------------------------------------- #
 

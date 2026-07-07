@@ -57,6 +57,11 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   a fake. See the Integrations section below.
 - **`spotify.py`** — Spotify Web API client (zero Flask, OAuth via `oauth.py`).
   Same injectable-transport pattern. See the Integrations section below.
+- **`usage.py`** — phone-usage (Android) parse/aggregate (zero Flask, no network,
+  no OAuth). Unlike the pull-based clients the phone *pushes* usage stats;
+  `parse_push` normalizes an inbound push (a single day dict OR a list of days)
+  into per-day `usage` dicts, plus RescueTime-style aggregation helpers. See the
+  Integrations section below.
 - **`integrations.py`** — third-party credential/token store, zero Flask imports.
   Same forgiving-load/atomic-save pattern as `journal.py`/`todo.py`. See the
   Integrations section below.
@@ -82,9 +87,11 @@ design rule is a **strict split between pure logic and the HTTP layer**:
 - **`data/integrations.json`** — third-party credential/token store (gitignored
   via the existing `data/*` rule). Top-level keys: `google` (OAuth tokens +
   credentials), `rescuetime` (api_key + last_sync), `spotify` (OAuth tokens +
-  credentials + `taste` snapshot + `plays_buffer`). `rescuetime.api_key` is
+  credentials + `taste` snapshot + `plays_buffer`), `phone` (shared ingest
+  `token` + `last_sync`). `rescuetime.api_key` is
   populated by `integrations.set_api_key`; Spotify tokens by
-  `integrations.set_tokens` and taste/buffer by `set_taste`/`set_plays_buffer`.
+  `integrations.set_tokens` and taste/buffer by `set_taste`/`set_plays_buffer`;
+  the phone ingest token by `integrations.set_token`/`get_token`.
 
 All three stores use forgiving `load()` (missing keys defaulted, corrupt files
 backed up to `.bak`) and atomic `save()` (temp file + `os.replace`). Extend
@@ -160,7 +167,9 @@ One entry per calendar date (date is the unique key). Fields: `id` (uuid4 hex),
 `mood` (integer 1–7, or null), `sleep` (structured dict or null — see the
 Integrations section for the full model; defaults to null via `load()`),
 `rescuetime` (structured dict or null — see Integrations; defaults to null),
-`music` (structured dict or null — see Integrations; defaults to null via `load()`).
+`music` (structured dict or null — see Integrations; defaults to null via `load()`),
+`usage` (phone-usage structured dict or null — see Integrations; defaults to null
+via `load()`).
 
 ### Section model
 
@@ -785,6 +794,67 @@ and radar views degrade gracefully to the muted-note state.
 All three planned integrations (Google Health sleep, RescueTime productivity,
 Spotify music) are now shipped.
 
+### Phone usage (Android push — server side shipped; Android app = Plan 2)
+
+Unlike the cloud integrations there is **no REST API** for Android usage stats;
+the data lives on-device (`UsageStatsManager`). So this integration **inverts the
+flow**: an on-phone app *pushes* daily usage to the Flask app. Auth is a
+**shared bearer token** (RescueTime-style stored secret, **not OAuth** — no
+`oauth.py` involvement); provider key `phone` in `integrations.json`; entry field
+`usage`. **Plan 1 (this) is the Flask ingestion + analytics side only** — the
+Android app + APK CI + Manage-page download QR are Plan 2.
+
+- **`usage.py`** (pure, zero Flask): `parse_push(payload, now=None)` accepts a
+  single day dict OR a **list** of days (the worker pushes the last 3 days per
+  Decision 8) → list of normalized `usage` dicts (defensive: coerce types, clamp
+  negatives to 0, cap `top_apps` at 8 sorted by minutes desc, skip days without a
+  valid YYYY-MM-DD `date`, `source:"phone"`). Aggregation helpers (injectable
+  bounds, skip entries lacking usable usage): `usage_minutes_series`,
+  `usage_unlocks_series`, `usage_top_apps`, `usage_dow_averages`,
+  `usage_mood_pairs` (screen_min↔mood, ignores null moods),
+  `usage_stats` ({avg_screen_min, avg_unlocks, days}), `_entry_usage(entry)`
+  (usable-or-None: screen_min or top_apps present).
+- **`integrations.py`**: `phone` in `_empty()`/`load()`; `set_token`/`get_token`
+  store the shared bearer token; `is_connected` true when a `token` (or
+  `api_key`) exists; `clear_provider("phone")` drops `token` + `last_sync`.
+- **`journal.py`**: `set_entry_usage(data, date, value, now=None)` (get-or-create,
+  `None` clears) mirrors `set_entry_rescuetime`; `load()` defaults every entry's
+  `usage` to `None`; `analytics_payload` carries each entry's `usage` (dict/null).
+
+Entry `usage` model:
+```json
+"usage": {
+  "date": "2026-07-06", "screen_min": 312, "unlocks": 87,
+  "top_apps": [{"name": "com.instagram.android", "label": "Instagram", "min": 74}],
+  "first_use": "07:42", "last_use": "23:15",
+  "source": "phone", "fetched": "2026-07-07T02:05:00"
+}
+```
+
+**Phone routes (in `app.py`):**
+
+| Route | Method | Purpose |
+|---|---|---|
+| `POST /integrations/phone/ingest` | POST | Validate `Authorization: Bearer <token>` (`secrets.compare_digest`; 401 on missing/mismatch), `usage.parse_push(request.get_json())` → `set_entry_usage` per day, set `last_sync`. Returns `{ok, dates:[...]}`. |
+| `POST /integrations/phone/token` | POST | Generate/rotate a random token (`secrets.token_urlsafe`); revealed **once** via a `session` one-shot + flash (never re-rendered from storage). PRG. |
+| `POST /integrations/phone/disconnect` | POST | Clear token + last_sync (confirmModal-guarded). |
+
+`_integrations_context()` adds `phone_connected`, `phone_last_sync`,
+`phone_endpoint` (this request's origin + `/integrations/phone/ingest`), and
+`phone_token` (the one-shot reveal via `session.pop("phone_token_once")`). The
+Manage-page **Phone usage** card (`_integrations_cards.html`) shows the endpoint,
+generate/rotate token, disconnect, last-received, a "Download the app"
+placeholder + a marked QR spot (Plan 2). **No "Sync now"** — data is pushed.
+
+**Phone-usage analytics tab** in `static/analytics.js` (`lens: ["journal"]`,
+gated on `hasUsage`, after Music) via `usageOf(e)` (JS mirror of `_entry_usage`):
+stat cards (avg screen time/day, avg unlocks, days tracked); screen time over
+time with 7-day rolling avg; top apps over range; unlocks over time; avg screen
+time by day of week; screen-time↔mood scatter with Pearson `r`. Entry page shows
+a read-only `.usage-row` panel (📱 + screen time + top app), server-rendered —
+**no client auto-sync** (data is pushed). CSS: `.usage-row`, `.phone-endpoint`,
+`.phone-token-reveal`, `.phone-qr`.
+
 ### Things to look out for (unverified against live APIs)
 
 All three connectors are **unit/route-tested with fake transports only — none
@@ -1064,6 +1134,17 @@ for full detail on routes, data models, and analytics helpers.
 - **Google Health sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (Journal lens, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
 - **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (Journal lens, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
 - **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (Journal lens, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
+
+### Phone usage — server side DONE (Plan 1); Android app = Plan 2
+
+The **Flask ingestion + analytics** side of the phone-usage integration is
+shipped (Plan 1): `usage.py`, the `phone` provider + shared-token routes
+(`/integrations/phone/{ingest,token,disconnect}`), `entry["usage"]` +
+`set_entry_usage`, the Manage-page **Phone usage** card, and the **Phone usage**
+analytics tab (gated on `hasUsage`). Fully `curl`-testable now. **Plan 2** (not
+built): the in-repo Android app (`android/`) that reads `UsageStatsManager` and
+pushes daily, its GitHub Actions APK build/Release, and the Manage-page download
+QR. See `docs/superpowers/specs/2026-07-07-phone-usage-integration-design.md`.
 
 ### Shipped quality-of-life features
 

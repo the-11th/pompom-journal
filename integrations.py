@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-_PROVIDERS = ("google", "rescuetime", "spotify")
+_PROVIDERS = ("google", "rescuetime", "spotify", "phone")
 
 
 def _empty():
@@ -78,6 +78,17 @@ def set_api_key(data, name, key):
     return data
 
 
+def set_token(data, name, token):
+    """Store a shared bearer token (phone-usage push auth). Distinct from the
+    RescueTime `api_key`; both count as "connected"."""
+    get_provider(data, name)["token"] = token
+    return data
+
+
+def get_token(data, name):
+    return get_provider(data, name).get("token")
+
+
 def set_taste(data, name, taste):
     get_provider(data, name)["taste"] = taste
     return data
@@ -102,6 +113,7 @@ def clear_provider(data, name):
     p.pop("last_sync", None)
     p.pop("oauth_state", None)
     p.pop("api_key", None)
+    p.pop("token", None)
     p.pop("taste", None)
     p.pop("plays_buffer", None)
     return data
@@ -112,7 +124,7 @@ def is_connected(data, name):
     tokens = p.get("tokens")
     if tokens and tokens.get("access_token"):
         return True
-    return bool(p.get("api_key"))
+    return bool(p.get("api_key") or p.get("token"))
 
 
 def last_sync(data, name):

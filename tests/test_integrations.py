@@ -3,10 +3,35 @@ import json
 import integrations as I
 
 
-def test_empty_has_three_providers():
+def test_empty_has_all_providers():
     d = I._empty()
-    assert set(d) == {"google", "rescuetime", "spotify"}
+    assert set(d) == {"google", "rescuetime", "spotify", "phone"}
     assert d["google"] == {}
+
+
+def test_phone_token_and_is_connected():
+    d = I._empty()
+    assert I.is_connected(d, "phone") is False
+    I.set_token(d, "phone", "SECRET-TOKEN")
+    assert I.get_token(d, "phone") == "SECRET-TOKEN"
+    assert I.is_connected(d, "phone") is True
+
+
+def test_phone_clear_provider_removes_token():
+    d = I._empty()
+    I.set_token(d, "phone", "SECRET-TOKEN")
+    I.set_last_sync(d, "phone", "2026-07-07T00:00:00")
+    I.clear_provider(d, "phone")
+    assert I.get_token(d, "phone") is None
+    assert I.last_sync(d, "phone") is None
+    assert I.is_connected(d, "phone") is False
+
+
+def test_phone_provider_defaulted_on_load(tmp_path):
+    p = tmp_path / "integrations.json"
+    p.write_text('{"google": {}}')
+    d = I.load(str(p))
+    assert d["phone"] == {}
 
 
 def test_load_missing_file_returns_empty(tmp_path):

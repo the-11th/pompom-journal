@@ -1249,6 +1249,25 @@ def test_set_entry_rescuetime_create_update_clear():
     assert journal.get_entry_by_date(data, "2026-06-28")["rescuetime"] is None
 
 
+def test_set_entry_usage_create_update_clear():
+    data = journal._seeded()
+    journal.set_entry_usage(data, "2026-07-06", {"screen_min": 312, "unlocks": 87})
+    assert journal.get_entry_by_date(data, "2026-07-06")["usage"]["screen_min"] == 312
+    journal.set_entry_usage(data, "2026-07-06", {"screen_min": 400, "unlocks": 90})
+    assert journal.get_entry_by_date(data, "2026-07-06")["usage"]["screen_min"] == 400
+    assert sum(e["date"] == "2026-07-06" for e in data["entries"]) == 1
+    journal.set_entry_usage(data, "2026-07-06", None)
+    assert journal.get_entry_by_date(data, "2026-07-06")["usage"] is None
+
+
+def test_load_defaults_usage_none(tmp_path):
+    p = tmp_path / "journal.json"
+    p.write_text('{"sections": [], "entries": [{"id": "a", "date": "2026-07-06", '
+                 '"title": "", "body": "", "tags": {}, "numbers": {}}]}')
+    data = journal.load(str(p))
+    assert data["entries"][0]["usage"] is None
+
+
 def test_rescuetime_pulse_series_sorted():
     entries = [_entry_rt("2026-06-29", 80, 200), _entry_rt("2026-06-28", 60, 100)]
     assert journal.rescuetime_pulse_series(entries) == [

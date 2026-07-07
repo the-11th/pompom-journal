@@ -87,6 +87,19 @@
         <a class="muted" href="{{ url_for('integrations_page') }}">Connect Spotify →</a>
       {% endif %}
     </div>
+    {# Phone usage is push-only: read-only display, no auto-sync (no data-connected). #}
+    <div class="integ-row usage-row" id="usage-panel" data-date="{{ date }}">
+      {% if usage %}
+        <span class="usage-icon">📱</span>
+        <span class="usage-screen">{{ (usage.screen_min // 60) }}h {{ (usage.screen_min % 60) }}m screen</span>
+        {% if usage.unlocks %}<span class="usage-unlocks">{{ usage.unlocks }} unlocks</span>{% endif %}
+        {% if usage.top_apps %}<span class="usage-app">{{ usage.top_apps[0].label }}</span>{% endif %}
+      {% elif phone_connected %}
+        <span class="muted">No phone-usage data for this day</span>
+      {% else %}
+        <a class="muted" href="{{ url_for('integrations_page') }}">Connect phone usage →</a>
+      {% endif %}
+    </div>
     <div class="body-field">
       {# Highlight backdrop for voice dictation — mirrors the textarea text and
          draws the pending (highlighted) dictation run behind it. #}

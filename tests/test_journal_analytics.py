@@ -500,7 +500,7 @@ def test_analytics_payload_shape():
     assert set(s) == {"id", "name", "type", "color", "tags", "unit"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
     e = payload["entries"][0]
-    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music"}
+    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage"}
     assert e["date"] == "2026-06-10"
     assert e["mood"] == 5
     assert payload["date_range"] == {"min": "2026-06-10", "max": "2026-06-10"}
