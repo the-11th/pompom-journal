@@ -820,6 +820,7 @@ a.task-check:hover { filter: brightness(1.2); }
 .manage-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .unit-input { width: 130px; }
 .pill { font-size: 0.66rem; letter-spacing: 0.5px; text-transform: uppercase; border: 1px solid var(--border); border-radius: 6px; padding: 0.05rem 0.4rem; color: var(--muted); }
+.pill-auto { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
 .perm-tags { margin: 0.7rem 0; }
 .perm-chip { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.75rem; font-size: 0.82rem; margin: 0.2rem; }
 .perm-chip .x { background: none; border: none; color: var(--danger); cursor: pointer; font: inherit; padding: 0; line-height: 1; }

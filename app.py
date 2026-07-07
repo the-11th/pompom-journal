@@ -717,6 +717,8 @@ def journal_save():
         parsed_tags, parsed_numbers = _collect_entry_fields(request.form, data)
         for s in journal.active_sections(data):
             sid = s["id"]
+            if s.get("managed"):
+                continue  # API-fed section: preserve its stored value (no form field)
             if s["type"] == "tag":
                 base_tags.pop(sid, None)
                 if sid in parsed_tags:
@@ -959,6 +961,12 @@ def _google_sync(days=7, force=False, focus_date=None, now=None):
             pass
 
     jdata = journal.load(journal_file())
+    # Backfill managed sleep-metric numeric sections from already-synced days
+    # (the per-date `entry.sleep` guard below skips them). Idempotent — no
+    # timestamp churn on repeated syncs. The single save at the end persists it.
+    for entry in jdata.get("entries", []):
+        if entry.get("sleep"):
+            journal.apply_sleep_metrics(jdata, entry["date"], entry["sleep"])
     synced, errors = [], []
     for date in _recent_dates(days, now=now):
         existing = journal.get_entry_by_date(jdata, date)
@@ -977,6 +985,7 @@ def _google_sync(days=7, force=False, focus_date=None, now=None):
             sleep = google_health.parse_sleep(raw)
             if sleep:
                 journal.set_entry_sleep(jdata, date, sleep)
+                journal.apply_sleep_metrics(jdata, date, sleep)
                 synced.append(date)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{date}: {exc}")

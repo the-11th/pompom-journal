@@ -123,7 +123,9 @@
     </div>
 
     {% set tag_sections = sections | selectattr('type', 'equalto', 'tag') | list %}
-    {% set num_sections = sections | selectattr('type', 'equalto', 'numeric') | list %}
+    {# API-managed sections (e.g. sleep metrics) are hidden from the editable
+       inputs; they still appear in Search + Numeric analytics. #}
+    {% set num_sections = sections | selectattr('type', 'equalto', 'numeric') | rejectattr('managed') | list %}
 
     {% if tag_sections %}
       <p class="label">Tag the day</p>

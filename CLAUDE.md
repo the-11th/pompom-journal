@@ -176,7 +176,18 @@ via `load()`).
 Sections are user-configurable categories that appear on every entry form.
 Fields: `id` (uuid4 hex), `name`, `type` (`"tag"` or `"numeric"`), `color` (hex),
 `tags` (permanent tag list), `archived_tags` (removed-but-recoverable tags),
-`unit` (label for numeric sections, e.g. `"hrs"`), `archived` (soft-delete bool).
+`unit` (label for numeric sections, e.g. `"hrs"`), `archived` (soft-delete bool),
+`managed` (provider id string | null) and `metric` (stable metric key | null).
+A **managed** section is API-fed (created lazily by an integration, e.g. Google
+Health sleep): it is **hidden from the entry form's editable numeric inputs**
+(`rejectattr('managed')` in `journal_entry.html`) and **skipped by the
+`journal_save` reconcile loop** (so its API-written value in `existing["numbers"]`
+survives an entry save that carries no `num:` field for it) and by
+`numeric_section_index` (so inline `#name value` capture never writes to it), but
+it still appears in Search sliders + the Numeric analytics tab (both read
+`active_sections`, which includes non-archived managed sections). `load()`
+defaults both fields to `None`; `add_section(..., managed=None, metric=None)`.
+The Manage page shows a small amber `.pill-auto` "auto" pill on managed sections.
 
 Six default tag sections are seeded on first run: people, places, food, chores,
 health, work.
@@ -566,6 +577,45 @@ last night's sleep lands on today's entry.
 
 Writer: `journal.set_entry_sleep(data, date, sleep, now=None)` — get-or-creates
 the entry, sets `entry["sleep"]`, bumps `updated`. `sleep=None` clears it.
+
+#### Sleep → API-managed numeric sections
+
+The numeric parts of `entry["sleep"]` are ALSO mirrored into **API-managed
+numeric sections** (`managed="google_sleep"`) so they are filterable via the
+Search-page range sliders and appear in the Numeric analytics tab — without
+cluttering the entry form (managed sections are hidden from the form's editable
+inputs; see the Section model). **Six** metrics (each a stable `metric` key →
+section `name`/`unit`): `sleep_duration` ("sleep duration", hrs = round(
+duration_min/60, 2)), `sleep_quality` ("sleep quality", %, = the `quality`
+field), and the four stages `deep_sleep`/`rem_sleep`/`light_sleep`/`awake_time`
+("deep/rem/light sleep", "awake time", min, from `stages.deep/rem/light/wake`).
+Sections are created **lazily** — only when a real (non-None) value for that
+metric syncs; a classic (non-staged) night creates only duration + quality.
+Registry: `journal._GOOGLE_SLEEP_PROVIDER` + `journal._SLEEP_METRIC_SECTIONS`
+(ordered `{metric, name, unit, color}`) + `_SLEEP_STAGE_METRICS` (stage-key →
+metric). Pure helpers (all in `journal.py`, zero Flask):
+
+- `sleep_metric_values(sleep) -> {metric: number}` — maps a parsed sleep dict to
+  metric values, omitting unavailable ones (duration only if `duration_min` is a
+  positive number; quality only if `quality` is a number; each stage only if
+  `stages` is a dict and that key is a number). Non-dict → `{}`.
+- `ensure_sleep_sections(data, metrics) -> {metric: section_id}` — get-or-creates
+  the managed section per metric (reuses an existing `metric`+`managed` section
+  incl. archived; idempotent; on a user name collision differentiates the name
+  via `_create_managed_sleep_section` — `"<name> google"`, then a short suffix).
+- `set_entry_number(data, date, section_id, value, now=None)` — get-or-create
+  entry (mirrors `set_entry_sleep`), validates finite number, writes
+  `entry["numbers"][section_id]=float(value)`. **Idempotent**: unchanged value →
+  no `updated` bump (avoids timestamp churn on repeated syncs).
+- `apply_sleep_metrics(data, date, sleep, now=None) -> {metric: value}` — the
+  end-to-end pure orchestrator: `sleep_metric_values` → `ensure_sleep_sections`
+  → `set_entry_number` per metric; empty/None sleep → `{}` (no sections created).
+
+`_google_sync` calls `journal.apply_sleep_metrics(jdata, date, sleep)` right
+after `set_entry_sleep` for each freshly-synced day, AND **backfills** — right
+after `journal.load(...)` it iterates existing entries with a truthy `sleep` and
+applies the metrics (the per-date `entry.sleep` guard would otherwise skip
+already-synced days); both are idempotent and persisted by the single `save`.
 
 ### Entry `rescuetime` field
 

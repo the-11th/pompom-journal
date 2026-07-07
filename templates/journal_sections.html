@@ -36,6 +36,10 @@
         <input class="tag-color-input" type="color" name="color" value="{{ s.color }}">
         <span class="tag-preview title-highlight" style="--tag-bg: {{ s.color }};">{{ s.name }}</span>
         <span class="pill">{{ s.type }}</span>
+        {% if s.managed %}
+          <span class="pill pill-auto"
+                title="Filled automatically from an integration — not editable on the entry form">auto</span>
+        {% endif %}
         {% if s.type == "numeric" %}
           <input class="unit-input" type="text" name="unit"
                  value="{{ s.unit or '' }}" placeholder="unit label">

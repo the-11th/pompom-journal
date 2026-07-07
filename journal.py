@@ -36,6 +36,26 @@ _DEFAULT_SECTIONS = [
 DEFAULT_SECTION_COLOR = "#8a8f99"
 _MAX_UNIT_LEN = 12  # keep unit labels short for the section-card layout
 
+# API-managed numeric sections: the numeric parts of a Google-Health sleep dict
+# are mirrored into hidden-from-the-form numeric sections so they are filterable
+# in Search + the Numeric analytics tab. `managed` holds this provider id and
+# `metric` the stable key; sections are created lazily (only when a real value
+# for that metric syncs). See `sleep_metric_values` / `apply_sleep_metrics`.
+_GOOGLE_SLEEP_PROVIDER = "google_sleep"
+_SLEEP_METRIC_SECTIONS = [
+    {"metric": "sleep_duration", "name": "sleep duration", "unit": "hrs", "color": "#8a7fd6"},
+    {"metric": "sleep_quality",  "name": "sleep quality",  "unit": "%",   "color": "#76a5af"},
+    {"metric": "deep_sleep",     "name": "deep sleep",     "unit": "min", "color": "#5c6bc0"},
+    {"metric": "rem_sleep",      "name": "rem sleep",      "unit": "min", "color": "#9575cd"},
+    {"metric": "light_sleep",    "name": "light sleep",    "unit": "min", "color": "#6fa8dc"},
+    {"metric": "awake_time",     "name": "awake time",     "unit": "min", "color": "#e0a955"},
+]
+# stage-dict key -> metric key (Google sleep `stages` uses deep/light/rem/wake)
+_SLEEP_STAGE_METRICS = {
+    "deep": "deep_sleep", "rem": "rem_sleep",
+    "light": "light_sleep", "wake": "awake_time",
+}
+
 
 def _empty():
     """A fresh, truly empty store (used by tests)."""
@@ -78,6 +98,8 @@ def load(path):
             s.setdefault("archived_tags", [])
             s.setdefault("unit", None)
             s.setdefault("archived", False)
+            s.setdefault("managed", None)
+            s.setdefault("metric", None)
         for e in parsed["entries"]:
             if not isinstance(e.get("tags"), dict):
                 e["tags"] = {}
@@ -158,9 +180,14 @@ def _valid_name(name):
     return bool(name) and bool(_TAG_NAME_RE.match(name))
 
 
-def add_section(data, name, type_, color, unit=None):
+def add_section(data, name, type_, color, unit=None, managed=None, metric=None):
     """Create a section. Validates name (allowlist), type, and hex color.
     Names must be unique among non-archived sections. Returns the new section.
+
+    `managed` (a provider id string, e.g. `_GOOGLE_SLEEP_PROVIDER`) and `metric`
+    (a stable metric key) mark an API-fed section: hidden from the entry form's
+    editable inputs but still present in Search + Numeric analytics. Both default
+    to None for ordinary user-created sections.
     """
     name = _normalize_name(name)
     if not _valid_name(name):
@@ -181,6 +208,8 @@ def add_section(data, name, type_, color, unit=None):
         "archived_tags": [],
         "unit": ((unit or "").strip()[:_MAX_UNIT_LEN] or None) if type_ == "numeric" else None,
         "archived": False,
+        "managed": managed or None,
+        "metric": metric or None,
     }
     data.setdefault("sections", []).append(section)
     return section
@@ -573,6 +602,132 @@ def set_entry_music(data, date, value, now=None):
     return entry
 
 
+def set_entry_number(data, date, section_id, value, now=None):
+    """Set one numeric section's value on `date`, get-or-creating the entry.
+
+    Mirrors `set_entry_sleep`'s get-or-create rule. `value` is validated the same
+    way as `upsert_entry` (finite number, cast to float). **Idempotent**: if the
+    stored value already equals the new value, `updated` is left untouched so
+    repeated syncs don't churn the timestamp. Used by `apply_sleep_metrics` to
+    write the API-managed sleep-metric sections.
+    """
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Invalid number for section {section_id!r}: {value!r}")
+    if not math.isfinite(v):
+        raise ValueError(f"Invalid number for section {section_id!r}: {value!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    nums = entry.get("numbers")
+    if not isinstance(nums, dict):
+        nums = entry["numbers"] = {}
+    if nums.get(section_id) == v:
+        return entry  # unchanged -> no timestamp churn
+    nums[section_id] = v
+    entry["updated"] = now.isoformat()
+    return entry
+
+
+# --------------------------------------------------------------------------- #
+# Google-Health sleep -> API-managed numeric sections (all pure)
+# --------------------------------------------------------------------------- #
+
+def _is_number(v):
+    """True for a finite int/float (bools excluded)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def sleep_metric_values(sleep):
+    """Map a parsed sleep dict to {metric: number}, omitting unavailable values.
+
+    - `sleep_duration` (hours, round(duration_min/60, 2)) only when `duration_min`
+      is a positive number.
+    - `sleep_quality` only when `quality` is a number.
+    - each stage metric (deep/rem/light/awake) only when `stages` is a dict and
+      that key holds a number (so classic/non-staged nights yield only duration +
+      quality).
+
+    A non-dict input yields {}. Pure."""
+    if not isinstance(sleep, dict):
+        return {}
+    out = {}
+    dur = sleep.get("duration_min")
+    if _is_number(dur) and dur > 0:
+        out["sleep_duration"] = round(dur / 60, 2)
+    quality = sleep.get("quality")
+    if _is_number(quality):
+        out["sleep_quality"] = quality
+    stages = sleep.get("stages")
+    if isinstance(stages, dict):
+        for stage_key, metric in _SLEEP_STAGE_METRICS.items():
+            v = stages.get(stage_key)
+            if _is_number(v):
+                out[metric] = v
+    return out
+
+
+def _create_managed_sleep_section(data, spec):
+    """Create the managed numeric section for one metric spec, handling a name
+    collision with a pre-existing user section by differentiating the name."""
+    base = spec["name"]
+    for candidate in (base, f"{base} google"):
+        try:
+            return add_section(data, candidate, "numeric", spec["color"],
+                               unit=spec["unit"],
+                               managed=_GOOGLE_SLEEP_PROVIDER, metric=spec["metric"])
+        except ValueError:
+            continue  # name taken by an active section -> try the next candidate
+    # Last resort: a short unique suffix so creation never crashes.
+    suffix = uuid.uuid4().hex[:4]
+    return add_section(data, f"{base} {suffix}", "numeric", spec["color"],
+                       unit=spec["unit"],
+                       managed=_GOOGLE_SLEEP_PROVIDER, metric=spec["metric"])
+
+
+def ensure_sleep_sections(data, metrics):
+    """Get-or-create the managed numeric section for each metric key.
+
+    Returns {metric: section_id}. Reuses an existing section whose `metric`
+    matches AND whose `managed` is truthy (searching ALL sections, archived
+    included, so an archived managed section is reused rather than duplicated).
+    Otherwise creates one via `_create_managed_sleep_section`. Idempotent;
+    unknown metric keys are skipped. Pure."""
+    spec_by_metric = {m["metric"]: m for m in _SLEEP_METRIC_SECTIONS}
+    out = {}
+    for metric in metrics:
+        found = next((s for s in data.get("sections", [])
+                      if s.get("metric") == metric and s.get("managed")), None)
+        if found is not None:
+            out[metric] = found["id"]
+            continue
+        spec = spec_by_metric.get(metric)
+        if spec is None:
+            continue
+        out[metric] = _create_managed_sleep_section(data, spec)["id"]
+    return out
+
+
+def apply_sleep_metrics(data, date, sleep, now=None):
+    """Mirror a parsed sleep dict's numeric parts onto `date` as managed numeric
+    sections. Creates sections lazily (only for available metrics), writes each
+    value via `set_entry_number`, and returns the {metric: value} it wrote (an
+    empty dict when the sleep dict has no usable numbers). Idempotent. Pure."""
+    values = sleep_metric_values(sleep)
+    if not values:
+        return {}
+    ids = ensure_sleep_sections(data, values.keys())
+    for metric, value in values.items():
+        sid = ids.get(metric)
+        if sid:
+            set_entry_number(data, date, sid, value, now=now)
+    return values
+
+
 # --------------------------------------------------------------------------- #
 # Rich entries: @mention tag lookup, extraction, and merge (all pure)
 # --------------------------------------------------------------------------- #
@@ -671,6 +826,8 @@ def numeric_section_index(data):
     for s in active_sections(data):
         if s.get("type") != "numeric":
             continue
+        if s.get("managed"):
+            continue  # API-fed sections aren't user-editable via inline capture
         n = _normalize_name(s.get("name"))
         if n:
             index[n] = s.get("id")

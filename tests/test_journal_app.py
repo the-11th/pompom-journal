@@ -1376,3 +1376,117 @@ def test_task_ref_index_missing_status(client):
     idx = _json.loads(m.group(1))
     assert idx["deadbeef"]["status"] == "missing"
     assert idx["deadbeef"]["done"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Sleep -> managed numeric sections (integration through the routes)
+# --------------------------------------------------------------------------- #
+
+def _connect_google(app):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R",
+                               "expires_at": 9e9})
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+
+
+def test_google_sync_creates_managed_sections_staged(client, app, monkeypatch):
+    _connect_google(app)
+    monkeypatch.setattr("google_health.fetch_sleep",
+        lambda token, date, transport=None: {"dataPoints": [{"sleep": {
+            "interval": {
+                "startTime": f"{date}T05:14:00Z", "startUtcOffset": "-25200s",
+                "endTime": f"{date}T12:58:00Z", "endUtcOffset": "-25200s"},
+            "sleepType": "STAGES",
+            "sleepStages": [
+                {"stageType": "DEEP", "duration": "4260s"},
+                {"stageType": "LIGHT", "duration": "14400s"},
+                {"stageType": "REM", "duration": "5400s"},
+                {"stageType": "AWAKE", "duration": "1800s"}],
+            "sleepSummary": {"efficiency": 92}}}]})
+    r = client.post("/integrations/google/sync?days=1")
+    assert r.get_json()["ok"]
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    managed = {s["metric"]: s for s in jdata["sections"] if s.get("managed")}
+    assert set(managed) == {"sleep_duration", "sleep_quality", "deep_sleep",
+                            "rem_sleep", "light_sleep", "awake_time"}
+    assert managed["sleep_duration"]["unit"] == "hrs"
+    assert managed["sleep_quality"]["unit"] == "%"
+    assert managed["deep_sleep"]["unit"] == "min"
+    assert all(s["managed"] == "google_sleep" for s in managed.values())
+    entry = next(e for e in jdata["entries"] if e.get("sleep"))
+    nums = entry["numbers"]
+    assert nums[managed["deep_sleep"]["id"]] == 71.0
+    assert nums[managed["awake_time"]["id"]] == 30.0
+    assert nums[managed["sleep_quality"]["id"]] == 92.0
+
+
+def test_google_sync_classic_creates_only_two(client, app, monkeypatch):
+    _connect_google(app)
+    monkeypatch.setattr("google_health.fetch_sleep",
+        lambda token, date, transport=None: {"dataPoints": [{"sleep": {
+            "interval": {
+                "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",
+                "endTime": f"{date}T12:00:00Z", "endUtcOffset": "0s"},
+            "sleepType": "CLASSIC", "sleepStages": [],
+            "sleepSummary": {"efficiency": 90}}}]})
+    client.post("/integrations/google/sync?days=1")
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    metrics = {s["metric"] for s in jdata["sections"] if s.get("managed")}
+    assert metrics == {"sleep_duration", "sleep_quality"}
+
+
+def test_entry_form_excludes_managed_numeric_input(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    plain = journal.add_section(jdata, "weight", "numeric", "#6fa8dc", unit="kg")
+    ids = journal.ensure_sleep_sections(jdata, ["sleep_duration"])
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    r = client.get("/journal/2026-06-15")
+    html = r.get_data(as_text=True)
+    assert f'name="num:{plain["id"]}"' in html            # normal input present
+    assert f'name="num:{ids["sleep_duration"]}"' not in html  # managed hidden
+
+
+def test_journal_save_preserves_managed_number(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    ids = journal.ensure_sleep_sections(jdata, ["sleep_duration"])
+    sid = ids["sleep_duration"]
+    journal.set_entry_number(jdata, "2026-06-15", sid, 7.5)
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    # Save the entry without any num: field for the managed section.
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "hello", "body": "world"})
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    entry = journal.get_entry_by_date(jdata, "2026-06-15")
+    assert entry["numbers"][sid] == 7.5      # managed value survived
+
+
+def test_managed_section_appears_in_search(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    ids = journal.ensure_sleep_sections(jdata, ["sleep_duration"])
+    sid = ids["sleep_duration"]
+    journal.set_entry_number(jdata, "2026-06-15", sid, 7.5)
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    r = client.get("/journal/search")
+    html = r.get_data(as_text=True)
+    assert "sleep duration" in html
+    assert sid in html
+
+
+def test_inline_numeric_capture_skips_managed(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    ids = journal.ensure_sleep_sections(jdata, ["sleep_duration"])
+    sid = ids["sleep_duration"]
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "t", "body": "slept #sleep_duration 5"})
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    entry = journal.get_entry_by_date(jdata, "2026-06-15")
+    assert sid not in (entry.get("numbers") or {})   # not captured
+
+
+def test_manage_page_shows_auto_pill_for_managed(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.ensure_sleep_sections(jdata, ["sleep_duration"])
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    r = client.get("/journal/sections")
+    assert "pill-auto" in r.get_data(as_text=True)

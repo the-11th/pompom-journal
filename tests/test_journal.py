@@ -1493,3 +1493,191 @@ def test_linked_task_ids_parses_ids():
 
 def test_linked_task_ids_ignores_fresh_lines():
     assert journal.linked_task_ids("[] not linked\nprose") == set()
+
+
+# --------------------------------------------------------------------------- #
+# Google-Health sleep -> numeric managed sections
+# --------------------------------------------------------------------------- #
+
+_STAGED_SLEEP = {
+    "start": "22:14", "end": "05:58", "duration_min": 431,
+    "efficiency": 92, "score": None, "quality": 92,
+    "stages": {"deep": 71, "light": 240, "rem": 90, "wake": 30},
+    "source": "google", "fetched": "2026-06-29T08:12:00",
+}
+_CLASSIC_SLEEP = {
+    "start": "22:00", "end": "05:00", "duration_min": 420,
+    "efficiency": 88, "score": None, "quality": 88,
+    "stages": None, "source": "google", "fetched": "2026-06-29T08:12:00",
+}
+
+
+def test_sleep_metric_values_staged_all_six():
+    v = journal.sleep_metric_values(_STAGED_SLEEP)
+    assert v == {
+        "sleep_duration": round(431 / 60, 2),   # 7.18
+        "sleep_quality": 92,
+        "deep_sleep": 71,
+        "light_sleep": 240,
+        "rem_sleep": 90,
+        "awake_time": 30,
+    }
+
+
+def test_sleep_metric_values_classic_only_duration_quality():
+    v = journal.sleep_metric_values(_CLASSIC_SLEEP)
+    assert v == {"sleep_duration": round(420 / 60, 2), "sleep_quality": 88}
+
+
+def test_sleep_metric_values_quality_none_omitted():
+    s = dict(_CLASSIC_SLEEP, quality=None)
+    v = journal.sleep_metric_values(s)
+    assert "sleep_quality" not in v and "sleep_duration" in v
+
+
+def test_sleep_metric_values_missing_or_zero_duration_omitted():
+    assert "sleep_duration" not in journal.sleep_metric_values(
+        dict(_CLASSIC_SLEEP, duration_min=0, quality=None))
+    assert journal.sleep_metric_values(
+        dict(_CLASSIC_SLEEP, duration_min=None, quality=None)) == {}
+
+
+def test_sleep_metric_values_non_dict():
+    assert journal.sleep_metric_values(None) == {}
+    assert journal.sleep_metric_values("nope") == {}
+
+
+def test_ensure_sleep_sections_creates_lazily_and_is_idempotent():
+    data = journal._empty()
+    metrics = ["sleep_duration", "sleep_quality"]
+    ids1 = journal.ensure_sleep_sections(data, metrics)
+    assert set(ids1) == set(metrics)
+    assert len(data["sections"]) == 2
+    for s in data["sections"]:
+        assert s["type"] == "numeric"
+        assert s["managed"] == journal._GOOGLE_SLEEP_PROVIDER
+        assert s["metric"] in metrics
+    # second call reuses the same ids, no duplicates
+    ids2 = journal.ensure_sleep_sections(data, metrics)
+    assert ids2 == ids1
+    assert len(data["sections"]) == 2
+
+
+def test_ensure_sleep_sections_units_and_names():
+    data = journal._empty()
+    ids = journal.ensure_sleep_sections(
+        data, ["sleep_duration", "sleep_quality", "deep_sleep",
+               "rem_sleep", "light_sleep", "awake_time"])
+    by_metric = {s["metric"]: s for s in data["sections"]}
+    assert by_metric["sleep_duration"]["unit"] == "hrs"
+    assert by_metric["sleep_duration"]["name"] == "sleep duration"
+    assert by_metric["sleep_quality"]["unit"] == "%"
+    assert by_metric["deep_sleep"]["unit"] == "min"
+    assert by_metric["awake_time"]["name"] == "awake time"
+
+
+def test_ensure_sleep_sections_reuses_archived_managed_section():
+    data = journal._empty()
+    ids = journal.ensure_sleep_sections(data, ["sleep_duration"])
+    sid = ids["sleep_duration"]
+    journal.archive_section(data, sid)
+    assert journal.section_by_id(data, sid)["archived"] is True
+    ids2 = journal.ensure_sleep_sections(data, ["sleep_duration"])
+    assert ids2["sleep_duration"] == sid       # reused, not recreated
+    assert len(data["sections"]) == 1
+
+
+def test_ensure_sleep_sections_handles_name_collision():
+    data = journal._empty()
+    # A user already has a plain (unmanaged) section named "sleep duration".
+    journal.add_section(data, "sleep duration", "numeric", "#6fa8dc", unit="hrs")
+    ids = journal.ensure_sleep_sections(data, ["sleep_duration"])
+    sid = ids["sleep_duration"]
+    managed = journal.section_by_id(data, sid)
+    assert managed["managed"] == journal._GOOGLE_SLEEP_PROVIDER
+    assert managed["name"] != "sleep duration"   # differentiated
+    assert len(data["sections"]) == 2
+
+
+def test_set_entry_number_creates_and_writes():
+    data = journal._empty()
+    s = journal.add_section(data, "weight", "numeric", "#6fa8dc", unit="kg")
+    e = journal.set_entry_number(data, "2026-06-15", s["id"], 175, now=NOW)
+    assert e["numbers"][s["id"]] == 175.0
+    assert journal.get_entry_by_date(data, "2026-06-15") is e
+
+
+def test_set_entry_number_rejects_non_finite():
+    data = journal._empty()
+    s = journal.add_section(data, "weight", "numeric", "#6fa8dc")
+    with pytest.raises(ValueError):
+        journal.set_entry_number(data, "2026-06-15", s["id"], float("nan"), now=NOW)
+    with pytest.raises(ValueError):
+        journal.set_entry_number(data, "2026-06-15", s["id"], "abc", now=NOW)
+
+
+def test_set_entry_number_idempotent_no_updated_churn():
+    data = journal._empty()
+    s = journal.add_section(data, "weight", "numeric", "#6fa8dc")
+    journal.set_entry_number(data, "2026-06-15", s["id"], 175, now=NOW)
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    stamp = e["updated"]
+    later = datetime(2026, 6, 16, 10, 0, 0)
+    journal.set_entry_number(data, "2026-06-15", s["id"], 175, now=later)
+    assert e["updated"] == stamp     # unchanged value -> no churn
+    journal.set_entry_number(data, "2026-06-15", s["id"], 180, now=later)
+    assert e["updated"] == later.isoformat()   # changed value -> bump
+
+
+def test_apply_sleep_metrics_end_to_end_staged():
+    data = journal._empty()
+    values = journal.apply_sleep_metrics(data, "2026-06-15", _STAGED_SLEEP, now=NOW)
+    assert set(values) == {"sleep_duration", "sleep_quality", "deep_sleep",
+                           "rem_sleep", "light_sleep", "awake_time"}
+    assert len(data["sections"]) == 6
+    entry = journal.get_entry_by_date(data, "2026-06-15")
+    by_metric = {s["metric"]: s["id"] for s in data["sections"]}
+    assert entry["numbers"][by_metric["sleep_duration"]] == round(431 / 60, 2)
+    assert entry["numbers"][by_metric["awake_time"]] == 30.0
+
+
+def test_apply_sleep_metrics_classic_only_two():
+    data = journal._empty()
+    values = journal.apply_sleep_metrics(data, "2026-06-15", _CLASSIC_SLEEP, now=NOW)
+    assert set(values) == {"sleep_duration", "sleep_quality"}
+    assert len(data["sections"]) == 2
+
+
+def test_apply_sleep_metrics_empty_sleep_is_noop():
+    data = journal._empty()
+    assert journal.apply_sleep_metrics(data, "2026-06-15", None, now=NOW) == {}
+    assert journal.apply_sleep_metrics(data, "2026-06-15", {}, now=NOW) == {}
+    assert data["sections"] == []
+    assert data["entries"] == []
+
+
+def test_load_migrates_managed_metric_fields(tmp_path):
+    import json as _json
+    path = tmp_path / "journal.json"
+    path.write_text(_json.dumps({
+        "sections": [{"id": "x", "name": "weight", "type": "numeric",
+                      "color": "#fff"}],
+        "entries": [],
+    }), encoding="utf-8")
+    data = journal.load(str(path))
+    s = data["sections"][0]
+    assert s["managed"] is None and s["metric"] is None
+
+
+def test_seeded_has_no_managed_sections():
+    data = journal._seeded()
+    assert all(not s.get("managed") for s in data["sections"])
+
+
+def test_numeric_section_index_excludes_managed():
+    data = journal._empty()
+    plain = journal.add_section(data, "weight", "numeric", "#6fa8dc")
+    journal.ensure_sleep_sections(data, ["sleep_duration"])
+    idx = journal.numeric_section_index(data)
+    assert "weight" in idx
+    assert "sleep duration" not in idx     # managed section excluded
