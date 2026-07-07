@@ -85,6 +85,12 @@ integration inverts the flow: the **phone pushes** to the app instead of the app
    enforced.
 7. **Entry field = `usage`** (domain-named like `sleep`/`music`, not provider-
    named); **provider key = `phone`** in `integrations.json`.
+8. **Backfill last 3 days per push (resolves Open Question 1).** The worker sends
+   an array of the last **3 full days** each run, and `parse_push` accepts a list
+   → `set_entry_usage` per day (idempotent overwrite). This makes a missed night
+   self-heal on the next successful push and tolerates the auto-quit server
+   (the day lands the next time a browser tab is open and the phone retries).
+   Server stays auto-quit (no daemon); no change to that model.
 
 ---
 
@@ -255,6 +261,60 @@ card has **no "Sync now"** (nothing to pull).
 
 ---
 
+## Connecting a Samsung phone — step by step
+
+This is the end-user flow the design must support (and what the README will
+document once shipped). Assumes Android 11+ (Wireless-debugging-era; not needed
+here but sets the baseline) and the Flask app running.
+
+**Prerequisites**
+1. On your computer, open the journal **Manage** page → **Integrations** →
+   **Phone usage** card. Click **Generate token** — copy the token and note the
+   **endpoint URL** shown (e.g. `http://192.168.x.x:5001/integrations/phone/ingest`,
+   or your Tailscale hostname).
+2. Decide reachability for the *daily* push:
+   - **Home Wi-Fi only:** the endpoint's LAN IP works when the phone is home.
+   - **Anywhere (recommended):** install **Tailscale** on both the Mac and the
+     phone, sign into the same tailnet, and use the Mac's Tailscale hostname in
+     the endpoint URL.
+
+**Install the app**
+3. On the phone, open the **Download the app** link on the Manage-page card
+   (or **scan the QR** with the camera). It points to the latest **GitHub
+   Release** APK — downloads over the internet from anywhere.
+4. Open the downloaded `.apk`. Android will ask to **allow installing unknown
+   apps** for your browser/Files app — allow it once, then install.
+
+**Grant permissions (one time)**
+5. Open the app. Tap **Grant Usage access** → it deep-links to
+   *Settings → Special access → Usage access* → toggle **TodoPup Usage** on.
+6. Tap **Exclude from battery optimization** (or *Settings → Apps → TodoPup
+   Usage → Battery → Unrestricted*). **Do not skip this** — Samsung Device Care
+   will otherwise sleep the app and the daily push stops after a few days.
+7. On Android 13+, allow notifications if prompted (optional status pings).
+
+**Configure + verify**
+8. In the app, paste the **endpoint URL** and **token** from step 1 (or scan the
+   Manage-page **config QR** to auto-fill both).
+9. Tap **Send test now**. The status line should show a success time. Refresh
+   today's (or yesterday's) journal entry on the computer — the **usage** panel
+   should show screen time + top app, and the **Phone usage** analytics tab
+   should populate.
+
+**Done — it's automatic**
+10. `WorkManager` now pushes **yesterday + the prior 2 days** roughly once a day
+    (best-effort within a 24h window), retrying on failure and surviving reboots.
+    Nothing to plug in. If a night is missed (phone off Wi-Fi / server asleep),
+    the next successful push backfills it (Decision 8).
+
+**Troubleshooting**
+- *No data after a day or two:* re-check the battery-optimization exclusion
+  (step 6) — the #1 cause on Samsung.
+- *Test push fails:* the phone can't reach the endpoint — confirm same Wi-Fi /
+  Tailscale up, and that a browser tab is open (server is running; it auto-quits
+  when the last tab closes).
+- *401:* token mismatch — regenerate on the Manage page and re-paste.
+
 ## Testing
 
 - **Pure (`usage.py`)** — TDD: `parse_push` normalization/defensive cases; every
@@ -270,13 +330,9 @@ card has **no "Sync now"** (nothing to pull).
 
 ## Open questions / risks
 
-1. **Auto-quit vs. always-on.** The push only lands while a browser tab keeps
-   the server alive. Options: (a) accept it (the phone retries next day / the
-   worker retries on failure, and a same-day open triggers a catch-up if the app
-   also POSTs the last few days); (b) run the server as an always-on daemon
-   (drop `AUTO_QUIT`) so ingest is always available. **Recommend (a) + have the
-   worker POST the last N=3 days each run** so a missed night backfills when the
-   server is next up. Needs `parse_push` to accept a list of days.
+1. **RESOLVED (Decision 8).** Auto-quit stays; the worker pushes the **last 3
+   days** each run and `parse_push` accepts a list, so a missed night self-heals
+   on the next push. No always-on daemon.
 2. **Reachability of the daily push.** Tailscale recommended; document home-Wi-Fi
    fallback. (Download is separate and always reachable via the GitHub Release.)
 3. **APK build environment.** Requires the Android SDK — hence GitHub Actions (or
