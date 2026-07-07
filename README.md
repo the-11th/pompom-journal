@@ -326,6 +326,27 @@ separate field:
   you're typing and renders the formatted result the moment you click away — click
   the rendered text again to edit it.
 
+- **Voice dictation.** Click the record button in the top-right corner of the
+  body box and talk. Words appear at the cursor as you speak (click anywhere in
+  the text to move where new words land), highlighted until you press the ✓
+  button in the bottom-right to commit them. Speak these shortcuts to insert
+  symbols and punctuation:
+
+  | Say | You get |
+  |---|---|
+  | "at symbol" *word* | `@word` (glued to the next word — feeds `@mention` tagging) |
+  | "hashtag" *word* | `#word` (feeds `#numeric` capture) |
+  | "checkbox" *or* "open close bracket" | `[]` (feeds `[]` task spawning) |
+  | "new line" | line break |
+  | "period" / "comma" | `.` / `,` |
+  | "question mark" / "exclamation mark" | `?` / `!` |
+  | "dot dot dot" | `...` |
+  | "parenthesis" … "parenthesis" | `(` then `)` — alternates open/close |
+
+  Because these produce real `@`/`#`/`[]` text, dictation feeds straight into the
+  inline grammar below. Requires Google Chrome (uses the Web Speech API); you'll
+  be asked for microphone access the first time.
+
 - **Mood quick-pick.** Choose a **1–7** mood for the day from the row of
   Pompompurin faces on the "What happened today" line; click the chosen face
   again to clear it. Your mood powers the **Mood** analytics tab and the
