@@ -80,10 +80,16 @@
       Android phone. The phone app <em>pushes</em> data here — there's nothing to
       pull, so no "Sync now" is needed.</p>
 
-    <p class="muted">1. <a href="#" class="phone-apk-link">Download the app</a>
-      (APK — coming soon via GitHub Release).</p>
-    {# QR of the download URL is wired up in Plan 2 (client-rendered, no dep). #}
-    <div class="phone-qr" data-qr-placeholder aria-hidden="true"></div>
+    <p class="muted">1. <a href="{{ phone_apk_url }}" class="phone-apk-link"
+        target="_blank" rel="noopener">Download the app</a>
+      (APK via GitHub Release) — or scan this on the phone:</p>
+    {# Download QR: encodes the public APK URL. Rendered client-side by
+       phone-qr.js from the vendored (MIT) QR lib — no server dep, no CDN. #}
+    <figure class="phone-qr-fig">
+      <div class="phone-qr" data-qr="{{ phone_apk_url }}"
+           aria-label="QR code linking to the app download"></div>
+      <figcaption class="muted">Download</figcaption>
+    </figure>
 
     <p class="muted">2. Endpoint URL (paste into the app):</p>
     <code class="phone-endpoint">{{ phone_endpoint }}</code>
@@ -91,6 +97,14 @@
     {% if phone_token %}
       <p class="phone-token-reveal">New token (copy it now — shown once):
         <code>{{ phone_token }}</code></p>
+      {# Config QR: encodes endpoint + token as a todopup:// deep link so the
+         app auto-fills both. Emitted ONLY in this once-only reveal path — the
+         token is never re-rendered from storage. #}
+      <figure class="phone-qr-fig">
+        <div class="phone-qr" aria-label="QR code to auto-configure the app"
+             data-qr="todopup://config?{{ {'url': phone_endpoint, 'token': phone_token} | urlencode }}"></div>
+        <figcaption class="muted">Scan to configure (URL + token)</figcaption>
+      </figure>
     {% endif %}
 
     <p class="muted">3.

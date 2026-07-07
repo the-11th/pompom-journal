@@ -1026,9 +1026,17 @@ def _integrations_context():
         phone_connected=integrations.is_connected(data, "phone"),
         phone_last_sync=integrations.last_sync(data, "phone"),
         phone_endpoint=_phone_endpoint(),
+        phone_apk_url=PHONE_APK_URL,
         # Revealed exactly once, right after generation (never read from storage).
         phone_token=session.pop("phone_token_once", None),
     )
+
+
+# Always-latest debug APK, published by .github/workflows/android.yml as a
+# GitHub Release asset named phone-usage.apk. Reachable from the phone anywhere.
+PHONE_APK_URL = (
+    "https://github.com/jxi-idme/todo-cli/releases/latest/download/phone-usage.apk"
+)
 
 
 def _phone_endpoint():

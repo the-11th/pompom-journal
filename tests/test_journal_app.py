@@ -1126,6 +1126,32 @@ def test_integrations_page_has_phone_card(client, app):
     assert b"/integrations/phone/ingest" in r.data
 
 
+def test_phone_card_has_apk_download_url_and_qr(client, app):
+    r = client.get("/journal/sections")
+    # Real GitHub Release APK link (no placeholder "#").
+    assert b"releases/latest/download/phone-usage.apk" in r.data
+    # Download QR div carries the APK URL in its data-qr attribute.
+    assert b'class="phone-qr" data-qr="https://github.com/' in r.data
+    # The vendored (local, no-CDN) QR lib is loaded on the page.
+    assert b"vendor/qrcode.js" in r.data
+    assert b"phone-qr.js" in r.data
+
+
+def test_phone_config_qr_only_after_token_generate(client, app):
+    # No token reveal on a normal page load → no config deep-link QR.
+    r = client.get("/journal/sections")
+    assert b"todopup://config" not in r.data
+    # Generating a token reveals it once; the config QR is emitted only then,
+    # carrying endpoint + token in a todopup://config deep link.
+    client.post("/integrations/phone/token")
+    r2 = client.get("/journal/sections")
+    assert b"todopup://config" in r2.data
+    assert b"token%3D" in r2.data or b"token=" in r2.data
+    # ...and it is not re-rendered from storage on the next load.
+    r3 = client.get("/journal/sections")
+    assert b"todopup://config" not in r3.data
+
+
 def test_analytics_data_entries_carry_usage(client, app):
     jdata = journal.load(app.config["JOURNAL_FILE"])
     journal.set_entry_usage(jdata, "2026-07-06",

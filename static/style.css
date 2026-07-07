@@ -2357,8 +2357,13 @@ a.tl-date:hover { color: var(--accent); }
   font-size:.8rem; word-break:break-all; }
 .phone-token-reveal { margin:.6rem 0; font-size:.85rem; }
 .phone-token-reveal code { color:var(--accent); word-break:break-all; }
-.phone-qr { margin:.4rem 0; }
+.phone-qr-fig { display:inline-block; margin:.5rem .8rem .5rem 0; text-align:center; vertical-align:top; }
+.phone-qr-fig figcaption { margin-top:.3rem; font-size:.75rem; }
+/* Bordered white quiet-zone box framing the client-rendered QR canvas. */
+.phone-qr { display:inline-block; padding:6px; background:#fff;
+  border:1px solid var(--border); border-radius:6px; line-height:0; }
 .phone-qr:empty { display:none; }
+.phone-qr canvas { display:block; width:148px; height:148px; image-rendering:pixelated; }
 
 /* ----- Sleep analytics tab ----- */
 /* Stage legend: a row of color-swatch + label items */
