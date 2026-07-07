@@ -997,10 +997,25 @@ a.task-check:hover { filter: brightness(1.2); }
 /* Dual-range slider: two overlapping range inputs */
 .dual-range {
   position: relative;
-  height: 28px;
+  height: 24px;
   display: flex;
   align-items: center;
 }
+
+/* Base track line + the highlighted fill between the two handles (behind the
+   inputs; the fill's left/width are positioned in JS). */
+.range-track,
+.range-fill {
+  position: absolute;
+  top: 50%;
+  height: 4px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  z-index: 0;
+}
+.range-track { left: 0; right: 0; background: var(--border); }
+.range-fill  { left: 0; width: 100%; background: var(--accent); }
 
 .dual-range input[type="range"] {
   position: absolute;
@@ -1013,19 +1028,68 @@ a.task-check:hover { filter: brightness(1.2); }
   border: none;
   padding: 0;
   margin: 0;
-  height: 4px;
-  accent-color: var(--accent);
-  cursor: pointer;
+  height: 16px;
+  /* Only the thumbs are interactive so both handles are always grabbable. */
+  pointer-events: none;
 }
 
-/* The first (min) slider sits on top; pointer-events let both be draggable */
-.dual-range input[type="range"]:first-child { z-index: 2; }
-.dual-range input[type="range"]:last-child  { z-index: 1; }
+/* The first (min) slider sits on top so it wins when handles overlap. */
+.dual-range input[type="range"]:first-child { z-index: 3; }
+.dual-range input[type="range"]:last-child  { z-index: 2; }
+
+.dual-range input[type="range"]::-webkit-slider-runnable-track { background: transparent; border: none; }
+.dual-range input[type="range"]::-moz-range-track { background: transparent; border: none; }
+
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: grab;
+  pointer-events: auto;
+}
+.dual-range input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: grab;
+  pointer-events: auto;
+}
 
 .range-readout {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.78rem;
   color: var(--muted);
 }
+.range-num {
+  /* Auto-grow to fit the number (up to 3 decimals) in browsers that support
+     field-sizing; the fixed width is the fallback for those that don't. */
+  width: 8ch;
+  min-width: 4.5ch;
+  max-width: 14ch;
+  field-sizing: content;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+  text-align: center;
+  -moz-appearance: textfield;
+}
+.range-num::-webkit-inner-spin-button,
+.range-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.range-num:focus { outline: none; border-color: var(--accent); }
+.range-dash,
+.range-unit { color: var(--muted); }
 
 /* ---- Result count ---- */
 .result-count {

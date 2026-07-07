@@ -203,23 +203,39 @@
     return ranges;
   }
 
+  // Round to at most three decimal places (trailing zeros dropped).
+  function round3(n) {
+    if (!isFinite(n)) return n;
+    return Math.round(n * 1000) / 1000;
+  }
+
   function updateRangeReadout(minInput, maxInput) {
-    var sid     = minInput.getAttribute('data-section');
-    var readout = document.querySelector('.range-readout[data-section="' + sid + '"]');
-    if (!readout) return;
-
-    // Read unit from the label text if present (just for display)
+    var sid   = minInput.getAttribute('data-section');
     var block = minInput.closest('.num-filter');
-    var unitEl = block ? block.querySelector('.unit') : null;
-    var unitText = unitEl ? ' ' + unitEl.textContent.replace(/[()]/g, '').trim() : '';
+    var lo    = parseFloat(minInput.value);
+    var hi    = parseFloat(maxInput.value);
 
-    var lo = parseFloat(minInput.value);
-    var hi = parseFloat(maxInput.value);
-    // Format: avoid trailing .0 for whole numbers
-    function fmt(n) {
-      return Number.isInteger(n) ? String(n) : String(n);
+    // Reflect the slider values into the number inputs (rounded), but never
+    // clobber a field the user is actively typing in.
+    if (block) {
+      var minNum = block.querySelector('input[data-role="min-num"]');
+      var maxNum = block.querySelector('input[data-role="max-num"]');
+      if (minNum && document.activeElement !== minNum) minNum.value = round3(lo);
+      if (maxNum && document.activeElement !== maxNum) maxNum.value = round3(hi);
     }
-    readout.textContent = fmt(lo) + '–' + fmt(hi) + unitText;
+
+    // Position the highlighted fill line between the two handles.
+    var fill   = document.querySelector('.range-fill[data-section="' + sid + '"]');
+    var bounds = BOUNDS[sid];
+    if (fill && bounds) {
+      var span = bounds[1] - bounds[0];
+      // Degenerate single-value section (span 0): both handles pin left, so
+      // show no fill rather than a full bar.
+      var l = span > 0 ? ((lo - bounds[0]) / span) * 100 : 0;
+      var r = span > 0 ? ((hi - bounds[0]) / span) * 100 : 0;
+      fill.style.left  = l + '%';
+      fill.style.width = Math.max(0, r - l) + '%';
+    }
   }
 
   document.querySelectorAll('.num-filter:not(.num-filter-disabled)').forEach(function (block) {
@@ -245,7 +261,32 @@
     minInput.addEventListener('input', function () { clampAndFilter('min'); });
     maxInput.addEventListener('input', function () { clampAndFilter('max'); });
 
-    // Initialise readout
+    // Typeable range: number inputs drive the sliders (clamped to bounds).
+    var sid    = minInput.getAttribute('data-section');
+    var bounds = BOUNDS[sid] || [parseFloat(minInput.min), parseFloat(maxInput.max)];
+    var minNum = block.querySelector('input[data-role="min-num"]');
+    var maxNum = block.querySelector('input[data-role="max-num"]');
+
+    function syncFromNum(which) {
+      var el = which === 'min' ? minNum : maxNum;
+      var v  = parseFloat(el.value);
+      if (isNaN(v)) return;
+      if (v < bounds[0]) v = bounds[0];
+      if (v > bounds[1]) v = bounds[1];
+      if (which === 'min') { minInput.value = v; clampAndFilter('min'); }
+      else                 { maxInput.value = v; clampAndFilter('max'); }
+    }
+
+    if (minNum) {
+      minNum.addEventListener('input', function () { syncFromNum('min'); });
+      minNum.addEventListener('blur',  function () { updateRangeReadout(minInput, maxInput); });
+    }
+    if (maxNum) {
+      maxNum.addEventListener('input', function () { syncFromNum('max'); });
+      maxNum.addEventListener('blur',  function () { updateRangeReadout(minInput, maxInput); });
+    }
+
+    // Initialise readout + fill
     updateRangeReadout(minInput, maxInput);
   });
 

@@ -53,12 +53,23 @@
             <div class="num-filter">
               <span class="num-filter-label">{{ s.name }}{% if s.unit %} <span class="unit">({{ s.unit }})</span>{% endif %}</span>
               <div class="dual-range">
+                <div class="range-track"></div>
+                <div class="range-fill" data-section="{{ s.id }}"></div>
                 <input type="range" data-section="{{ s.id }}" data-role="min"
                        min="{{ lo }}" max="{{ hi }}" value="{{ lo }}" step="any">
                 <input type="range" data-section="{{ s.id }}" data-role="max"
                        min="{{ lo }}" max="{{ hi }}" value="{{ hi }}" step="any">
               </div>
-              <span class="range-readout" data-section="{{ s.id }}">{{ lo }}–{{ hi }}{% if s.unit %} {{ s.unit }}{% endif %}</span>
+              <div class="range-readout" data-section="{{ s.id }}">
+                <input type="number" class="range-num" data-section="{{ s.id }}"
+                       data-role="min-num" step="any" value="{{ lo | round(3) }}"
+                       aria-label="{{ s.name }} minimum">
+                <span class="range-dash">–</span>
+                <input type="number" class="range-num" data-section="{{ s.id }}"
+                       data-role="max-num" step="any" value="{{ hi | round(3) }}"
+                       aria-label="{{ s.name }} maximum">
+                {% if s.unit %}<span class="range-unit">{{ s.unit }}</span>{% endif %}
+              </div>
             </div>
           {% else %}
             <div class="num-filter num-filter-disabled">
