@@ -121,10 +121,13 @@
                         placeholder="Notes&hellip;">{{ notes }}</textarea>
               <ul class="subtask-list">
                 {% for sub in subtasks %}
-                  <li class="subtask-row" data-index="{{ loop.index0 }}">
+                  <li class="subtask-row" data-index="{{ loop.index0 }}" draggable="true">
+                    <span class="subtask-drag" aria-hidden="true"
+                          title="Drag to reorder">⠇</span>
                     <input type="checkbox" class="subtask-check"
                            {% if sub.done %}checked{% endif %}>
-                    <input type="text" class="subtask-text" value="{{ sub.text }}">
+                    <input type="text" class="subtask-text" value="{{ sub.text }}"
+                           draggable="false">
                     <button type="button" class="subtask-del"
                             aria-label="delete subtask">&times;</button>
                   </li>

@@ -452,6 +452,26 @@ def task_delete_subtask(task_id, index):
     return jsonify({"subtasks": _find_active(data, task_id)["subtasks"]})
 
 
+@app.route("/task/<task_id>/subtasks/reorder", methods=["POST"])
+def task_reorder_subtask(task_id):
+    data = todo.load(data_file())
+    task = _find_active(data, task_id)
+    if task is None:
+        return jsonify({"error": "unknown task"}), 404
+    body = request.get_json(silent=True) or {}
+    n = len(task.get("subtasks") or [])
+    try:
+        from_index = int(body.get("from"))
+        to_index = int(body.get("to"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid indices"}), 400
+    if not (0 <= from_index < n and 0 <= to_index < n):
+        return jsonify({"error": "subtask index out of range"}), 404
+    todo.reorder_subtask(data, task_id, from_index, to_index)
+    todo.save(data_file(), data)
+    return jsonify({"subtasks": _find_active(data, task_id)["subtasks"]})
+
+
 @app.route("/tags", methods=["GET"])
 def tags():
     data = todo.load(data_file())

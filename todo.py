@@ -139,6 +139,20 @@ def delete_subtask(data, task_id, index):
     return data
 
 
+def reorder_subtask(data, task_id, from_index, to_index):
+    """Move the subtask at `from_index` to `to_index` on an active task, shifting
+    the others. Out-of-range index (either), unknown id, or from==to = no-op.
+    Returns `data`."""
+    task = _active_task(data, task_id)
+    if task is not None:
+        subs = task.get("subtasks") or []
+        if (0 <= from_index < len(subs) and 0 <= to_index < len(subs)
+                and from_index != to_index):
+            sub = subs.pop(from_index)
+            subs.insert(to_index, sub)
+    return data
+
+
 def _valid_recurrence(recurrence):
     """True if `recurrence` is a recognized recurrence value (or None)."""
     if recurrence is None:

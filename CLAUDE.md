@@ -127,11 +127,20 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
   expands when the task **title** is clicked; a collapsed task with either shows
   a grey "…" hint plus an `n/m` progress count. Edits save in the background via
   small JSON endpoints (`POST /task/<id>/notes`, `/task/<id>/subtasks`,
-  `…/<i>/toggle`, `…/<i>`, `…/<i>/delete`) and re-render in place
-  (`static/task-details.js`). Pure helpers: `set_task_notes`, `add_subtask`,
-  `toggle_subtask`, `edit_subtask`, `delete_subtask`. Subtasks are independent of
-  parent completion; a recurring task's next occurrence copies notes + subtask
-  text with all checks reset. Read-only on the Archive page.
+  `…/<i>/toggle`, `…/<i>`, `…/<i>/delete`, `…/subtasks/reorder`) and re-render in
+  place (`static/task-details.js`). Pure helpers: `set_task_notes`, `add_subtask`,
+  `toggle_subtask`, `edit_subtask`, `delete_subtask`, `reorder_subtask`. Subtasks
+  can be **drag-reordered** within a task via a per-row grip handle
+  (`.subtask-drag`, native HTML5 drag-and-drop, no libraries — mirrors the
+  `journal-sections.js` idioms; drop-target row highlighted via `.drop-target`).
+  Dragging uses only the handle so it never disturbs the checkbox/edit/delete
+  handlers; the handle POSTs `{"from": i, "to": j}` to
+  `POST /task/<id>/subtasks/reorder` (`reorder_subtask` pops `from` and inserts at
+  `to`; out-of-range/from==to/unknown-id = no-op) and re-renders from the returned
+  list. Reordering is **active-list only** — disabled on the read-only Archive
+  dropdown. Subtasks are independent of parent completion; a recurring task's next
+  occurrence copies notes + subtask text with all checks reset. Read-only on the
+  Archive page.
 
 ### Todo templates
 

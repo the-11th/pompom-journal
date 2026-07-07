@@ -1107,10 +1107,14 @@ def test_spotify_disconnect(client, app):
 # Task 6: _spotify_sync orchestration + sync route
 # --------------------------------------------------------------------------- #
 
-_RP = {"items": [
-    {"played_at": "2026-06-29T22:10:00.000Z",
-     "track": {"id": "t1", "name": "A", "duration_ms": 200000,
-               "artists": [{"name": "Phoebe Bridgers"}]}}]}
+def _rp_on(day):
+    """Recently-played payload with a single play on `day` (an ISO date str).
+    Built relative to the caller's date so `merge_plays`' keep-window (which
+    prunes against the real clock) never drops it."""
+    return {"items": [
+        {"played_at": day + "T22:10:00.000Z",
+         "track": {"id": "t1", "name": "A", "duration_ms": 200000,
+                   "artists": [{"name": "Phoebe Bridgers"}]}}]}
 
 
 def _connect_spotify(app):
@@ -1121,17 +1125,19 @@ def _connect_spotify(app):
 
 
 def test_spotify_sync_writes_music(client, app, monkeypatch):
+    from datetime import date
+    today = date.today().isoformat()
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: _RP)
+    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: _rp_on(today))
     monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
     monkeypatch.setattr("spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
-    r = client.post("/integrations/spotify/sync?date=2026-06-29")
+    r = client.post("/integrations/spotify/sync?date=" + today)
     body = r.get_json()
     assert body["ok"] and body["connected"]
-    assert "2026-06-29" in body["synced"]
+    assert today in body["synced"]
     import journal
     jdata = journal.load(app.config["JOURNAL_FILE"])
-    assert journal.get_entry_by_date(jdata, "2026-06-29")["music"]["tracks"] == 1
+    assert journal.get_entry_by_date(jdata, today)["music"]["tracks"] == 1
 
 
 def test_spotify_sync_not_connected(client, app):

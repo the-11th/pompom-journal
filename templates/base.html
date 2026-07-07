@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>To-Do</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/pompom-icon.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/pompom-icon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -257,6 +259,45 @@
       window.addEventListener('pagehide', function () {
         navigator.sendBeacon('/quit?tab=' + TAB_ID);
       });
+    })();
+
+    // App-wide keyboard shortcuts:
+    //   ⌘K → jump to the journal search bar (focus it if already on the search
+    //        page, otherwise navigate there and focus on arrival)
+    //   ⌘J → jump to today's journal entry
+    (function () {
+      var SEARCH_URL = "{{ url_for('journal_search') }}";
+      var TODAY_URL = "{{ url_for('journal_today') }}";
+      var FOCUS_FLAG = '#focus-search';
+
+      function goSearch() {
+        var q = document.getElementById('q');
+        if (q) { q.focus(); q.select(); }
+        else { window.location.href = SEARCH_URL + FOCUS_FLAG; }
+      }
+
+      document.addEventListener('keydown', function (e) {
+        // Only bare ⌘ (Cmd) combos — leave ⌥/⌃/⇧ variants to the browser.
+        if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+        var k = (e.key || '').toLowerCase();
+        if (k === 'k') {
+          e.preventDefault();
+          goSearch();
+        } else if (k === 'j') {
+          e.preventDefault();
+          if (window.location.pathname !== TODAY_URL) window.location.href = TODAY_URL;
+        }
+      });
+
+      // Arrived at the search page via ⌘K → focus the box, then drop the flag
+      // so a refresh/back doesn't keep re-triggering it.
+      if (window.location.hash === FOCUS_FLAG) {
+        var q = document.getElementById('q');
+        if (q) {
+          q.focus();
+          history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      }
     })();
   </script>
   <!-- Themed dropdown: auto-enhances every native <select> on the page. -->

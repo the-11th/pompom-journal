@@ -1072,6 +1072,59 @@ def test_delete_subtask_out_of_range_noop():
     assert len(data["active"][0]["subtasks"]) == 1
 
 
+def _abc(data, tid):
+    todo.add_subtask(data, tid, "a")
+    todo.add_subtask(data, tid, "b")
+    todo.add_subtask(data, tid, "c")
+
+
+def test_reorder_subtask_move_down():
+    data = todo._empty()
+    todo.add_task(data, "Task", now=NOW)
+    tid = data["active"][0]["id"]
+    _abc(data, tid)
+    todo.reorder_subtask(data, tid, 0, 2)
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["b", "c", "a"]
+
+
+def test_reorder_subtask_move_up():
+    data = todo._empty()
+    todo.add_task(data, "Task", now=NOW)
+    tid = data["active"][0]["id"]
+    _abc(data, tid)
+    todo.reorder_subtask(data, tid, 2, 0)
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["c", "a", "b"]
+
+
+def test_reorder_subtask_same_index_noop():
+    data = todo._empty()
+    todo.add_task(data, "Task", now=NOW)
+    tid = data["active"][0]["id"]
+    _abc(data, tid)
+    todo.reorder_subtask(data, tid, 1, 1)
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["a", "b", "c"]
+
+
+def test_reorder_subtask_out_of_range_noop():
+    data = todo._empty()
+    todo.add_task(data, "Task", now=NOW)
+    tid = data["active"][0]["id"]
+    _abc(data, tid)
+    todo.reorder_subtask(data, tid, 9, 0)     # from out of range
+    todo.reorder_subtask(data, tid, 0, 9)     # to out of range
+    todo.reorder_subtask(data, tid, -1, 0)    # negative from
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["a", "b", "c"]
+
+
+def test_reorder_subtask_unknown_id_noop():
+    data = todo._empty()
+    todo.add_task(data, "Task", now=NOW)
+    tid = data["active"][0]["id"]
+    _abc(data, tid)
+    todo.reorder_subtask(data, "ghost", 0, 2)
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["a", "b", "c"]
+
+
 # --------------------------------------------------------------------------- #
 # Recurrence copies notes + subtasks (done reset)
 # --------------------------------------------------------------------------- #

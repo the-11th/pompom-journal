@@ -314,8 +314,54 @@
   }
 
   input.addEventListener('focus', function () { showInput(false); });
-  input.addEventListener('blur', showRendered);
-  rendered.addEventListener('click', function () { showInput(true); });
+  input.addEventListener('blur', function () {
+    // While voice dictation is active the textarea must stay live (the backdrop
+    // highlight only makes sense over the raw <textarea>, not the rendered view).
+    if (input.dataset.dictating === '1') return;
+    showRendered();
+  });
+  // Map a click point in the rendered (formatted) view to a caret offset in the
+  // raw textarea, so clicking the text places the cursor THERE (not at the end).
+  // Exact for plain text; approximate by markup width for formatted text (the
+  // rendered view drops **/@ etc). <br> counts as one char (the '\n').
+  function renderedClickOffset(x, y) {
+    var range = null;
+    if (document.caretRangeFromPoint) {
+      range = document.caretRangeFromPoint(x, y);
+    } else if (document.caretPositionFromPoint) {
+      var cp = document.caretPositionFromPoint(x, y);
+      if (cp) { range = document.createRange(); range.setStart(cp.offsetNode, cp.offset); }
+    }
+    if (!range || !rendered.contains(range.startContainer)) return null;
+    var target = range.startContainer, targetOffset = range.startOffset;
+    var total = 0, done = false;
+    (function walk(node) {
+      for (var c = node.firstChild; c && !done; c = c.nextSibling) {
+        if (c.nodeType === 3) {                 // text node
+          if (c === target) { total += targetOffset; done = true; return; }
+          total += c.nodeValue.length;
+        } else if (c.nodeName === 'BR') {        // line break
+          total += 1;
+        } else {                                 // element: recurse
+          if (c === target) { done = true; return; }
+          walk(c);
+        }
+      }
+    })(rendered);
+    return total;
+  }
+
+  rendered.addEventListener('click', function (ev) {
+    var off = renderedClickOffset(ev.clientX, ev.clientY);
+    showInput(true);
+    if (off != null) {
+      off = Math.max(0, Math.min(off, input.value.length));
+      try { input.setSelectionRange(off, off); } catch (e) { /* ignore */ }
+    }
+  });
+
+  // Let other scripts (voice dictation) force the raw textarea back into view.
+  window.journalBodyEdit = function () { showInput(false); };
 
   // Initial state: render if there's content, else stay in the textarea.
   if ((input.value || '').trim() !== '') {

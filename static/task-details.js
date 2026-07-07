@@ -68,6 +68,16 @@
     var li = document.createElement("li");
     li.className = "subtask-row";
     li.dataset.index = String(index);
+    // The whole row is the drag handle so grabbing anywhere reorders it; the
+    // grip glyph is just a visual affordance. The text input opts out
+    // (draggable=false) so click-to-edit / text selection still work.
+    li.setAttribute("draggable", "true");
+
+    var handle = document.createElement("span");
+    handle.className = "subtask-drag";
+    handle.setAttribute("aria-hidden", "true");
+    handle.setAttribute("title", "Drag to reorder");
+    handle.textContent = "⠇";  // ⠇ braille grip
 
     var cb = document.createElement("input");
     cb.type = "checkbox";
@@ -77,6 +87,7 @@
     var text = document.createElement("input");
     text.type = "text";
     text.className = "subtask-text";
+    text.setAttribute("draggable", "false");
     text.value = sub.text;
 
     var del = document.createElement("button");
@@ -85,6 +96,7 @@
     del.setAttribute("aria-label", "delete subtask");
     del.innerHTML = "&times;";
 
+    li.appendChild(handle);
     li.appendChild(cb);
     li.appendChild(text);
     li.appendChild(del);
@@ -182,6 +194,67 @@
         if (e.key !== "Enter") return;
         var input = e.target.closest(".subtask-text");
         if (input) { e.preventDefault(); input.blur(); }
+      });
+
+      // Drag-and-drop reordering (native HTML5 DnD, no libraries). The whole
+      // row is draggable so grabbing anywhere reorders it; the text input opts
+      // out (draggable=false) so editing/selection is unaffected. On drop we
+      // POST the from/to indices and re-render from the returned list.
+      var draggedRow = null;
+
+      function clearDropTargets() {
+        list.querySelectorAll(".subtask-row.drop-target").forEach(function (r) {
+          r.classList.remove("drop-target");
+        });
+      }
+
+      list.addEventListener("dragstart", function (e) {
+        // Never start a row drag from inside the editable text field.
+        if (e.target.closest(".subtask-text")) return;
+        draggedRow = e.target.closest(".subtask-row");
+        if (!draggedRow) return;
+        draggedRow.classList.add("dragging");
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", draggedRow.dataset.index || "");
+          if (e.dataTransfer.setDragImage) {
+            e.dataTransfer.setDragImage(draggedRow, 0, 0);
+          }
+        }
+      });
+
+      list.addEventListener("dragover", function (e) {
+        if (!draggedRow) return;
+        var row = e.target.closest(".subtask-row");
+        if (!row || row === draggedRow) return;
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+        clearDropTargets();
+        row.classList.add("drop-target");
+      });
+
+      list.addEventListener("dragleave", function (e) {
+        var row = e.target.closest(".subtask-row");
+        if (row && !row.contains(e.relatedTarget)) row.classList.remove("drop-target");
+      });
+
+      list.addEventListener("drop", function (e) {
+        if (!draggedRow) return;
+        var row = e.target.closest(".subtask-row");
+        clearDropTargets();
+        if (!row || row === draggedRow) return;
+        e.preventDefault();
+        var from = parseInt(draggedRow.dataset.index, 10);
+        var to = parseInt(row.dataset.index, 10);
+        if (isNaN(from) || isNaN(to) || from === to) return;
+        postJSON("/task/" + taskId + "/subtasks/reorder", { from: from, to: to })
+          .then(refresh);
+      });
+
+      list.addEventListener("dragend", function () {
+        if (draggedRow) draggedRow.classList.remove("dragging");
+        clearDropTargets();
+        draggedRow = null;
       });
     }
 

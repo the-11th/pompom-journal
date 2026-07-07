@@ -570,8 +570,127 @@ h2 {
    The textarea and its rendered view must share font/size/line-height/padding/
    min-height so the focus<->blur swap doesn't shift layout. The textarea margin
    above is dropped here; the wrapper owns the spacing instead. */
-.body-field { margin-bottom: 1.2rem; }
-.body-field .body-input { margin-bottom: 0; }
+.body-field { margin-bottom: 1.2rem; position: relative; }
+/* Reserve room on the right so text never flows under the record button
+   (top-right). All three layers share the padding so text/highlight stay aligned. */
+.body-field .body-input,
+.body-field .body-rendered,
+.body-field .dictation-backdrop { padding-right: 2.4rem; }
+/* display:block avoids the inline-block baseline descender gap (~8px) below the
+   textarea, which otherwise shows as an extra empty line inside the dictation
+   backdrop once .dictating paints the panel background over the whole field. */
+.body-field .body-input { margin-bottom: 0; display: block; }
+/* ...but `display` overrides the `hidden` attribute, so restore it explicitly
+   (else the textarea stays visible under the rendered view — double box). */
+.body-field .body-input[hidden] { display: none; }
+
+/* ----- voice dictation (Web Speech API) ----- */
+/* The backdrop mirrors the textarea's box model exactly so the highlighted
+   dictation run lines up behind the live text. It is only shown while a
+   dictation region is pending (.body-field.dictating). */
+.dictation-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: none;
+  margin: 0;
+  box-sizing: border-box;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid transparent;      /* occupy the same space as the textarea border */
+  border-radius: 8px;
+  font: inherit;
+  line-height: inherit;
+  color: transparent;                  /* only the <mark> background shows */
+  background: var(--panel);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+}
+.body-field.dictating .dictation-backdrop { display: block; }
+/* Textarea sits above the backdrop; transparent bg lets the highlight show. */
+.body-field.dictating .body-input { position: relative; z-index: 1; background: transparent; }
+.dictation-backdrop mark.dictation-hl {
+  background: color-mix(in srgb, #c4b5fd 34%, transparent);  /* very light purple */
+  color: transparent;
+  border-radius: 2px;
+}
+
+/* Record button — top-right corner of the text box. */
+.dictation-mic {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.dictation-mic:hover { border-color: var(--accent); }
+.dictation-mic:disabled { cursor: default; opacity: 0.5; }
+.dictation-mic-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: background 0.15s ease;
+}
+.dictation-mic:hover .dictation-mic-dot { background: var(--accent); }
+/* Recording: red dot with a soft pulse. */
+.dictation-mic.recording { border-color: var(--danger); }
+.dictation-mic.recording .dictation-mic-dot {
+  background: var(--danger);
+  animation: dictation-pulse 1.1s ease-in-out infinite;
+}
+@keyframes dictation-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 55%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--danger) 0%, transparent); }
+}
+
+/* Confirm button — bottom-right of the text box, shown while text is pending. */
+.dictation-confirm {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.dictation-confirm:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.dictation-confirm svg { display: block; }
+
+/* `hidden` needs an explicit rule since these carry a `display` value (same
+   gotcha as .body-rendered / .task-details / .difficulty-picker). */
+.dictation-mic[hidden], .dictation-confirm[hidden] { display: none; }
+
+/* Dictation status / error line below the box. */
+.dictation-status {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--danger);
+}
+.dictation-status[hidden] { display: none; }
 .body-rendered {
   width: 100%; min-height: 140px; box-sizing: border-box;
   background: var(--panel); color: var(--text); border: 1px solid var(--border);
@@ -1878,7 +1997,13 @@ input[type="number"]::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  cursor: grab;  /* whole row is draggable to reorder */
 }
+.subtask-row:active { cursor: grabbing; }
+/* Interactive children keep their own cursors. */
+.subtask-row .subtask-text { cursor: text; }
+.subtask-row .subtask-check { cursor: pointer; }
+.subtask-row .subtask-del { cursor: pointer; }
 
 /* Square clone of .task-check: white border, dark center, green when checked,
    amber hover outline -- just rounded-square and slightly smaller. */
@@ -1931,6 +2056,26 @@ input[type="number"]::-webkit-inner-spin-button {
   padding: 0 0.2rem;
 }
 .subtask-del:hover { color: var(--danger); }
+
+/* Drag-to-reorder affordance (active list only; native HTML5 DnD). */
+.subtask-drag {
+  flex-shrink: 0;
+  cursor: grab;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.subtask-drag:hover { color: var(--accent); }
+.subtask-drag:active { cursor: grabbing; }
+.subtask-row.dragging { opacity: 0.4; }
+.subtask-row.drop-target {
+  border-radius: 4px;
+  box-shadow: inset 0 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 
 .subtask-add-row {
   display: flex;
@@ -2281,7 +2426,7 @@ a.tl-date:hover { color: var(--accent); }
 }
 
 /* ----- Integrations page ----- */
-.integrations-wrap { max-width: 640px; }
+.integrations-wrap { max-width: none; }
 .integration-card { margin-top: 1.2rem; padding: 1rem 1.2rem; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .integration-card h2 { margin: 0 0 0.5rem; }
 .integration-creds { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.8rem 0; }

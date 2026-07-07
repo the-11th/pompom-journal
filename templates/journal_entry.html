@@ -88,8 +88,25 @@
       {% endif %}
     </div>
     <div class="body-field">
+      {# Highlight backdrop for voice dictation — mirrors the textarea text and
+         draws the pending (highlighted) dictation run behind it. #}
+      <div class="dictation-backdrop" aria-hidden="true"></div>
       <textarea name="body" class="body-input" placeholder="the day's events…">{{ entry.body if entry else '' }}</textarea>
       <div class="body-rendered" hidden></div>
+      {# Record button (top-right). Unhidden by journal-dictation.js only when the
+         Web Speech API is available. #}
+      <button type="button" class="dictation-mic" aria-label="Record voice"
+              aria-pressed="false" title="Record voice (dictation)" hidden>
+        <span class="dictation-mic-dot" aria-hidden="true"></span>
+      </button>
+      {# Confirm button (bottom-right) — commits the highlighted dictation. #}
+      <button type="button" class="dictation-confirm" aria-label="Confirm dictated text"
+              title="Confirm dictation" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <path d="M5 13l4 4L19 7" fill="none" stroke="currentColor"
+                stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
 
     {% set tag_sections = sections | selectattr('type', 'equalto', 'tag') | list %}
@@ -180,6 +197,7 @@
   <script type="application/json" id="task-ref-index">{{ task_ref_index | tojson }}</script>
   <script src="{{ url_for('static', filename='journal.js') }}" defer></script>
   <script src="{{ url_for('static', filename='journal-richtext.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='journal-dictation.js') }}" defer></script>
   <script src="{{ url_for('static', filename='journal-mood.js') }}" defer></script>
   <script src="{{ url_for('static', filename='integrations-sync.js') }}" defer></script>
 {% endblock %}

@@ -796,6 +796,33 @@ def test_post_delete_subtask_bad_index_404(client):
     assert resp.status_code == 404
 
 
+def test_post_reorder_subtask_persists_and_returns_list(client):
+    tid = _add_active(client)
+    client.post(f"/task/{tid}/subtasks", json={"text": "a"})
+    client.post(f"/task/{tid}/subtasks", json={"text": "b"})
+    client.post(f"/task/{tid}/subtasks", json={"text": "c"})
+    resp = client.post(f"/task/{tid}/subtasks/reorder", json={"from": 0, "to": 2})
+    assert resp.status_code == 200
+    assert [s["text"] for s in resp.get_json()["subtasks"]] == ["b", "c", "a"]
+    data = todo.load(_data_path(client))
+    assert [s["text"] for s in data["active"][0]["subtasks"]] == ["b", "c", "a"]
+
+
+def test_post_reorder_subtask_bad_index_404(client):
+    tid = _add_active(client)
+    client.post(f"/task/{tid}/subtasks", json={"text": "a"})
+    client.post(f"/task/{tid}/subtasks", json={"text": "b"})
+    resp = client.post(f"/task/{tid}/subtasks/reorder", json={"from": 0, "to": 9})
+    assert resp.status_code == 404
+    resp = client.post(f"/task/{tid}/subtasks/reorder", json={"from": 9, "to": 0})
+    assert resp.status_code == 404
+
+
+def test_post_reorder_subtask_unknown_id_404(client):
+    resp = client.post("/task/ghost/subtasks/reorder", json={"from": 0, "to": 1})
+    assert resp.status_code == 404
+
+
 def test_active_page_renders_title_toggle_and_hint(client):
     tid = _add_active(client)
     todo_data = todo.load(_data_path(client))
