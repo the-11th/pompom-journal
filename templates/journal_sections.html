@@ -63,12 +63,12 @@
               <span class="muted-note zone-empty">No permanent tags yet.</span>
             {% endif %}
           </div>
+          <form class="addrow" method="post"
+                action="{{ url_for('journal_section_tag_add', section_id=s.id) }}">
+            <input type="text" name="tag" placeholder="add permanent tag…" required>
+            <button type="submit">add</button>
+          </form>
         </div>
-        <form class="addrow" method="post"
-              action="{{ url_for('journal_section_tag_add', section_id=s.id) }}">
-          <input type="text" name="tag" placeholder="add permanent tag…" required>
-          <button type="submit">add</button>
-        </form>
         {# Lower zone: Temporary (derived from entries). Drop here = demote. #}
         <div class="tag-zone temp-zone" data-zone="temporary" data-section="{{ s.id }}"
              data-demote-url="{{ url_for('journal_section_tag_demote', section_id=s.id, tag='__TAG__') }}">

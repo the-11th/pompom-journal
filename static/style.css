@@ -823,7 +823,8 @@ a.task-check:hover { filter: brightness(1.2); }
 .perm-tags { margin: 0.7rem 0; }
 .perm-chip { display: inline-flex; align-items: center; gap: 0.5rem; border: 1px solid var(--border); border-radius: 999px; padding: 0.25rem 0.75rem; font-size: 0.82rem; margin: 0.2rem; }
 .perm-chip .x { background: none; border: none; color: var(--danger); cursor: pointer; font: inherit; padding: 0; line-height: 1; }
-.addrow { display: flex; gap: 0.5rem; margin-top: 0.6rem; flex-wrap: wrap; align-items: center; }
+.addrow { display: flex; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; align-items: center; }
+.tag-zone .addrow { margin: 0.3rem 0 0; }
 .delete-section { margin-top: 0.6rem; }
 .hint { color: var(--muted); font-size: 0.8rem; }
 .muted-note { color: var(--muted); font-size: 0.8rem; }
