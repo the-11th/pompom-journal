@@ -8,8 +8,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/** One app's foreground time on a given day. */
-data class AppUsage(val name: String, val label: String, val min: Int)
+/** One app's foreground time + launch count on a given day. */
+data class AppUsage(val name: String, val label: String, val min: Int, val opens: Int = 0)
 
 /**
  * One local day's usage, shaped to match Plan 1's `parse_push` contract exactly:
@@ -46,16 +46,12 @@ class UsageReader(private val context: Context) {
 
         // Foreground time per package.
         val agg = usm.queryAndAggregateUsageStats(start, end)
-        val apps = agg.entries.mapNotNull { (pkg, stats) ->
-            val minutes = (stats.totalTimeInForeground / 60000L).toInt()
-            if (minutes <= 0) null
-            else AppUsage(pkg, labelFor(pkg), minutes)
-        }
 
-        // Unlocks + first/last use from the event stream.
+        // Unlocks + first/last use + per-app opens from the event stream.
         var unlocks = 0
         var firstMs = Long.MAX_VALUE
         var lastMs = Long.MIN_VALUE
+        val opensByPkg = HashMap<String, Int>()   // per-package foreground launches
         val events = usm.queryEvents(start, end)
         val e = UsageEvents.Event()
         while (events.hasNextEvent()) {
@@ -66,8 +62,19 @@ class UsageReader(private val context: Context) {
                 UsageEvents.Event.MOVE_TO_FOREGROUND -> {
                     if (e.timeStamp < firstMs) firstMs = e.timeStamp
                     if (e.timeStamp > lastMs) lastMs = e.timeStamp
+                    e.packageName?.let { pkg ->
+                        opensByPkg[pkg] = (opensByPkg[pkg] ?: 0) + 1
+                    }
                 }
             }
+        }
+
+        // Merge foreground minutes with the opens tally (an app with minutes but
+        // no resume event -> opens 0).
+        val apps = agg.entries.mapNotNull { (pkg, stats) ->
+            val minutes = (stats.totalTimeInForeground / 60000L).toInt()
+            if (minutes <= 0) null
+            else AppUsage(pkg, labelFor(pkg), minutes, opensByPkg[pkg] ?: 0)
         }
 
         return Aggregate.build(

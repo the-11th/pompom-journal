@@ -51,7 +51,10 @@ def _parse_top_apps(raw):
         if not name:
             continue
         label = _str_or_none(a.get("label")) or name
-        apps.append({"name": name, "label": label, "min": _int(a.get("min"))})
+        apps.append({
+            "name": name, "label": label,
+            "min": _int(a.get("min")), "opens": _int(a.get("opens")),
+        })
     apps.sort(key=lambda x: x["min"], reverse=True)
     return apps[:_TOP_APPS_CAP]
 
@@ -149,7 +152,13 @@ def usage_unlocks_series(entries, start=None, end=None):
 
 
 def usage_top_apps(entries, start=None, end=None):
-    totals, labels = {}, {}
+    """Aggregate per-app minutes AND opens across the range.
+
+    Rows are ``{name, label, min, opens}`` sorted by total minutes desc, capped
+    at 8. ``opens`` defaults to 0 for apps parsed from data that predates the
+    per-app open-count field.
+    """
+    totals, opens, labels = {}, {}, {}
     for e in _filter_entries_by_date(entries, start, end):
         u = _entry_usage(e)
         if not u:
@@ -159,10 +168,46 @@ def usage_top_apps(entries, start=None, end=None):
             if not name:
                 continue
             totals[name] = totals.get(name, 0) + (a.get("min") or 0)
+            opens[name] = opens.get(name, 0) + (a.get("opens") or 0)
             labels.setdefault(name, a.get("label") or name)
-    rows = [{"name": k, "label": labels[k], "min": v} for k, v in totals.items()]
+    rows = [{"name": k, "label": labels[k], "min": v, "opens": opens[k]}
+            for k, v in totals.items()]
     rows.sort(key=lambda a: a["min"], reverse=True)
     return rows[:_TOP_APPS_CAP]
+
+
+def usage_app_minutes_series(entries, start=None, end=None, top_n=6):
+    """Per-day minutes for the top-``top_n`` apps (by total minutes in range).
+
+    Shape (for a stacked/multi-line chart)::
+
+        {"apps": [{"name", "label"}],   # top-N apps, most minutes first
+         "dates": ["YYYY-MM-DD", ...],  # sorted dates of usable entries
+         "series": {name: [minutes-per-date...]}}  # zero-filled, aligned to dates
+
+    Days where an app has no recorded minutes contribute 0. Ignores entries
+    lacking usable usage; returns empty structure when there's no data.
+    """
+    top = usage_top_apps(entries, start, end)[:max(0, top_n)]
+    apps = [{"name": a["name"], "label": a["label"]} for a in top]
+    keep = {a["name"] for a in apps}
+
+    # date -> {name: minutes} for kept apps only.
+    by_date = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        u = _entry_usage(e)
+        if not u:
+            continue
+        date = e.get("date")
+        day = by_date.setdefault(date, {})
+        for a in u.get("top_apps") or []:
+            name = a.get("name")
+            if name in keep:
+                day[name] = day.get(name, 0) + (a.get("min") or 0)
+
+    dates = sorted(by_date)
+    series = {a["name"]: [by_date[d].get(a["name"], 0) for d in dates] for a in apps}
+    return {"apps": apps, "dates": dates, "series": series}
 
 
 def usage_dow_averages(entries, start=None, end=None):

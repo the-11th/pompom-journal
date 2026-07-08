@@ -58,7 +58,8 @@ class UsagePushWorker(appContext: Context, params: WorkerParameters) :
                 apps.put(JSONObject()
                     .put("name", a.name)
                     .put("label", a.label)
-                    .put("min", a.min))
+                    .put("min", a.min)
+                    .put("opens", a.opens))
             }
             val o = JSONObject()
                 .put("date", d.date)
