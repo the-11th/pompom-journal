@@ -203,8 +203,9 @@
       }
     },
 
-    drawAxis: function (svg, x, y, w, h, labels, c) {
-      // X-axis baseline + evenly spaced tick labels below it.
+    drawAxis: function (svg, x, y, w, h, labels, c, xlabel) {
+      // X-axis baseline + evenly spaced tick labels below it. Optional `xlabel`
+      // draws a centered axis title beneath the ticks.
       svg.appendChild(U.svgEl("line", {
         x1: x, y1: y + h, x2: x + w, y2: y + h,
         stroke: c.muted, "stroke-width": 1,
@@ -214,6 +215,10 @@
         var cx = n === 1 ? x + w / 2 : x + (w * i) / (n - 1);
         U.text(svg, cx, y + h + 12, labels[i], c.muted,
                { anchor: "middle", size: 9 });
+      }
+      if (xlabel) {
+        U.text(svg, x + w / 2, y + h + 26, xlabel, c.muted,
+               { anchor: "middle", size: 10 });
       }
     },
 
@@ -1628,20 +1633,20 @@
             buckets[idx].count++;
           });
         }
-        var w = 600, h = 180, pad = 30;
+        var w = 600, h = 196, pad = 30, chartH = 140;
         var svg = U.svg(w, h);
         var cmax = Math.max.apply(null, buckets.map(function (bk) { return bk.count; })) || 1;
         var bw = (w - pad - 10) / buckets.length;
         buckets.forEach(function (bk, i) {
-          var bh = (h - pad - 10) * (bk.count / cmax);
-          U.drawBar(svg, pad + i * bw + 2, 10 + (h - pad - 10) - bh, bw - 4, bh, s.color);
+          var bh = chartH * (bk.count / cmax);
+          U.drawBar(svg, pad + i * bw + 2, 10 + chartH - bh, bw - 4, bh, s.color);
           if (bk.count) {
-            U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
+            U.text(svg, pad + i * bw + bw / 2, 10 + chartH - bh - 3,
                    String(bk.count), c.muted, { anchor: "middle", size: 9 });
           }
         });
-        U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                   [U.fmt(min), U.fmt(max)], c);
+        U.drawAxis(svg, pad, 10, w - pad - 10, chartH,
+                   [U.fmt(min), U.fmt(max)], c, s.unit || s.name);
         block.appendChild(svg);
         container.appendChild(block);
       });
@@ -2320,19 +2325,19 @@
         if (m != null && m >= 1 && m <= 7) { dist[m]++; any = true; }
       });
       if (!any) { U.empty(container, "No mood recorded in this range."); return; }
-      var w = 600, h = 180, pad = 30;
+      var w = 600, h = 196, pad = 30, chartH = 140;
       var svg = U.svg(w, h);
       var keys = [1, 2, 3, 4, 5, 6, 7];
       var max = Math.max.apply(null, keys.map(function (k) { return dist[k]; })) || 1;
       var bw = (w - pad - 10) / keys.length;
       keys.forEach(function (k, i) {
-        var bh = (h - pad - 10) * (dist[k] / max);
-        U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
-        U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
+        var bh = chartH * (dist[k] / max);
+        U.drawBar(svg, pad + i * bw + 3, 10 + chartH - bh, bw - 6, bh, c.accent);
+        U.text(svg, pad + i * bw + bw / 2, 10 + chartH - bh - 3,
                dist[k] || "", c.muted, { anchor: "middle", size: 9 });
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 keys.map(String), c);
+      U.drawAxis(svg, pad, 10, w - pad - 10, chartH,
+                 keys.map(String), c, "mood (1–7)");
       container.appendChild(svg);
       // Describe the underlying values (one per recorded mood) for mode etc.
       var vals = [];
@@ -3495,17 +3500,24 @@
       rows = rows.slice(0, 8);
       if (!rows.length) { U.empty(container, "No app data in this range."); return; }
 
+      var notes = rows.map(function (row) {
+        return fmtScreen(row.min) + (row.opens ? "  ·  " + row.opens + " opens" : "");
+      });
+      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
+      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.label || "").length); }, 0);
       var maxV = rows[0].min || 1;
       var w = 600, h = Math.max(120, rows.length * 28 + 20);
       var svg = U.svg(w, h);
-      var barW = w - 160;
+      // Left gutter sized to the longest app name (not a fixed slab); right
+      // gutter to the widest value label. ≈6 units/char at these sizes.
+      var leftPad = Math.ceil(maxName * 6) + 14;
+      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
       rows.forEach(function (row, i) {
         var y = i * 28 + 10;
         var bw = barW * (row.min / maxV);
-        U.drawBar(svg, 150, y, bw, 18, c.accent);
-        U.text(svg, 144, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
-        var note = fmtScreen(row.min) + (row.opens ? "  ·  " + row.opens + " opens" : "");
-        U.text(svg, 150 + bw + 4, y + 13, note, c.muted, { size: 9 });
+        U.drawBar(svg, leftPad, y, bw, 18, c.accent);
+        U.text(svg, leftPad - 6, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
       });
       container.appendChild(svg);
     },
@@ -3522,16 +3534,20 @@
       if (!rows.length) {
         U.empty(container, "No app-open data in this range."); return;
       }
+      var notes = rows.map(function (row) { return row.opens + " opens"; });
+      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
+      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.label || "").length); }, 0);
       var maxV = rows[0].opens || 1;
       var w = 600, h = Math.max(120, rows.length * 28 + 20);
       var svg = U.svg(w, h);
-      var barW = w - 160;
+      var leftPad = Math.ceil(maxName * 6) + 14;
+      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
       rows.forEach(function (row, i) {
         var y = i * 28 + 10;
         var bw = barW * (row.opens / maxV);
-        U.drawBar(svg, 150, y, bw, 18, c.accent);
-        U.text(svg, 144, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, 150 + bw + 4, y + 13, row.opens + " opens", c.muted, { size: 9 });
+        U.drawBar(svg, leftPad, y, bw, 18, c.accent);
+        U.text(svg, leftPad - 6, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
       });
       container.appendChild(svg);
       var totalOpens = rows.reduce(function (a, r) { return a + r.opens; }, 0);
