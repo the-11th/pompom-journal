@@ -1,0 +1,18 @@
+{# Themed line icons for the "what happened today" integration panels. The same
+   paths are mirrored in static/integrations-sync.js's icon() factory (used when
+   a panel re-renders after an auto-sync) — keep the two in sync. #}
+{% macro integ_icon(name) -%}
+<svg class="integ-icon integ-icon-{{ name }}" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2" stroke-linecap="round"
+     stroke-linejoin="round" aria-hidden="true" focusable="false">
+  {%- if name == "sleep" -%}
+    <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>
+  {%- elif name == "rescuetime" -%}
+    <circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.5"/>
+  {%- elif name == "music" -%}
+    <path d="M5 15v-3a7 7 0 0 1 14 0v3"/><rect x="3" y="14.5" width="4.2" height="6" rx="1.6"/><rect x="16.8" y="14.5" width="4.2" height="6" rx="1.6"/>
+  {%- elif name == "usage" -%}
+    <rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10 18.5h4"/>
+  {%- endif -%}
+</svg>
+{%- endmacro %}

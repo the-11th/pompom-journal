@@ -9,27 +9,48 @@
     return el;
   }
 
+  // Themed line icons — mirror of templates/_integ_icons.html (used when a panel
+  // is re-rendered after an auto-sync). Keep the paths in sync with that macro.
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const ICON_PATHS = {
+    sleep: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
+    rescuetime: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 1.5"/>',
+    music: '<path d="M5 15v-3a7 7 0 0 1 14 0v3"/><rect x="3" y="14.5" width="4.2" height="6" rx="1.6"/><rect x="16.8" y="14.5" width="4.2" height="6" rx="1.6"/>',
+  };
+  function icon(name) {
+    const svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("class", "integ-icon integ-icon-" + name);
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.innerHTML = ICON_PATHS[name] || "";
+    return svg;
+  }
+
   // ---- per-provider render functions (panel row) ----
   function renderSleep(panel, s) {
     if (!s) return;
     const dur = `${Math.floor(s.duration_min / 60)}h ${s.duration_min % 60}m`;
-    const label = s.score != null ? "Quality" : "Quality (efficiency)";
     panel.replaceChildren(
-      span("sleep-icon", "🛌"),
+      icon("sleep"),
       span("sleep-times", `${s.start} → ${s.end}`),
       span("sleep-dur", dur),
-      span("sleep-qual", `${label} ${s.quality}`));
+      span("sleep-qual", `Quality ${s.quality}`));
   }
   function renderRescuetime(panel, r) {
     if (!r) return;
     panel.replaceChildren(
-      span("rt-icon", "⏱"),
+      icon("rescuetime"),
       span("rt-pulse", `Pulse ${r.pulse}`),
       span("rt-prod", `${Math.round(r.productive_min / 60 * 10) / 10}h productive`));
   }
   function renderMusic(panel, m) {
     if (!m) return;
-    const kids = [span("music-icon", "🎧"),
+    const kids = [icon("music"),
                   span("music-min", `${m.minutes} min`),
                   span("music-tracks", `${m.tracks} tracks`)];
     if (m.top_artists && m.top_artists[0]) kids.push(span("music-artist", m.top_artists[0].name));
@@ -69,4 +90,16 @@
     document.querySelectorAll(`#${p.name}-sync-now`).forEach((b) =>
       b.addEventListener("click", () => sync(p, panel).then(() => location.reload())));
   });
+
+  // Entry form: collapse the tracked-data panels behind the caret next to
+  // "What happened today". Closed by default; the caret rotates when open.
+  const integToggle = document.getElementById("integ-toggle");
+  const integPanels = document.getElementById("integ-panels");
+  if (integToggle && integPanels) {
+    integToggle.addEventListener("click", () => {
+      const willOpen = integPanels.hasAttribute("hidden");
+      integPanels.toggleAttribute("hidden");
+      integToggle.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+  }
 })();
