@@ -448,50 +448,68 @@ Deferred: active task list, analytics chart labels, sections manage page.
 
 ### Analytics restructure (the deep view)
 
-The `/journal/analytics` page gained a top-right **`Journal | Task` lens toggle**
-(`.analytics-lens`, in the new `.analytics-tabrow`). **Overview** always renders
-**outside** the toggle (its content is unchanged here — a deferred follow-up will
-upgrade it). The lens swaps the deeper tabs:
+The `/journal/analytics` page uses a **two-tier grouped navigation**: a **primary
+category row** (`.analytics-cats`) + a **secondary sub-tab row**
+(`.analytics-subtabs`). This replaced the old flat tab bar + `Journal | Task`
+lens toggle (which clipped tabs off-screen at `overflow:hidden`). **Overview** is
+just the first category (single sub-tab, itself). The categories, in order, with
+their sub-tabs:
 
-| Lens | Tabs |
+| Category | Sub-tabs |
 |---|---|
-| Shared (always) | **Overview** · **Tags** |
-| **Journal** | Mood · Sleep · Productivity · Music · Leading · Consistency · Numeric · Coverage |
-| **Task** | Throughput · Timeliness · Adherence · Difficulty |
+| **Overview** | (renders directly — no secondary row) |
+| **Health** | Mood · Sleep |
+| **Data** | Numeric · Tags |
+| **Digital** | Productivity · Music · Phone usage |
+| **Tasks** | Throughput · Timeliness · Adherence · Difficulty |
+| **Patterns** | Leading · Consistency · Coverage |
 
-The old single **"Tasks"** tab was **refactored** into the Task-lens sub-tabs
-(no chart lost): `task-throughput`/`task-entry-calendar` → Throughput;
+`PANELS` are the sub-tab definitions (each `{id, label, needs?}`); `CATEGORIES`
+groups them by id. Navigation state: `_category` (active primary) alongside
+`_activeTab` (active sub-tab). Behavior (`buildCategories`/`buildSubtabs`/
+`switchCategory`/`switchTab`/`goTo`/`reconcileNav`): clicking a category activates
+its first sub-tab; the **secondary row shows only when the active category has ≥2
+sub-tabs** (Overview, being a single, shows no secondary row). **The nav is a
+stable, complete map — every category and sub-tab is always visible regardless of
+data** (`tabVisible`/`categoryVisible` always true); a tab with no data yet renders
+its charts' graceful empty states (e.g. "No mood recorded in this range", "connect
+Spotify and sync…") rather than being hidden. The `needs:` predicates on `PANELS`
+still exist but **no longer gate tab visibility** — they feed the Overview cards
+and the Leading-tab logic only. `reconcileNav` keeps `_category`/`_activeTab`
+mutually consistent after each fetch. The primary row is `flex-wrap: wrap` (never
+`overflow:hidden`) so all categories stay reachable.
+
+The old single **"Tasks"** tab was **refactored** into the **Tasks** category's
+sub-tabs (no chart lost): `task-throughput`/`task-entry-calendar` → Throughput;
 `task-overdue`/`task-numeric-scatter` → Timeliness; `task-adherence` →
 Adherence; `task-difficulty` → Difficulty. The separate **"Task tags"** tab is
-**gone**: its `task-tag-frequency` chart was merged into the cross-domain
-**Tags** tab. Because tags are unified by name across domains, **Tags** is
-`lens: ["journal", "task"]` (shown in both lenses, like the **Tag** detail tab)
-and carries every tag chart in order — the journal tag analytics (frequency,
-trend, per-tag heatmap, co-occurrence) first, then the task-tag analytics
-(`task-tag-frequency`). It has no tab-level `needs`: the journal charts always
-render, and the task-tag chart shows its normal `U.empty(...)` state when there
-are no tasks. `PANELS` entries carry an optional `lens: [...]`; a tab with no
-lens is shared, and the **Tags** tab lists both lenses. The **Tags** tab has a
-bespoke `renderTagsTab()` (outside the `CHARTS` loop): a search box on top, and
-below it **the all-tags overview by default** (the aggregate `panel: "tags"`
-charts) which a **per-tag detail replaces once a tag is searched** (cleared
-search returns to the overview). The search box has a custom **live-preview
-dropdown** scoped to the active lens — the **Journal** lens lists only journal
-(section) tags, the **Task** lens only task-registry tags; matches update as you
-type, each origin-marked (☑ task / ● journal), with arrow-key + click select,
-and the preview **commits and hides on Enter**. Per-tag detail is an async fetch
-of `/tag/<name>/overview` (cached per name+range), rendered **lens-aware**
-(journal half vs task half), reusing the `U.*` SVG utilities and the
-mood-over-time chart pattern. On load it reads `#tag=<name>` from the URL hash to
-open the Tags tab pre-searched; it refetches on tag change and date-range change.
+**gone**: its `task-tag-frequency` chart merged into the cross-domain **Tags**
+tab (under **Data**). Because tags are unified by name across domains, **Tags**
+carries every tag chart in order — the journal tag analytics (frequency, trend,
+per-tag heatmap, co-occurrence) first, then the task-tag analytics
+(`task-tag-frequency`); the task-tag chart shows its normal `U.empty(...)` state
+when there are no tasks. `renderTagsTab()` (bespoke, outside the `CHARTS` loop):
+a search box on top, and below it **the all-tags overview by default** (ALL
+aggregate `panel: "tags"` charts) which a **per-tag detail replaces once a tag is
+searched** (cleared search returns to the overview). The search box has a custom
+**live-preview dropdown** listing **both** journal (section) tags and
+task-registry tags, each origin-marked (☑ task / ● journal), with arrow-key +
+click select, committing and hiding on Enter. Per-tag detail is an async fetch of
+`/tag/<name>/overview` (cached per name+range) that renders **both halves** —
+journal detail (`renderTagJournal`) then task detail (`renderTagTask`), each with
+its own empty state — reusing the `U.*` SVG utilities. On load it reads
+`#tag=<name>` from the URL hash to open **Data → Tags** pre-searched; it refetches
+on tag change and date-range change. (The old lens is fully removed — no `_lens`,
+`switchLens`, or `.analytics-lens*`; CHARTS entries no longer carry `lens:`.)
 
 ### Files
 
 New: `static/tag-popup.js`. Modified: `journal.py`, `todo.py`, `app.py`,
 `static/analytics.js`, `static/journal-search.js`, `templates/base.html`,
 `templates/archive.html`, `templates/journal_analytics.html`, `static/style.css`
-(`.tag-pop*`, origin marks `.origin-task`/`.origin-dot`, `.analytics-lens*`,
-Tag-detail `.deep-*`/`.callout*`/`.cooc-*`).
+(`.tag-pop*`, origin marks `.origin-task`/`.origin-dot`, category nav
+`.analytics-cats`/`.analytics-cat` + sub-tabs `.analytics-subtabs`/
+`.analytics-subtab`, Tag-detail `.deep-*`/`.callout*`/`.cooc-*`).
 
 ---
 
@@ -695,8 +713,8 @@ degrade gracefully on too few points):
 `analytics_payload` carries each entry's `sleep` (structured dict or `null`) so
 the client can render without a new endpoint.
 
-**Sleep tab** in `static/analytics.js` (`lens: ["journal"]`, gated on `hasSleep`,
-placed after Mood in the Journal lens): stat cards (avg duration, avg quality, avg
+**Sleep tab** in `static/analytics.js` (**Health** category, gated on `hasSleep`,
+after Mood): stat cards (avg duration, avg quality, avg
 bedtime/waketime, nights tracked); duration over time with 7-night rolling avg;
 quality over time; bedtime & wake-time consistency; avg duration by day of week;
 stage composition stacked bar; sleep↔mood correlation scatter with Pearson `r`;
@@ -719,8 +737,8 @@ data; degrade gracefully on too few points):
 `analytics_payload` carries each entry's `rescuetime` (structured dict or `null`)
 so the client can render without a new endpoint.
 
-**Productivity tab** in `static/analytics.js` (`lens: ["journal"]`, gated on
-`hasRescueTime`, placed after Sleep in the Journal lens): stat cards (avg pulse,
+**Productivity tab** in `static/analytics.js` (**Digital** category, gated on
+`hasRescueTime`, first sub-tab): stat cards (avg pulse,
 avg productive hours, days tracked); pulse over time with 7-day rolling avg;
 time breakdown stacked bar (productive/distracting/neutral); category totals bar;
 avg pulse by day of week; pulse↔mood correlation scatter with Pearson `r`. Mirrors
@@ -823,8 +841,8 @@ degrade gracefully on too few points):
 `analytics_payload` carries each entry's `music` (structured dict or `null`) so
 the client renders without a new per-entry endpoint.
 
-**Music tab** in `static/analytics.js` (`lens: ["journal"]`, gated on `hasMusic`,
-placed after Productivity in the Journal lens): stat cards (avg minutes/day, total
+**Music tab** in `static/analytics.js` (**Digital** category, gated on `hasMusic`,
+after Productivity): stat cards (avg minutes/day, total
 tracks, days tracked); minutes listened over time with 7-day rolling avg; top
 artists aggregated over the date range (bar chart); **taste view** — three
 terms (4wk/6mo/All-time) each showing top artists, tracks, and genres, fetched
@@ -858,9 +876,17 @@ Android app + APK CI + Manage-page download QR are Plan 2.
   single day dict OR a **list** of days (the worker pushes the last 3 days per
   Decision 8) → list of normalized `usage` dicts (defensive: coerce types, clamp
   negatives to 0, cap `top_apps` at 8 sorted by minutes desc, skip days without a
-  valid YYYY-MM-DD `date`, `source:"phone"`). Aggregation helpers (injectable
+  valid YYYY-MM-DD `date`, `source:"phone"`). Each `top_apps[]` entry carries
+  `{name, label, min, opens}` — `opens` is the per-app foreground-launch count
+  that day (`_int`-coerced, clamped ≥ 0, **defaults 0** for payloads/old data
+  without it). Aggregation helpers (injectable
   bounds, skip entries lacking usable usage): `usage_minutes_series`,
-  `usage_unlocks_series`, `usage_top_apps`, `usage_dow_averages`,
+  `usage_unlocks_series`, `usage_top_apps` (rows `{name, label, min, opens}` —
+  sums both minutes AND opens per app, sorted by minutes desc, cap 8),
+  `usage_app_minutes_series(entries, start=None, end=None, top_n=6)` → per-day
+  minutes for the top-`top_n` apps by total minutes, shaped
+  `{apps:[{name,label}], dates:[...], series:{name:[min-per-date...]}}`
+  (zero-filled, for a stacked/multi-line chart), `usage_dow_averages`,
   `usage_mood_pairs` (screen_min↔mood, ignores null moods),
   `usage_stats` ({avg_screen_min, avg_unlocks, days}), `_entry_usage(entry)`
   (usable-or-None: screen_min or top_apps present).
@@ -875,11 +901,19 @@ Entry `usage` model:
 ```json
 "usage": {
   "date": "2026-07-06", "screen_min": 312, "unlocks": 87,
-  "top_apps": [{"name": "com.instagram.android", "label": "Instagram", "min": 74}],
+  "top_apps": [{"name": "com.instagram.android", "label": "Instagram", "min": 74, "opens": 41}],
   "first_use": "07:42", "last_use": "23:15",
   "source": "phone", "fetched": "2026-07-07T02:05:00"
 }
 ```
+
+Each `top_apps[]` entry carries per-app **`opens`** (foreground launches that
+day, int ≥ 0, default 0 — backward-compatible with pre-opens data). The Android
+collector (`UsageReader.readDay`) tallies opens per package in the same
+`queryEvents` loop that already reads unlocks/first-use, counting
+`ACTIVITY_RESUMED`/`MOVE_TO_FOREGROUND` events keyed on `packageName`; apps with
+foreground minutes but no resume event get 0. `UsagePushWorker.serialize` emits
+`opens` on each app object.
 
 **Phone routes (in `app.py`):**
 
@@ -896,11 +930,18 @@ Manage-page **Phone usage** card (`_integrations_cards.html`) shows the endpoint
 generate/rotate token, disconnect, last-received, a "Download the app"
 placeholder + a marked QR spot (Plan 2). **No "Sync now"** — data is pushed.
 
-**Phone-usage analytics tab** in `static/analytics.js` (`lens: ["journal"]`,
+**Phone-usage analytics tab** in `static/analytics.js` (**Digital** category,
 gated on `hasUsage`, after Music) via `usageOf(e)` (JS mirror of `_entry_usage`):
 stat cards (avg screen time/day, avg unlocks, days tracked); screen time over
-time with 7-day rolling avg; top apps over range; unlocks over time; avg screen
-time by day of week; screen-time↔mood scatter with Pearson `r`. Entry page shows
+time with 7-day rolling avg; **top apps by screen time** over range (bars,
+annotated with each app's total opens); **top apps by opens** (bars ranked by
+launch count, mirror of the opens side of `usage_top_apps`); **screen time by
+app over time** (multi-line chart of the top-6 apps' daily minutes, mirror of
+`usage_app_minutes_series`, with a per-app color legend reusing
+`.sleep-stage-legend`/`--sl-color`); unlocks over time; avg screen
+time by day of week; screen-time↔mood scatter with Pearson `r`. The shared
+`aggUsageApps(entries)` helper (JS mirror of `usage_top_apps`) sums per-app
+minutes + opens for the app charts. Entry page shows
 a read-only `.usage-row` panel (📱 + screen time + top app), server-rendered —
 **no client auto-sync** (data is pushed). CSS: `.usage-row`, `.phone-endpoint`,
 `.phone-token-reveal`, `.phone-qr`.
@@ -946,8 +987,8 @@ has been exercised against a real account yet.** When testing live, watch for:
    days (especially the Google `parse_sleep` field-name check above) and that
    reconnect works.
 2. **Analyze the existing analytics** — review/verify the analytics tabs and
-   charts (Overview, Mood, Sleep, Productivity, Music, Tags, Numeric, the Task
-   lens) with real data: do a browser pass, sanity-check the numbers against the
+   charts (Overview, Mood, Sleep, Productivity, Music, Tags, Numeric, the Tasks
+   category) with real data: do a browser pass, sanity-check the numbers against the
    pure helpers, and note any rendering or correctness gaps.
 
 ---
@@ -1072,29 +1113,31 @@ What exists today:
   `_predictor_by_date`/`_shift_date`/`lagged_pairs`. No new payload fields — the
   **Leading** tab computes client-side from the existing streams (JS mirrors).
 - **`static/analytics.js`** — vanilla SVG charts via a `CHARTS` registry
-  (add a chart = append one descriptor). Tabs: Overview, **Mood** (gated on any
-  recorded mood via `hasMood`), **Sleep** (gated on `hasSleep`, Journal lens
-  only — see Integrations below), **Productivity** (gated on `hasRescueTime`,
-  Journal lens only — see Integrations below), **Music** (gated on `hasMusic`,
-  Journal lens only — see Integrations below), **Leading** (gated on `hasLeading`
-  = mood + ≥2 predictor streams + a predictor with ≥`min_n`=5 lagged pairs;
-  Journal lens only: lag selector 0–3, ranked indicator board, lagged scatter,
-  lag-profile chart), Consistency (entry calendar,
-  words/entry, gaps, time-of-day), the cross-domain **Tags** tab (journal
-  frequency, trend, per-tag heatmap, co-occurrence, then task-tag frequency —
-  shown in both lenses), the expanded **Numeric** tab (see below), Coverage, plus
-  a **`Journal | Task` lens toggle** that swaps the deeper tabs (the old single
-  "Tasks" tab is now the Task-lens sub-tabs Throughput/Timeliness/Adherence/
-  Difficulty; the former separate "Task tags" tab is folded into the shared Tags
-  tab) and a shared **Tag** detail tab — see the "Tag pages / backlinks" section
-  above. Shared date-range filter; refetches on load and on
-  window focus (10s debounce). Colors read from CSS vars + section hex.
+  (add a chart = append one descriptor). Tabs are grouped into **categories**
+  (primary row) → **sub-tabs** (secondary row); see "Analytics restructure"
+  above for the full model. The tabs: **Overview** (own category); under
+  **Health**: **Mood** (gated on any recorded mood via `hasMood`) and **Sleep**
+  (gated on `hasSleep` — see Integrations below); under **Data**: **Numeric**
+  (gated on `hasNumeric`, see below) and the cross-domain **Tags** tab (journal
+  frequency, trend, per-tag heatmap, co-occurrence, then task-tag frequency);
+  under **Digital**: **Productivity** (gated on `hasRescueTime`), **Music**
+  (gated on `hasMusic`), **Phone usage** (gated on `hasUsage`) — see Integrations
+  below; under **Tasks**: Throughput/Timeliness/Adherence/Difficulty (gated on
+  `hasTasks`; the old single "Tasks" tab, refactored — the former separate "Task
+  tags" tab is folded into the Tags tab); under **Patterns**: **Leading** (gated
+  on `hasLeading` = mood + ≥2 predictor streams + a predictor with ≥`min_n`=5
+  lagged pairs; lag selector 0–3, ranked indicator board, lagged scatter,
+  lag-profile chart), Consistency (entry calendar, words/entry, gaps,
+  time-of-day), and Coverage; plus a shared **Tag** detail (the searched-tag view
+  inside the Tags tab) — see the "Tag pages / backlinks" section above. Shared
+  date-range filter; refetches on load and on window focus (10s debounce).
+  Colors read from CSS vars + section hex.
   - **Mood tab**: mood-over-time (fixed 1–7 axis + 7-day rolling avg overlay),
     average mood by day of week, mood distribution histogram, and mood-vs-numeric
     scatter (one small-multiple per numeric section, with a Pearson `r`).
-  - **Sleep tab** (Journal lens, gated on `hasSleep`): see Integrations section.
-  - **Productivity tab** (Journal lens, gated on `hasRescueTime`): see Integrations section.
-  - **Music tab** (Journal lens, gated on `hasMusic`): see Integrations section.
+  - **Sleep tab** (Health category, gated on `hasSleep`): see Integrations section.
+  - **Productivity tab** (Digital category, gated on `hasRescueTime`): see Integrations section.
+  - **Music tab** (Digital category, gated on `hasMusic`): see Integrations section.
   - **Numeric tab** (gated on `hasNumeric`) is a rich multi-chart tab reading
     top-to-bottom — overview → trends → shape → relationships → streaks/coverage:
     per-section **stat cards** (mean/median/std/min/max/latest/count); **values
@@ -1140,11 +1183,11 @@ What exists today:
     tag-suggestions feature — suggested tags + dormant people + apply popup —
     used to live here; it now lives on the **Manage sections** page, see the
     "Section management" Suggestions note above.) **Clickable launchpad**:
-    numeric card → Numeric tab
-    (`_secSel.numeric=[id]`); mood card → Mood tab; tasks card → Task lens +
-    Throughput; any driver naming a tag → Tags tab pre-searched
-    (set `_tagQuery`, `switchTab("tags")`). Wired via `makeClickable` +
-    `switchLens`/`switchTab`/`gotoNumeric`/`gotoMood`/`gotoThroughput`/`gotoTag`.
+    numeric card → **Data → Numeric**
+    (`_secSel.numeric=[id]`); mood card → **Health → Mood**; tasks card →
+    **Tasks → Throughput**; any driver naming a tag → **Data → Tags**
+    pre-searched (set `_tagQuery`, then `goTo("data", "tags")`). Wired via
+    `makeClickable` + `goTo`/`gotoNumeric`/`gotoMood`/`gotoThroughput`/`gotoTag`.
     Styles: `.stat-cards`/`.stat-card*`, `.stat-delta.up/.down`, `.stat-spark`,
     `.insights*`, `.ov-section*`, `.ov-clickable`, `.drivers-list`/`.driver-*`,
     `.heat-legend*` in `style.css`.
@@ -1181,9 +1224,9 @@ once via `/integrations` (settings page) and auto-syncs on journal page load
 (throttled to once/hour) and on-demand via "Sync now". See the Integrations section
 for full detail on routes, data models, and analytics helpers.
 
-- **Google Health sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (Journal lens, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
-- **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (Journal lens, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
-- **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (Journal lens, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
+- **Google Health sleep**: `entry["sleep"]` (bedtime/wake/duration/quality/stages) → **Sleep** tab (**Health** category, gated on `hasSleep`): duration/quality trends, bedtime consistency, DOW bars, stage composition, sleep↔mood scatter, coverage.
+- **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (**Digital** category, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
+- **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (**Digital** category, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
 
 ### Phone usage — server side DONE (Plan 1); Android app = Plan 2
 

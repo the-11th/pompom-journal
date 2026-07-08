@@ -15,10 +15,8 @@
 {% block content %}
   <div class="analytics" id="analytics-root"
        data-endpoint="{{ url_for('journal_analytics_data') }}">
-    <div class="analytics-tabrow">
-      <div class="analytics-tabs" role="tablist"></div>
-      <div class="analytics-lens" role="group" aria-label="Journal / Task lens"></div>
-    </div>
+    <div class="analytics-cats" role="tablist" aria-label="Analytics categories"></div>
+    <div class="analytics-subtabs" role="tablist" aria-label="Sub-sections"></div>
     <div class="analytics-filter">
       <span class="filter-label">from</span>
       <div class="cs-date">

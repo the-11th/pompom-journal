@@ -1407,36 +1407,68 @@ a.task-check:hover { filter: brightness(1.2); }
 
 .analytics { margin-top: 1rem; }
 
-/* Tab bar — same segmented look as the .kind-toggle control.
-   Kept to a single line: tabs flex to share the row, lens toggle pins right. */
-.analytics-tabs {
+/* Primary category row — segmented control, same look as the .kind-toggle
+   control. MUST NOT clip: wraps to a second line on narrow widths (never
+   overflow:hidden) so every category stays reachable. */
+.analytics-cats {
   display: flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
-  margin-bottom: 1rem;
+  margin-bottom: 0.6rem;
 }
-.analytics-tab {
+.analytics-cat {
   background: var(--panel);
   color: var(--muted);
   border: none;
   border-left: 1px solid var(--border);
-  padding: 0.5rem 0.5rem;
+  padding: 0.5rem 0.75rem;
   font: inherit;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
+  line-height: 1.1;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex: 1 1 auto;
+}
+.analytics-cat:first-child { border-left: none; }
+.analytics-cat:hover { color: var(--text); }
+.analytics-cat.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+
+/* Secondary sub-tab row — lighter, subordinate to the category row: text tabs
+   with an accent underline on the active one. Hidden (via [hidden]) when the
+   active category has a single sub-tab. */
+.analytics-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.analytics-subtabs[hidden] { display: none; }
+.analytics-subtab {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.78rem;
   line-height: 1.1;
   letter-spacing: -0.2px;
   white-space: nowrap;
   cursor: pointer;
 }
-.analytics-tab:first-child { border-left: none; }
-.analytics-tab:hover { color: var(--text); }
-.analytics-tab.active {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
+.analytics-subtab:hover { color: var(--text); }
+.analytics-subtab.active {
   color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 /* Shared date filter. */
@@ -2272,32 +2304,6 @@ input[type="number"]::-webkit-inner-spin-button {
   font-family: inherit; font-size: 0.8rem; cursor: pointer;
 }
 .tag-pop-expand:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
-
-/* ---- analytics lens toggle (top-right of the tab row) ---- */
-.analytics-tabrow {
-  display: flex; align-items: stretch; justify-content: space-between;
-  gap: 0.5rem; flex-wrap: nowrap;
-}
-.analytics-lens {
-  display: inline-flex;
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-  margin-bottom: 1rem;
-}
-.analytics-lens-btn {
-  background: var(--panel); color: var(--muted);
-  border: none; border-left: 1px solid var(--border);
-  padding: 0.5rem 0.6rem; font: inherit; font-size: 0.8rem;
-  line-height: 1.1; letter-spacing: -0.2px; white-space: nowrap; cursor: pointer;
-}
-.analytics-lens-btn:first-child { border-left: none; }
-.analytics-lens-btn:hover { color: var(--text); }
-.analytics-lens-btn.active {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-}
 
 /* ---- Tag detail tab ---- */
 .tag-search-row { display: flex; align-items: center; gap: 0.6rem; }

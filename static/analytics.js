@@ -14,7 +14,7 @@
   var _data = { sections: [], entries: [], date_range: { min: null, max: null } };
   var _from = null, _to = null;
   var _activeTab = "overview";
-  var _lens = "journal";    // "journal" | "task" — swaps the deeper tab set
+  var _category = "overview";   // active primary category (see CATEGORIES)
   var _lastFetch = 0;
   var _tagQuery = "";       // current tag in the Tag detail tab
   var _tagCache = {};       // {name: payload} cache for /tag/<name>/overview
@@ -25,27 +25,39 @@
   // selected indicator (a leadingIndicators row) for the detail panel.
   var _lead = { lag: 1, selected: null };
 
-  // Panel definitions. `needs` optionally gates a tab's visibility.
-  // `lens` scopes a tab to one lens; tabs with no lens are shared (Overview),
-  // and a tab can list multiple lenses (the Tags tab lives in both).
+  // Panel (sub-tab) definitions. `needs` optionally gates a tab's visibility;
+  // a tab with no `needs` is always visible. Panels are grouped into primary
+  // categories by CATEGORIES below.
   var PANELS = [
     { id: "overview", label: "Overview" },
-    // Journal lens
-    { id: "mood", label: "Mood", lens: ["journal"], needs: hasMood },
-    { id: "leading", label: "Leading", lens: ["journal"], needs: hasLeading },
-    { id: "sleep", label: "Sleep", lens: ["journal"], needs: hasSleep },
-    { id: "productivity", label: "Productivity", lens: ["journal"], needs: hasRescueTime },
-    { id: "music", label: "Music", lens: ["journal"], needs: hasMusic },
-    { id: "usage", label: "Phone usage", lens: ["journal"], needs: hasUsage },
-    { id: "consistency", label: "Consistency", lens: ["journal"] },
-    { id: "tags", label: "Tags", lens: ["journal", "task"] },
-    { id: "numeric", label: "Numeric", lens: ["journal"], needs: hasNumeric },
-    { id: "coverage", label: "Coverage", lens: ["journal"] },
-    // Task lens (the old single "Tasks" tab, refactored into sub-tabs)
-    { id: "throughput", label: "Throughput", lens: ["task"], needs: hasTasks },
-    { id: "timeliness", label: "Timeliness", lens: ["task"], needs: hasTasks },
-    { id: "adherence", label: "Adherence", lens: ["task"], needs: hasTasks },
-    { id: "difficulty", label: "Difficulty", lens: ["task"], needs: hasTasks },
+    { id: "mood", label: "Mood", needs: hasMood },
+    { id: "sleep", label: "Sleep", needs: hasSleep },
+    { id: "numeric", label: "Numeric", needs: hasNumeric },
+    { id: "tags", label: "Tags" },
+    { id: "productivity", label: "Productivity", needs: hasRescueTime },
+    { id: "music", label: "Music", needs: hasMusic },
+    { id: "usage", label: "Phone usage", needs: hasUsage },
+    { id: "throughput", label: "Throughput", needs: hasTasks },
+    { id: "timeliness", label: "Timeliness", needs: hasTasks },
+    { id: "adherence", label: "Adherence", needs: hasTasks },
+    { id: "difficulty", label: "Difficulty", needs: hasTasks },
+    { id: "leading", label: "Leading", needs: hasLeading },
+    { id: "consistency", label: "Consistency" },
+    { id: "coverage", label: "Coverage" },
+  ];
+
+  // Two-tier grouped navigation: a primary category row + a secondary sub-tab
+  // row. Each category lists its sub-tab panel ids (in display order). A
+  // category auto-hides when none of its sub-tabs are visible; the secondary
+  // row shows only when the active category has ≥2 visible sub-tabs. Overview
+  // has a single sub-tab (itself) so it never shows a secondary row.
+  var CATEGORIES = [
+    { id: "overview", label: "Overview", tabs: ["overview"] },
+    { id: "health", label: "Health", tabs: ["mood", "sleep"] },
+    { id: "data", label: "Data", tabs: ["numeric", "tags"] },
+    { id: "digital", label: "Digital", tabs: ["productivity", "music", "usage"] },
+    { id: "tasks", label: "Tasks", tabs: ["throughput", "timeliness", "adherence", "difficulty"] },
+    { id: "patterns", label: "Patterns", tabs: ["leading", "consistency", "coverage"] },
   ];
 
   // Filled by the chart sections (Tasks 11-13).
@@ -443,9 +455,9 @@
   }
 
   // ----- Overview launchpad: click a card/driver/suggestion into a deep tab.
-  // Uses the existing switchLens/switchTab + Tags-search entry points. Defined
-  // up here (hoisted) but they call functions declared later in the IIFE; all
-  // are reachable by the time a click fires. -----
+  // Uses the goTo(category, tab) entry point. Defined up here (hoisted) but
+  // they call functions declared later in the IIFE; all are reachable by the
+  // time a click fires. -----
   function makeClickable(el, fn) {
     el.classList.add("ov-clickable");
     el.setAttribute("tabindex", "0");
@@ -456,21 +468,18 @@
     });
   }
   function gotoNumeric(sectionId) {
-    if (_lens !== "journal") switchLens("journal");
     _secSel.numeric = sectionId ? [sectionId] : null;
-    switchTab("numeric");
+    goTo("data", "numeric");
   }
   function gotoMood() {
-    if (_lens !== "journal") switchLens("journal");
-    switchTab("mood");
+    goTo("health", "mood");
   }
   function gotoThroughput() {
-    if (_lens !== "task") switchLens("task");
-    switchTab("throughput");
+    goTo("tasks", "throughput");
   }
   function gotoTag(name) {
     _tagQuery = (name || "").trim().toLowerCase();
-    switchTab("tags");   // renderTagsTab reads _tagQuery and renders the detail
+    goTo("data", "tags");   // renderTagsTab reads _tagQuery for the detail
   }
 
   // Shift the active [_from,_to] range back one equal-length window. Returns
@@ -1141,7 +1150,7 @@
 
   CHARTS.push({
     id: "tag-frequency",
-    panel: "tags", lens: "journal",
+    panel: "tags",
     title: "Tag frequency",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1180,7 +1189,7 @@
 
   CHARTS.push({
     id: "tag-trend",
-    panel: "tags", lens: "journal",
+    panel: "tags",
     title: "Top-tag trend (per ISO week)",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1239,7 +1248,7 @@
 
   CHARTS.push({
     id: "tag-heatmap",
-    panel: "tags", lens: "journal",
+    panel: "tags",
     title: "Per-tag activity",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -1284,7 +1293,7 @@
 
   CHARTS.push({
     id: "tag-cooccurrence",
-    panel: "tags", lens: "journal",
+    panel: "tags",
     title: "Tag co-occurrence",
     render: function (container, entries, sections, c) {
       var tagSecs = U.tagSections(sections);
@@ -2078,7 +2087,7 @@
   // Lives in the merged cross-domain "Tags" tab (panel "tags"), after the
   // journal tag charts. Renders its U.empty(...) state when there are no tasks.
   CHARTS.push({
-    id: "task-tag-frequency", panel: "tags", lens: "task", title: "Task tag frequency",
+    id: "task-tag-frequency", panel: "tags", title: "Task tag frequency",
     render: function (container, entries, sections, c) {
       var t = _data.tasks || { archive: [], active: [], expired: [], tags: {} };
       function inR(d) { return !d || ((!_from || d >= _from) && (!_to || d <= _to)); }
@@ -3457,23 +3466,31 @@
     },
   });
 
+  // Aggregate per-app minutes AND opens over the range.  JS mirror of
+  // usage.usage_top_apps: rows are {name(pkg), label, min, opens}, min-desc.
+  function aggUsageApps(entries) {
+    var totals = {}, opens = {}, labels = {};
+    entries.forEach(function (e) {
+      var u = usageOf(e);
+      if (!u) return;
+      (u.top_apps || []).forEach(function (a) {
+        if (!a.name) return;
+        totals[a.name] = (totals[a.name] || 0) + (a.min || 0);
+        opens[a.name] = (opens[a.name] || 0) + (a.opens || 0);
+        if (!labels[a.name]) labels[a.name] = a.label || a.name;
+      });
+    });
+    return Object.keys(totals).map(function (k) {
+      return { name: k, label: labels[k], min: totals[k], opens: opens[k] };
+    });
+  }
+
   // Top apps aggregated over the range (bar chart). Mirrors usage.usage_top_apps.
+  // Bar length = minutes; each row also annotates its total open count.
   CHARTS.push({
-    id: "usage-top-apps", panel: "usage", title: "Top apps",
+    id: "usage-top-apps", panel: "usage", title: "Top apps by screen time",
     render: function (container, entries, sections, c) {
-      var totals = {}, labels = {};
-      entries.forEach(function (e) {
-        var u = usageOf(e);
-        if (!u) return;
-        (u.top_apps || []).forEach(function (a) {
-          if (!a.name) return;
-          totals[a.name] = (totals[a.name] || 0) + (a.min || 0);
-          if (!labels[a.name]) labels[a.name] = a.label || a.name;
-        });
-      });
-      var rows = Object.keys(totals).map(function (k) {
-        return { name: labels[k], min: totals[k] };
-      });
+      var rows = aggUsageApps(entries);
       rows.sort(function (a, b) { return b.min - a.min; });
       rows = rows.slice(0, 8);
       if (!rows.length) { U.empty(container, "No app data in this range."); return; }
@@ -3486,10 +3503,117 @@
         var y = i * 28 + 10;
         var bw = barW * (row.min / maxV);
         U.drawBar(svg, 150, y, bw, 18, c.accent);
-        U.text(svg, 144, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, 150 + bw + 4, y + 13, fmtScreen(row.min), c.muted, { size: 9 });
+        U.text(svg, 144, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
+        var note = fmtScreen(row.min) + (row.opens ? "  ·  " + row.opens + " opens" : "");
+        U.text(svg, 150 + bw + 4, y + 13, note, c.muted, { size: 9 });
       });
       container.appendChild(svg);
+    },
+  });
+
+  // Top apps aggregated over the range by OPEN count (bar chart).
+  // Mirrors the opens side of usage.usage_top_apps.
+  CHARTS.push({
+    id: "usage-top-apps-opens", panel: "usage", title: "Top apps by opens",
+    render: function (container, entries, sections, c) {
+      var rows = aggUsageApps(entries).filter(function (r) { return r.opens > 0; });
+      rows.sort(function (a, b) { return b.opens - a.opens; });
+      rows = rows.slice(0, 8);
+      if (!rows.length) {
+        U.empty(container, "No app-open data in this range."); return;
+      }
+      var maxV = rows[0].opens || 1;
+      var w = 600, h = Math.max(120, rows.length * 28 + 20);
+      var svg = U.svg(w, h);
+      var barW = w - 160;
+      rows.forEach(function (row, i) {
+        var y = i * 28 + 10;
+        var bw = barW * (row.opens / maxV);
+        U.drawBar(svg, 150, y, bw, 18, c.accent);
+        U.text(svg, 144, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, 150 + bw + 4, y + 13, row.opens + " opens", c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
+      var totalOpens = rows.reduce(function (a, r) { return a + r.opens; }, 0);
+      U.statsRow(container, [
+        ["apps", rows.length],
+        ["most-opened", rows[0].label + " (" + rows[0].opens + ")"],
+        ["total opens (top " + rows.length + ")", totalOpens],
+      ]);
+    },
+  });
+
+  // Screen time by app over time: multi-line chart of the top-N apps' daily
+  // minutes. Mirrors usage.usage_app_minutes_series.
+  CHARTS.push({
+    id: "usage-app-minutes", panel: "usage", title: "Screen time by app over time",
+    render: function (container, entries, sections, c) {
+      var TOP_N = 6;
+      // Build {apps, dates, series} the same way usage_app_minutes_series does.
+      var ranked = aggUsageApps(entries);
+      ranked.sort(function (a, b) { return b.min - a.min; });
+      var apps = ranked.slice(0, TOP_N);
+      if (!apps.length) { U.empty(container, "No app data in this range."); return; }
+      var keep = {};
+      apps.forEach(function (a) { keep[a.name] = true; });
+
+      var byDate = {};
+      entries.forEach(function (e) {
+        var u = usageOf(e);
+        if (!u) return;
+        var day = byDate[e.date] || (byDate[e.date] = {});
+        (u.top_apps || []).forEach(function (a) {
+          if (a.name && keep[a.name]) day[a.name] = (day[a.name] || 0) + (a.min || 0);
+        });
+      });
+      var dates = Object.keys(byDate).sort();
+      if (dates.length < 2) {
+        U.empty(container, "Need 2+ days of app data to chart trends."); return;
+      }
+
+      var PALETTE = [
+        c.accent, c.danger, c.accentDim || U.colorMix(c.accent, 65),
+        U.colorMix(c.text, 70), U.colorMix(c.danger, 55), U.colorMix(c.accent, 45),
+      ];
+      var maxV = 1;
+      apps.forEach(function (a) {
+        dates.forEach(function (d) {
+          var v = byDate[d][a.name] || 0;
+          if (v > maxV) maxV = v;
+        });
+      });
+
+      var w = 600, h = 200, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = dates.length === 1 ? pad + (w - pad - 10) / 2
+                                   : pad + ((w - pad - 10) * i) / (dates.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - v / maxV);
+        return { x: x, y: y };
+      }
+      apps.forEach(function (a, ai) {
+        var color = PALETTE[ai % PALETTE.length];
+        var pts = dates.map(function (d, i) { return ptAt(i, byDate[d][a.name] || 0); });
+        U.drawLine(svg, pts, color, 1.5);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [dates[0], dates[dates.length - 1]], c);
+      U.text(svg, 0, 14, fmtScreen(maxV), c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+      container.appendChild(svg);
+
+      // Legend: colored chip per app.
+      var legend = document.createElement("div");
+      legend.className = "sleep-stage-legend";
+      apps.forEach(function (a, ai) {
+        var item = document.createElement("span");
+        item.className = "sleep-legend-item";
+        item.style.setProperty("--sl-color", PALETTE[ai % PALETTE.length]);
+        item.textContent = a.label;
+        legend.appendChild(item);
+      });
+      container.appendChild(legend);
     },
   });
 
@@ -4060,8 +4184,9 @@
 
   // ===================== Tags tab (search + overview) ==================== //
   // A dedicated, bespoke renderer (not part of the CHARTS loop): a search box +
-  // datalist of all known tag names, an async per-tag fetch of
-  // /tag/<name>/overview, and lens-aware rendering (journal half vs task half).
+  // live-preview of all known tag names (journal + task), an async per-tag
+  // fetch of /tag/<name>/overview, and per-tag detail showing both the journal
+  // and task halves.
 
   var TAG_MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -4354,8 +4479,8 @@
     // Search box with a custom live-preview dropdown. We replace the native
     // <datalist> so we control exactly when the preview shows and hides: it
     // updates live as you type and disappears once a tag is committed (Enter,
-    // click, or arrow + Enter). Works the same in both the journal and task
-    // lenses (the rendered detail below is lens-aware via run()).
+    // click, or arrow + Enter). Lists both journal and task tags; the rendered
+    // detail below shows both halves via run().
     var searchPanel = tagPanel(host, null);
     var row = document.createElement("div");
     row.className = "tag-search-row";
@@ -4380,23 +4505,21 @@
     host.appendChild(resultsHost);
 
     // name -> {task, color}: drives the origin marks beside each preview
-    // option. Scoped to the active lens — the Journal lens lists only journal
-    // (section) tags; the Task lens lists only task-registry tags.
+    // option. Lists BOTH journal (section) tags and task-registry tags, each
+    // origin-marked (● journal / ☑ task; a tag can be both).
     var info = (function () {
       var idx = {};
-      if (_lens === "task") {
-        var tt = _data.tasks && _data.tasks.tags;
-        if (tt) Object.keys(tt).forEach(function (t) {
-          idx[t] = { task: true, color: null };
+      (_data.sections || []).forEach(function (s) {
+        (s.tags || []).forEach(function (t) {
+          if (!idx[t]) idx[t] = { task: false, color: null };
+          if (idx[t].color == null) idx[t].color = s.color;
         });
-      } else {
-        (_data.sections || []).forEach(function (s) {
-          (s.tags || []).forEach(function (t) {
-            if (!idx[t]) idx[t] = { task: false, color: null };
-            if (idx[t].color == null) idx[t].color = s.color;
-          });
-        });
-      }
+      });
+      var tt = _data.tasks && _data.tasks.tags;
+      if (tt) Object.keys(tt).forEach(function (t) {
+        if (!idx[t]) idx[t] = { task: true, color: null };
+        else idx[t].task = true;
+      });
       return idx;
     })();
     var names = Object.keys(info).sort();
@@ -4439,23 +4562,17 @@
 
     function commit(name) { input.value = name; hidePreview(); run(name); }
 
-    // Default view (no search): the aggregate tag charts for the active lens
-    // (the CHARTS registered under panel "tags"), rendered like a normal panel.
+    // Default view (no search): ALL aggregate tag charts (every CHARTS entry
+    // registered under panel "tags"), rendered like a normal panel — the
+    // journal tag charts first, then the task-tag chart. The tag-section scope
+    // filter narrows only the section-based (journal) charts.
     function renderAggregateTags() {
       resultsHost.innerHTML = "";
       var entries = filterEntries();
       var c = colors();
-      // Lens-scope the aggregate charts: journal tags in the Journal lens, task
-      // tags in the Task lens. Only the journal charts are section-based, so the
-      // tag-section scope filter only shows in the Journal lens.
-      var sectionsArg = _data.sections;
-      if (_lens === "journal") {
-        renderSectionFilter(resultsHost, "tag", renderAggregateTags);
-        sectionsArg = filteredSections("tag");
-      }
-      var charts = CHARTS.filter(function (ch) {
-        return ch.panel === "tags" && (!ch.lens || ch.lens === _lens);
-      });
+      renderSectionFilter(resultsHost, "tag", renderAggregateTags);
+      var sectionsArg = filteredSections("tag");
+      var charts = CHARTS.filter(function (ch) { return ch.panel === "tags"; });
       if (!charts.length) { U.empty(resultsHost, "No tag charts available."); return; }
       charts.forEach(function (ch) {
         var panel = document.createElement("div");
@@ -4486,8 +4603,10 @@
         if (_tagQuery !== ((name || "").trim().toLowerCase())) return;  // stale
         resultsHost.innerHTML = "";
         var cc = colors();
-        if (_lens === "task") renderTagTask(resultsHost, payload.task || {}, cc);
-        else renderTagJournal(resultsHost, payload.journal || {}, cc);
+        // Render BOTH halves for the searched tag: journal detail then task
+        // detail (each shows its own empty state when the tag is absent there).
+        renderTagJournal(resultsHost, payload.journal || {}, cc);
+        renderTagTask(resultsHost, payload.task || {}, cc);
       }).catch(function () {
         resultsHost.innerHTML = "";
         U.empty(resultsHost, "Could not load this tag.");
@@ -4537,69 +4656,127 @@
     });
   }
 
-  // ----- lens + tabs -----
-  // A tab is visible when: it has no lens (shared, e.g. Overview), OR its lens
-  // list includes the active lens. `needs` further gates on available data.
-  function tabVisible(p) {
-    if (p.lens && p.lens.indexOf(_lens) === -1) return false;
-    if (p.needs && !p.needs()) return false;
-    return true;
+  // ----- categories + sub-tabs -----
+  function panelById(id) {
+    for (var i = 0; i < PANELS.length; i++) {
+      if (PANELS[i].id === id) return PANELS[i];
+    }
+    return null;
+  }
+  function catById(id) {
+    for (var i = 0; i < CATEGORIES.length; i++) {
+      if (CATEGORIES[i].id === id) return CATEGORIES[i];
+    }
+    return null;
+  }
+  function categoryOf(tabId) {
+    for (var i = 0; i < CATEGORIES.length; i++) {
+      if (CATEGORIES[i].tabs.indexOf(tabId) !== -1) return CATEGORIES[i];
+    }
+    return null;
   }
 
-  // The Journal/Task lens toggle. Overview always renders outside it, so the
-  // toggle only swaps the deeper tab set. Switching lens keeps the active tab
-  // if it is still valid under the new lens, else falls back to Overview.
-  function buildLensToggle() {
-    var host = root.querySelector(".analytics-lens");
-    if (!host) return;
-    host.innerHTML = "";
-    [["journal", "Journal"], ["task", "Task"]].forEach(function (pair) {
+  // Every section is always reachable: the nav is a stable, complete map of the
+  // app regardless of the current data. Tabs with no data yet render their
+  // charts' graceful empty states rather than being hidden. (The `needs`
+  // predicates on PANELS still exist for the Overview cards / Leading logic; they
+  // no longer gate tab visibility.)
+  function tabVisible(p) {
+    return !!p;
+  }
+  // The sub-tab ids of a category, in display order (all always visible).
+  function visibleTabsFor(cat) {
+    return cat.tabs.filter(function (id) { return tabVisible(panelById(id)); });
+  }
+  // Every category is always shown.
+  function categoryVisible(cat) {
+    return cat.tabs.length > 0;
+  }
+
+  // Ensure (_category, _activeTab) are mutually consistent and visible: sync
+  // _category to the category that owns _activeTab; if that tab/category is
+  // gated away, fall back to the first visible tab of the category, else to
+  // Overview.
+  function reconcileNav() {
+    var owner = categoryOf(_activeTab);
+    if (owner && categoryVisible(owner)) {
+      var vis = visibleTabsFor(owner);
+      if (vis.indexOf(_activeTab) === -1) _activeTab = vis[0];
+      _category = owner.id;
+      return;
+    }
+    _category = "overview";
+    _activeTab = "overview";
+  }
+
+  // Primary category row.
+  function buildCategories() {
+    var bar = root.querySelector(".analytics-cats");
+    if (!bar) return;
+    bar.innerHTML = "";
+    CATEGORIES.forEach(function (cat) {
+      if (!categoryVisible(cat)) return;
       var btn = document.createElement("button");
       btn.type = "button";
-      btn.className = "analytics-lens-btn" + (pair[0] === _lens ? " active" : "");
-      btn.textContent = pair[1];
-      btn.dataset.lens = pair[0];
-      btn.addEventListener("click", function () { switchLens(pair[0]); });
-      host.appendChild(btn);
+      btn.className = "analytics-cat" + (cat.id === _category ? " active" : "");
+      btn.textContent = cat.label;
+      btn.dataset.cat = cat.id;
+      btn.addEventListener("click", function () { switchCategory(cat.id); });
+      bar.appendChild(btn);
     });
   }
 
-  function switchLens(lens) {
-    if (lens === _lens) return;
-    _lens = lens;
-    // Keep the active tab if it survives the lens switch; else go to Overview.
-    var stay = PANELS.some(function (p) {
-      return p.id === _activeTab && tabVisible(p);
+  // Secondary sub-tab row for the active category. Hidden when the category has
+  // fewer than two visible sub-tabs (Overview, or one gated down to a single).
+  function buildSubtabs() {
+    var bar = root.querySelector(".analytics-subtabs");
+    if (!bar) return;
+    bar.innerHTML = "";
+    var cat = catById(_category);
+    var vis = cat ? visibleTabsFor(cat) : [];
+    if (vis.length < 2) { bar.hidden = true; return; }
+    bar.hidden = false;
+    vis.forEach(function (id) {
+      var p = panelById(id);
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "analytics-subtab" + (id === _activeTab ? " active" : "");
+      btn.textContent = p.label;
+      btn.dataset.panel = id;
+      btn.addEventListener("click", function () { switchTab(id); });
+      bar.appendChild(btn);
     });
-    if (!stay) _activeTab = "overview";
-    buildLensToggle();
-    buildTabs();
+  }
+
+  // Activate a category: pick its first visible sub-tab (unless the current
+  // active tab already belongs to it) and render.
+  function switchCategory(catId) {
+    var cat = catById(catId);
+    if (!cat) return;
+    _category = catId;
+    var vis = visibleTabsFor(cat);
+    if (vis.indexOf(_activeTab) === -1) _activeTab = vis[0] || "overview";
+    buildCategories();
+    buildSubtabs();
     renderActivePanel();
   }
 
-  function buildTabs() {
-    var bar = root.querySelector(".analytics-tabs");
-    bar.innerHTML = "";
-    PANELS.forEach(function (p) {
-      if (!tabVisible(p)) return;
-      var btn = document.createElement("button");
-      btn.className = "analytics-tab" + (p.id === _activeTab ? " active" : "");
-      btn.textContent = p.label;
-      btn.dataset.panel = p.id;
-      btn.addEventListener("click", function () { switchTab(p.id); });
-      bar.appendChild(btn);
-    });
-    // If the active tab got hidden (e.g. numeric data removed), fall back.
-    if (!PANELS.some(function (p) { return p.id === _activeTab && tabVisible(p); })) {
-      _activeTab = "overview";
-    }
-  }
-
+  // Activate a sub-tab within the current category.
   function switchTab(id) {
     _activeTab = id;
-    root.querySelectorAll(".analytics-tab").forEach(function (b) {
+    root.querySelectorAll(".analytics-subtab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.panel === id);
     });
+    renderActivePanel();
+  }
+
+  // Jump to a specific (category, tab) — used by the Overview launchpad and the
+  // #tag deep-link.
+  function goTo(catId, tabId) {
+    _category = catId;
+    _activeTab = tabId;
+    buildCategories();
+    buildSubtabs();
     renderActivePanel();
   }
 
@@ -4718,11 +4895,12 @@
     });
   }
 
-  // Read #tag=<name> from the URL hash: open the Tags tab pre-searched.
+  // Read #tag=<name> from the URL hash: open Data → Tags pre-searched.
   function readTagHash() {
     var m = /(?:^|[#&])tag=([^&]+)/.exec(window.location.hash || "");
     if (m) {
       _tagQuery = decodeURIComponent(m[1]).trim().toLowerCase();
+      _category = "data";
       _activeTab = "tags";
     }
   }
@@ -4744,8 +4922,9 @@
     }
     if (_firstLoad) { readTagHash(); _firstLoad = false; }
     syncDateLabels();
-    buildLensToggle();
-    buildTabs();
+    reconcileNav();
+    buildCategories();
+    buildSubtabs();
     renderActivePanel();
   }
 
