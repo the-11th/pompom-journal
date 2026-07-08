@@ -18,6 +18,9 @@
   var _lastFetch = 0;
   var _tagQuery = "";       // current tag in the Tag detail tab
   var _tagCache = {};       // {name: payload} cache for /tag/<name>/overview
+  // Collapsed chart boxes by chart id. In-memory for this page visit only, so
+  // collapse survives tab/category switches + re-renders but resets on reload.
+  var _collapsed = {};
   // Section scope filter for the Numeric & Tags tabs. null = all shown; else an
   // array of selected section ids of that type. Keyed by section type.
   var _secSel = { numeric: null, tag: null };
@@ -4591,19 +4594,14 @@
       var charts = CHARTS.filter(function (ch) { return ch.panel === "tags"; });
       if (!charts.length) { U.empty(resultsHost, "No tag charts available."); return; }
       charts.forEach(function (ch) {
-        var panel = document.createElement("div");
-        panel.className = "analytics-panel";
-        panel.id = "chart-" + ch.id;
-        var h3 = document.createElement("h3");
-        h3.textContent = ch.title;
-        panel.appendChild(h3);
+        var p = buildChartPanel(ch);
         try {
-          ch.render(panel, entries, sectionsArg, c);
+          ch.render(p.body, entries, sectionsArg, c);
         } catch (err) {
-          U.empty(panel, "Could not render this chart.");
+          U.empty(p.body, "Could not render this chart.");
           if (window.console) console.error(ch.id, err);
         }
-        resultsHost.appendChild(panel);
+        resultsHost.appendChild(p.panel);
       });
     }
 
@@ -4860,6 +4858,49 @@
     host.appendChild(bar);
   }
 
+  // Build a chart box: a header row (title + collapse caret, top-right) and a
+  // collapsible body. Returns {panel, body} — callers render the chart into
+  // `body`. Boxes default to OPEN; collapse state is in-memory only (per page
+  // visit, not persisted). When collapsed, the header (title) stays visible.
+  function buildChartPanel(ch) {
+    var panel = document.createElement("div");
+    panel.className = "analytics-panel";
+    panel.id = "chart-" + ch.id;
+
+    var head = document.createElement("div");
+    head.className = "analytics-panel-head";
+    var h3 = document.createElement("h3");
+    h3.textContent = ch.title;
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "analytics-panel-toggle";
+    toggle.innerHTML = '<svg class="analytics-panel-caret" viewBox="0 0 24 24" ' +
+      'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+      'stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
+
+    var body = document.createElement("div");
+    body.className = "analytics-panel-body";
+
+    // Restore this box's collapse state (persists across tab switches / re-renders
+    // within the page visit).
+    function reflect(collapsed) {
+      panel.classList.toggle("collapsed", collapsed);
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.title = collapsed ? "Expand" : "Collapse";
+    }
+    reflect(!!_collapsed[ch.id]);
+    toggle.addEventListener("click", function () {
+      _collapsed[ch.id] = !panel.classList.contains("collapsed");
+      reflect(_collapsed[ch.id]);
+    });
+
+    head.appendChild(h3);
+    head.appendChild(toggle);
+    panel.appendChild(head);
+    panel.appendChild(body);
+    return { panel: panel, body: body };
+  }
+
   // ----- rendering -----
   function renderActivePanel() {
     var host = root.querySelector(".analytics-panels");
@@ -4895,19 +4936,14 @@
       return;
     }
     charts.forEach(function (ch) {
-      var panel = document.createElement("div");
-      panel.className = "analytics-panel";
-      panel.id = "chart-" + ch.id;
-      var h3 = document.createElement("h3");
-      h3.textContent = ch.title;
-      panel.appendChild(h3);
+      var p = buildChartPanel(ch);
       try {
-        ch.render(panel, entries, sectionsArg, c);
+        ch.render(p.body, entries, sectionsArg, c);
       } catch (err) {
-        U.empty(panel, "Could not render this chart.");
+        U.empty(p.body, "Could not render this chart.");
         if (window.console) console.error(ch.id, err);
       }
-      host.appendChild(panel);
+      host.appendChild(p.panel);
     });
   }
 
