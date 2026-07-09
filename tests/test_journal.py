@@ -65,6 +65,37 @@ def test_load_migrates_missing_fields(tmp_path):
     assert data["dismissed_suggestions"] == {}
 
 
+def test_load_migrates_missing_chart_opts_field(tmp_path):
+    path = tmp_path / "journal.json"
+    path.write_text(json.dumps({
+        "sections": [
+            {"id": "n", "name": "money", "type": "numeric", "color": "#fff"},
+        ],
+        "entries": [],
+    }), encoding="utf-8")
+    data = journal.load(str(path))
+    numeric = next(s for s in data["sections"] if s["id"] == "n")
+    assert numeric["chart_opts"] == {}
+
+
+def test_load_migrates_legacy_cumulative_field_into_chart_opts(tmp_path):
+    path = tmp_path / "journal.json"
+    path.write_text(json.dumps({
+        "sections": [
+            {"id": "n", "name": "weight", "type": "numeric", "color": "#fff", "cumulative": False},
+            {"id": "t", "name": "people", "type": "tag", "color": "#fff", "cumulative": None},
+        ],
+        "entries": [],
+    }), encoding="utf-8")
+    data = journal.load(str(path))
+    numeric = next(s for s in data["sections"] if s["id"] == "n")
+    tag = next(s for s in data["sections"] if s["id"] == "t")
+    assert numeric["chart_opts"] == {"numeric-cumulative": False}
+    assert "cumulative" not in numeric
+    assert tag["chart_opts"] == {}
+    assert "cumulative" not in tag
+
+
 # --------------------------------------------------------------------------- #
 # Task 2: Section lookup & display helpers
 # --------------------------------------------------------------------------- #
@@ -120,6 +151,27 @@ def test_add_numeric_section_keeps_unit():
     assert s["type"] == "numeric" and s["unit"] == "hrs"
 
 
+def test_add_section_chart_opts_starts_empty():
+    data = journal._empty()
+    numeric = journal.add_section(data, "money", "numeric", "#fff")
+    tag = journal.add_section(data, "people", "tag", "#000")
+    assert numeric["chart_opts"] == {}
+    assert tag["chart_opts"] == {}
+
+
+def test_section_chart_options_defaults_all_enabled():
+    data = journal._empty()
+    numeric = journal.add_section(data, "money", "numeric", "#fff")
+    opts = journal.section_chart_options(numeric)
+    assert [o["id"] for o in opts] == [oid for oid, _ in journal.NUMERIC_CHART_OPTIONS]
+    assert all(o["enabled"] for o in opts)
+
+    tag = journal.add_section(data, "people", "tag", "#000")
+    topts = journal.section_chart_options(tag)
+    assert [o["id"] for o in topts] == [oid for oid, _ in journal.TAG_CHART_OPTIONS]
+    assert all(o["enabled"] for o in topts)
+
+
 def test_add_section_rejects_bad_name():
     data = journal._empty()
     for bad in ["", "   ", "no<script>", "a;b"]:
@@ -165,6 +217,21 @@ def test_set_color_and_unit():
     s2 = journal.section_by_id(data, s["id"])
     assert s2["color"] == "#123456"
     assert s2["unit"] == "minutes here"[:12]
+
+
+def test_set_section_chart_opts_marks_unselected_disabled():
+    data = journal._empty()
+    numeric = journal.add_section(data, "money", "numeric", "#fff")
+    keep_on = [oid for oid, _ in journal.NUMERIC_CHART_OPTIONS if oid != "numeric-cumulative"]
+    journal.set_section_chart_opts(data, numeric["id"], keep_on)
+    s = journal.section_by_id(data, numeric["id"])
+    assert s["chart_opts"]["numeric-cumulative"] is False
+    assert all(s["chart_opts"][oid] for oid in keep_on)
+
+
+def test_set_section_chart_opts_unknown_id_is_noop():
+    data = journal._empty()
+    assert journal.set_section_chart_opts(data, "missing", ["numeric-line"]) is data
 
 
 def test_archive_section_soft_deletes():

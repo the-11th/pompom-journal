@@ -802,7 +802,7 @@ a.task-check:hover { filter: brightness(1.2); }
 
 /* ----- past entries ----- */
 .entry-list { list-style: none; padding: 0; }
-.entry-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.entry-row { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
 .entry-link { display: flex; gap: 0.8rem; text-decoration: none; color: var(--text); flex: 1; }
 .entry-date { color: var(--accent); }
 .entry-title { color: var(--text); }
@@ -816,9 +816,20 @@ a.task-check:hover { filter: brightness(1.2); }
 .section-jump a { color: var(--accent); text-decoration: none; }
 .section-jump a:hover { text-decoration: underline; }
 .manage-subhead { margin-top: 1.6rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); scroll-margin-top: 0.8rem; }
-.manage-section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; }
-.manage-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.manage-section { position: relative; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 0.9rem 1rem; margin-bottom: 0.9rem; }
+.manage-head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding-right: 5.5rem; }
 .unit-input { width: 130px; }
+.configure-btn {
+  position: absolute; top: 0.8rem; right: 1rem;
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  font-family: inherit; font-size: 0.72rem; line-height: 1;
+  padding: 0.32rem 0.65rem; cursor: pointer;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px;
+}
+.configure-btn:hover { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.configure-icon { width: 0.85rem; height: 0.85rem; flex: 0 0 auto; }
+.manage-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; margin-top: 0.7rem; }
 .pill { font-size: 0.66rem; letter-spacing: 0.5px; text-transform: uppercase; border: 1px solid var(--border); border-radius: 6px; padding: 0.05rem 0.4rem; color: var(--muted); }
 .pill-auto { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
 .perm-tags { margin: 0.7rem 0; }
@@ -826,7 +837,7 @@ a.task-check:hover { filter: brightness(1.2); }
 .perm-chip .x { background: none; border: none; color: var(--danger); cursor: pointer; font: inherit; padding: 0; line-height: 1; }
 .addrow { display: flex; gap: 0.5rem; margin: 0.5rem 0; flex-wrap: wrap; align-items: center; }
 .tag-zone .addrow { margin: 0.3rem 0 0; }
-.delete-section { margin-top: 0.6rem; }
+.delete-section { margin: 0; }
 .hint { color: var(--muted); font-size: 0.8rem; }
 .muted-note { color: var(--muted); font-size: 0.8rem; }
 .page-title-row { display: flex; align-items: baseline; justify-content: space-between; }
@@ -1102,6 +1113,14 @@ a.task-check:hover { filter: brightness(1.2); }
 
 /* ---- Entry rows (reuse .entry-list/.entry-row/.entry-link from below) ---- */
 
+/* .entry-row-main is the original single-line layout (date/title + tags);
+   .entry-snippet sits below it, full-width, when a text search is active. */
+.entry-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
 /* Small tag chips in the search results */
 .entry-tags {
   display: flex;
@@ -1121,15 +1140,13 @@ a.task-check:hover { filter: brightness(1.2); }
   white-space: nowrap;
 }
 
-.entry-nums {
-  display: flex;
-  gap: 0.4rem;
-  flex-shrink: 0;
-}
-
-.entry-num {
+/* The body line containing the current text search match (reuses .suggest-hl
+   for the highlighted word). Hidden when there's no active text search or no
+   match in this entry's body. */
+.entry-snippet {
   font-size: 0.8rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .entry-delete-form {
@@ -1969,6 +1986,16 @@ input[type="number"]::-webkit-inner-spin-button {
 .suggest-popup-actions .modal-confirm:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* ----- Section "Configure" popup (Manage page) ----- */
+.chartcfg-list {
+  display: flex; flex-direction: column; gap: 0.55rem;
+  margin-bottom: 0.9rem; max-height: 340px; overflow-y: auto;
+}
+.chartcfg-row {
+  display: flex; align-items: center; gap: 0.55rem;
+  font-size: 0.85rem; color: var(--text); cursor: pointer;
 }
 
 /* Calendar / per-tag heatmap cells. */

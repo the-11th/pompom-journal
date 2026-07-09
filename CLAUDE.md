@@ -552,6 +552,8 @@ injectable callable, defaulting to `oauth.urllib_transport`.
 
 - `fetch_daily_summary(api_key, transport=None)` → raw JSON from the daily-summary feed (≈ last two weeks, newest first).
 - `parse_day(row, now=None)` → `{date, pulse, productive_min, distracting_min, neutral_min, total_min, top_categories:[{name,min}], source:"rescuetime", fetched}`. Pure. Hours fields converted to minutes; top_categories capped at 5, sorted by minutes desc.
+- `fetch_activities(api_key, date, transport=None)` → raw JSON from the **Analytic Data API** (`anapi/data`, `restrict_kind=activity`, rank perspective, single-day range). This is the **per-website/app breakdown** feed (the daily-summary feed only carries broad category totals).
+- `parse_activities(payload, cap=8)` → `[{name, min, category, productivity}]` sorted by minutes desc, capped, 0-min rows dropped. Pure & defensive: tolerates a non-dict payload / short rows, locates columns from `row_headers` (fallback to the documented order `[Rank, Time Spent (seconds), Number of People, Activity, Category, Productivity]`). `productivity` is RescueTime's -2..2 score.
 
 ### `integrations.py` — credential/token store (zero Flask)
 
@@ -650,10 +652,16 @@ Read-only on the form; a re-sync overwrites it.
   "neutral_min": 90,
   "total_min": 447,
   "top_categories": [{"name": "Software Development", "min": 240}],
+  "top_activities": [{"name": "github.com", "min": 120, "category": "General Software Development", "productivity": 2}],
   "source": "rescuetime",
   "fetched": "2026-06-29T08:15:00"
 }
 ```
+
+`top_activities` (per-website/app breakdown, from the Analytic Data API) is
+**absent on days synced before the feature shipped**; the sync backfills it on
+the next sync (see below). Each activity carries a `category` and a RescueTime
+`productivity` score (-2..2).
 
 Writer: `journal.set_entry_rescuetime(data, date, value, now=None)` — same
 get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
@@ -689,11 +697,18 @@ caught per-day and reported in `errors` without aborting the rest. Sets
 `google_redirect_uri`.
 
 **RescueTime sync internals** (`_rescuetime_sync`): fetches the full recent feed
-once via `rescuetime.fetch_daily_summary`, then iterates rows. Skips dates that
-already have `entry.rescuetime` (unless `force=True`). Calls
-`rescuetime.parse_day` → `journal.set_entry_rescuetime` per row. Per-row errors
-are isolated and reported in `errors` without aborting remaining rows. Sets
-`last_sync` on completion.
+once via `rescuetime.fetch_daily_summary`, then iterates rows. For each date it
+(a) writes the day's summary via `rescuetime.parse_day` →
+`journal.set_entry_rescuetime` when `force` or the day has no `entry.rescuetime`
+yet, and (b) fetches the **per-activity (website/app) breakdown** for that date
+via `rescuetime.fetch_activities` → `rescuetime.parse_activities` and attaches it
+as `rescuetime.top_activities`. Days already synced **before** the breakdown
+feature (rescuetime present, no `top_activities`) are **backfilled** — the
+breakdown is fetched and merged onto the existing dict without rewriting the
+summary. The activity fetch is a **separate Analytic Data API call per day**,
+isolated in its own try/except so a failure reports an error but never loses the
+day's summary. Per-row errors are isolated and reported in `errors` without
+aborting remaining rows. Sets `last_sync` on completion.
 
 ### Sleep analytics (`journal.py` + `analytics.js`)
 
@@ -729,6 +744,8 @@ data; degrade gracefully on too few points):
 - `rescuetime_pulse_series(entries, start=None, end=None)` → `[{date, pulse}]`.
 - `rescuetime_time_series(entries, ...)` → `[{date, productive_min, distracting_min, neutral_min}]`.
 - `rescuetime_category_totals(entries, ...)` → `[{name, min}]` aggregate across all days.
+- `rescuetime_top_activities(entries, ..., cap=8)` → `[{name, min, category, productivity}]` per-website/app aggregate over the range, sorted by minutes desc, capped (category/productivity from first occurrence). Reads `top_activities`; days without it contribute nothing.
+- `rescuetime_activity_minutes_series(entries, ..., top_n=6)` → `{activities:[{name}], dates:[...], series:{name:[min-per-date...]}}` (zero-filled, for a multi-line chart), mirroring `usage_app_minutes_series`.
 - `rescuetime_dow_averages(entries, ...)` → 7 mean-pulse values Mon–Sun.
 - `productivity_mood_pairs(entries, ...)` → `[{pulse, mood}]` same-day pairs for pulse↔mood correlation (ignores null moods).
 - `rescuetime_stats(entries, ...)` → `{avg_pulse, avg_productive_min, days}`.
@@ -741,9 +758,17 @@ so the client can render without a new endpoint.
 `hasRescueTime`, first sub-tab): stat cards (avg pulse,
 avg productive hours, days tracked); pulse over time with 7-day rolling avg;
 time breakdown stacked bar (productive/distracting/neutral); category totals bar;
-avg pulse by day of week; pulse↔mood correlation scatter with Pearson `r`. Mirrors
-the Sleep tab pattern via `rescuetimeOf(e)` (the JS-side `_entry_rescuetime`
-mirror). Panel CSS reuses `.rt-row` (`.rt-pulse`, `.rt-prod`) from `style.css`.
+**top activities by time** (per-website/app bars, colored by productivity via
+`rtProdColor` — accent = productive, danger = distracting, muted = neutral;
+mirror of `rescuetime_top_activities` via the `aggRtActivities` JS helper);
+**time by activity over time** (multi-line chart of the top-6 activities' daily
+minutes with a per-activity color legend reusing `.sleep-stage-legend`, mirror of
+`rescuetime_activity_minutes_series`); avg pulse by day of week; pulse↔mood
+correlation scatter with Pearson `r`. Mirrors the Sleep tab pattern via
+`rescuetimeOf(e)` (the JS-side `_entry_rescuetime` mirror). Panel CSS reuses
+`.rt-row` (`.rt-pulse`, `.rt-prod`) from `style.css`. The two activity charts
+show a "Re-sync RescueTime to fetch the per-website/app detail" empty state until
+the breakdown has synced.
 
 ### `spotify.py` — Spotify client (zero Flask, OAuth via `oauth.py`)
 

@@ -2821,6 +2821,36 @@
     return h + "h " + rem + "m";
   }
 
+  // Aggregate per-activity (website/app) minutes across entries. Mirrors
+  // journal.rescuetime_top_activities (category/productivity from first seen).
+  function aggRtActivities(entries) {
+    var totals = {}, meta = {};
+    entries.forEach(function (e) {
+      var r = rescueTimeOf(e);
+      if (!r) return;
+      (r.top_activities || []).forEach(function (a) {
+        if (!a.name) return;
+        totals[a.name] = (totals[a.name] || 0) + (a.min || 0);
+        if (!(a.name in meta)) {
+          meta[a.name] = { category: a.category, productivity: a.productivity };
+        }
+      });
+    });
+    return Object.keys(totals).map(function (k) {
+      return { name: k, min: totals[k],
+               category: meta[k].category, productivity: meta[k].productivity };
+    });
+  }
+
+  // Bar color by RescueTime productivity score: productive (>0) accent,
+  // distracting (<0) danger, neutral/unknown muted.
+  function rtProdColor(prod, c) {
+    if (prod == null) return c.accent;
+    if (prod > 0) return c.accent;
+    if (prod < 0) return c.danger;
+    return U.colorMix(c.muted, 55);
+  }
+
   // Stat cards: avg pulse, avg productive time, days tracked.
   // Mirrors journal.rescuetime_stats.
   CHARTS.push({
@@ -2988,6 +3018,116 @@
         U.text(svg, 150 + bw + 4, y + 13, fmtProdTime(row.min), c.muted, { size: 9 });
       });
       container.appendChild(svg);
+    },
+  });
+
+  // Top activities (websites/apps) by time. Mirrors rescuetime_top_activities;
+  // bar color conveys productivity (accent = productive, danger = distracting).
+  CHARTS.push({
+    id: "productivity-top-activities", panel: "productivity",
+    title: "Top activities by time",
+    render: function (container, entries, sections, c) {
+      var rows = aggRtActivities(entries);
+      rows.sort(function (a, b) { return b.min - a.min; });
+      rows = rows.slice(0, 8);
+      if (!rows.length) {
+        U.empty(container, "No activity breakdown in this range. Re-sync RescueTime to fetch the per-website/app detail.");
+        return;
+      }
+      var notes = rows.map(function (row) {
+        return fmtProdTime(row.min) + (row.category ? "  ·  " + row.category : "");
+      });
+      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
+      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.name || "").length); }, 0);
+      var maxV = rows[0].min || 1;
+      var w = 600, h = Math.max(120, rows.length * 28 + 20);
+      var svg = U.svg(w, h);
+      // Left gutter sized to the longest activity name (capped), right gutter
+      // to the widest note. ≈6 units/char at these sizes.
+      var leftPad = Math.min(210, Math.ceil(maxName * 6) + 14);
+      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
+      rows.forEach(function (row, i) {
+        var y = i * 28 + 10;
+        var bw = barW * (row.min / maxV);
+        U.drawBar(svg, leftPad, y, bw, 18, rtProdColor(row.productivity, c));
+        U.text(svg, leftPad - 6, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
+        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
+      });
+      container.appendChild(svg);
+    },
+  });
+
+  // Time by activity over time: multi-line chart of the top-N activities' daily
+  // minutes. Mirrors rescuetime_activity_minutes_series (and usage-app-minutes).
+  CHARTS.push({
+    id: "productivity-activity-minutes", panel: "productivity",
+    title: "Time by activity over time",
+    render: function (container, entries, sections, c) {
+      var TOP_N = 6;
+      var ranked = aggRtActivities(entries);
+      ranked.sort(function (a, b) { return b.min - a.min; });
+      var acts = ranked.slice(0, TOP_N);
+      if (!acts.length) { U.empty(container, "No activity breakdown in this range."); return; }
+      var keep = {};
+      acts.forEach(function (a) { keep[a.name] = true; });
+
+      var byDate = {};
+      entries.forEach(function (e) {
+        var r = rescueTimeOf(e);
+        if (!r) return;
+        var day = byDate[e.date] || (byDate[e.date] = {});
+        (r.top_activities || []).forEach(function (a) {
+          if (a.name && keep[a.name]) day[a.name] = (day[a.name] || 0) + (a.min || 0);
+        });
+      });
+      var dates = Object.keys(byDate).sort();
+      if (dates.length < 2) {
+        U.empty(container, "Need 2+ days of activity data to chart trends."); return;
+      }
+
+      var PALETTE = [
+        c.accent, c.danger, c.accentDim || U.colorMix(c.accent, 65),
+        U.colorMix(c.text, 70), U.colorMix(c.danger, 55), U.colorMix(c.accent, 45),
+      ];
+      var maxV = 1;
+      acts.forEach(function (a) {
+        dates.forEach(function (d) {
+          var v = byDate[d][a.name] || 0;
+          if (v > maxV) maxV = v;
+        });
+      });
+
+      var w = 600, h = 200, pad = 34;
+      var svg = U.svg(w, h);
+      U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      function ptAt(i, v) {
+        var x = dates.length === 1 ? pad + (w - pad - 10) / 2
+                                   : pad + ((w - pad - 10) * i) / (dates.length - 1);
+        var y = 10 + (h - pad - 10) * (1 - v / maxV);
+        return { x: x, y: y };
+      }
+      acts.forEach(function (a, ai) {
+        var color = PALETTE[ai % PALETTE.length];
+        var pts = dates.map(function (d, i) { return ptAt(i, byDate[d][a.name] || 0); });
+        U.drawLine(svg, pts, color, 1.5);
+      });
+      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+                 [dates[0], dates[dates.length - 1]], c);
+      U.text(svg, 0, 14, fmtProdTime(maxV), c.muted, { size: 9 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+      container.appendChild(svg);
+
+      // Legend: colored chip per activity.
+      var legend = document.createElement("div");
+      legend.className = "sleep-stage-legend";
+      acts.forEach(function (a, ai) {
+        var item = document.createElement("span");
+        item.className = "sleep-legend-item";
+        item.style.setProperty("--sl-color", PALETTE[ai % PALETTE.length]);
+        item.textContent = a.name;
+        legend.appendChild(item);
+      });
+      container.appendChild(legend);
     },
   });
 
@@ -4596,7 +4736,7 @@
       charts.forEach(function (ch) {
         var p = buildChartPanel(ch);
         try {
-          ch.render(p.body, entries, sectionsArg, c);
+          ch.render(p.body, entries, sectionsForChart(sectionsArg, ch.id), c);
         } catch (err) {
           U.empty(p.body, "Could not render this chart.");
           if (window.console) console.error(ch.id, err);
@@ -4607,6 +4747,7 @@
 
     function run(name) {
       _tagQuery = (name || "").trim().toLowerCase();
+      updateHash();
       resultsHost.innerHTML = "";
       if (!_tagQuery) {            // no search → show the all-tags overview
         renderAggregateTags();
@@ -4773,6 +4914,7 @@
     buildCategories();
     buildSubtabs();
     renderActivePanel();
+    updateHash();
   }
 
   // Activate a sub-tab within the current category.
@@ -4782,6 +4924,7 @@
       b.classList.toggle("active", b.dataset.panel === id);
     });
     renderActivePanel();
+    updateHash();
   }
 
   // Jump to a specific (category, tab) — used by the Overview launchpad and the
@@ -4792,6 +4935,22 @@
     buildCategories();
     buildSubtabs();
     renderActivePanel();
+    updateHash();
+  }
+
+  // Reflect (_activeTab, _tagQuery) into the URL hash via replaceState (no new
+  // history entry, no scroll-jump) so a refresh reopens the same tab — mirrors
+  // how the Manage page's #sec-* anchors survive a refresh. A searched Tags tab
+  // keeps the shareable "#tag=<name>" form; every other tab uses "#tab=<id>".
+  function updateHash() {
+    var hash = (_activeTab === "tags" && _tagQuery)
+      ? "tag=" + encodeURIComponent(_tagQuery)
+      : "tab=" + encodeURIComponent(_activeTab);
+    if (window.history && history.replaceState) {
+      history.replaceState(null, "", "#" + hash);
+    } else {
+      window.location.hash = hash;
+    }
   }
 
   // ----- section scope filter (Numeric & Tags tabs) -----
@@ -4806,6 +4965,17 @@
     var sel = _secSel[kind];
     return (_data.sections || []).filter(function (s) {
       return s.type !== kind || sel.indexOf(s.id) !== -1;
+    });
+  }
+
+  // Per-chart section filter, from each section's Manage-page Configure popup
+  // (`section.chart_opts[chartId]`). A section not yet configured for this
+  // chart id (or any chart added after the section was last configured)
+  // defaults to shown. Applied on top of the section-scope filter above.
+  function sectionsForChart(sections, chartId) {
+    return (sections || []).filter(function (s) {
+      var opts = s.chart_opts || {};
+      return opts[chartId] !== false;
     });
   }
 
@@ -4938,7 +5108,7 @@
     charts.forEach(function (ch) {
       var p = buildChartPanel(ch);
       try {
-        ch.render(p.body, entries, sectionsArg, c);
+        ch.render(p.body, entries, sectionsForChart(sectionsArg, ch.id), c);
       } catch (err) {
         U.empty(p.body, "Could not render this chart.");
         if (window.console) console.error(ch.id, err);
@@ -4947,14 +5117,23 @@
     });
   }
 
-  // Read #tag=<name> from the URL hash: open Data → Tags pre-searched.
-  function readTagHash() {
-    var m = /(?:^|[#&])tag=([^&]+)/.exec(window.location.hash || "");
-    if (m) {
-      _tagQuery = decodeURIComponent(m[1]).trim().toLowerCase();
+  // Read the URL hash on first load: "#tag=<name>" (external deep-link, e.g.
+  // the tag popup's "Expand →") opens Data → Tags pre-searched; "#tab=<id>"
+  // (written by updateHash on every switch) reopens whichever tab was active
+  // when the page was last refreshed. reconcileNav() (called right after, in
+  // applyData) fills in the owning category and falls back to Overview if the
+  // tab id is unrecognized.
+  function readInitialHash() {
+    var hash = window.location.hash || "";
+    var tagM = /(?:^|[#&])tag=([^&]+)/.exec(hash);
+    if (tagM) {
+      _tagQuery = decodeURIComponent(tagM[1]).trim().toLowerCase();
       _category = "data";
       _activeTab = "tags";
+      return;
     }
+    var tabM = /(?:^|[#&])tab=([^&]+)/.exec(hash);
+    if (tabM) _activeTab = decodeURIComponent(tabM[1]);
   }
 
   // ----- data load -----
@@ -4972,7 +5151,7 @@
       fromEl.value = _from || "";
       toEl.value = _to || "";
     }
-    if (_firstLoad) { readTagHash(); _firstLoad = false; }
+    if (_firstLoad) { readInitialHash(); _firstLoad = false; }
     syncDateLabels();
     reconcileNav();
     buildCategories();

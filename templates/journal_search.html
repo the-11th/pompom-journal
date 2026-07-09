@@ -88,24 +88,20 @@
     <ul class="entry-list" id="entry-list">
       {% for e in entries %}
         <li class="entry-row" data-id="{{ e.id }}">
-          <a class="entry-link" href="{{ url_for('journal_entry', date=e.date) }}">
-            <span class="entry-date">{{ e.date }}</span>
-            <span class="entry-title">{{ e.title }}</span>
-          </a>
-          {% if e.tag_chips %}
-            <span class="entry-tags">
-              {% for chip in e.tag_chips %}
-                <span class="entry-tag-chip" style="--tag-bg: {{ chip.color }};">{{ chip.name }}</span>
-              {% endfor %}
-            </span>
-          {% endif %}
-          {% if e.numbers %}
-            <span class="entry-nums">
-              {% for sid, val in e.numbers.items() %}
-                <span class="entry-num">{{ val }}</span>
-              {% endfor %}
-            </span>
-          {% endif %}
+          <div class="entry-row-main">
+            <a class="entry-link" href="{{ url_for('journal_entry', date=e.date) }}">
+              <span class="entry-date">{{ e.date }}</span>
+              <span class="entry-title">{{ e.title }}</span>
+            </a>
+            {% if e.tag_chips %}
+              <span class="entry-tags">
+                {% for chip in e.tag_chips %}
+                  <span class="entry-tag-chip" style="--tag-bg: {{ chip.color }};">{{ chip.name }}</span>
+                {% endfor %}
+              </span>
+            {% endif %}
+          </div>
+          <div class="entry-snippet" hidden></div>
         </li>
       {% endfor %}
     </ul>

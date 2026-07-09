@@ -387,6 +387,36 @@ def test_add_numeric_section_with_unit(client):
     assert s["type"] == "numeric" and s["unit"] == "hrs"
 
 
+def test_manage_page_shows_configure_button_and_chart_opts_data(client):
+    resp = client.get("/journal/sections")
+    assert resp.status_code == 200
+    assert b"configure-btn" in resp.data
+    assert b"section-chart-opts-data" in resp.data
+
+
+def test_chart_opts_route_disables_unselected_and_reflects_on_manage_page(client):
+    client.post("/journal/sections/add", data={
+        "name": "money", "type": "numeric", "color": "#6fa8dc"})
+    sid = next(s["id"] for s in journal.load(_journal_path())["sections"]
+               if s["name"] == "money")
+    keep_on = [oid for oid, _ in journal.NUMERIC_CHART_OPTIONS if oid != "numeric-cumulative"]
+    resp = client.post(f"/journal/sections/{sid}/chart-opts",
+                        data={"enabled": keep_on})
+    assert resp.status_code == 302
+    s = journal.section_by_id(journal.load(_journal_path()), sid)
+    assert s["chart_opts"]["numeric-cumulative"] is False
+    assert all(s["chart_opts"][oid] for oid in keep_on)
+
+    page = client.get("/journal/sections")
+    assert page.status_code == 200
+    assert b"money" in page.data
+
+
+def test_chart_opts_route_unknown_section_is_noop(client):
+    resp = client.post("/journal/sections/missing/chart-opts", data={"enabled": ["numeric-line"]})
+    assert resp.status_code == 302
+
+
 def test_add_section_bad_color_flashes_and_saves_nothing(client):
     resp = client.post("/journal/sections/add", data={
         "name": "mood", "type": "numeric", "color": "purple"})
@@ -1013,13 +1043,70 @@ def test_rescuetime_sync_writes_entries(client, app, monkeypatch):
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 70,
              "all_productive_hours": 2.0, "total_hours": 3.0}])
+    # Isolate the per-activity fetch (a separate Analytic Data API call).
+    monkeypatch.setattr("rescuetime.fetch_activities",
+        lambda key, date, transport=None: {
+            "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
+                            "Activity", "Category", "Productivity"],
+            "rows": [[1, 3600, 1, "github.com", "Dev", 2]]})
     r = client.post("/integrations/rescuetime/sync?date=2026-06-28")
     body = r.get_json()
     assert body["ok"] and body["connected"]
     assert "2026-06-28" in body["synced"]
     import journal
     jdata = journal.load(app.config["JOURNAL_FILE"])
-    assert journal.get_entry_by_date(jdata, "2026-06-28")["rescuetime"]["pulse"] == 70
+    rt = journal.get_entry_by_date(jdata, "2026-06-28")["rescuetime"]
+    assert rt["pulse"] == 70
+    # Website/app breakdown attached alongside the summary.
+    assert rt["top_activities"] == [{"name": "github.com", "min": 60,
+                                     "category": "Dev", "productivity": 2}]
+
+
+def test_rescuetime_sync_activity_fetch_failure_keeps_summary(client, app, monkeypatch):
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_api_key(d, "rescuetime", "KEY123")
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+        lambda key, transport=None: [
+            {"date": "2026-06-28", "productivity_pulse": 70,
+             "all_productive_hours": 2.0, "total_hours": 3.0}])
+    def boom(key, date, transport=None):
+        raise RuntimeError("anapi down")
+    monkeypatch.setattr("rescuetime.fetch_activities", boom)
+    body = client.post("/integrations/rescuetime/sync?date=2026-06-28").get_json()
+    assert "2026-06-28" in body["synced"]           # summary still written
+    assert any("activities" in e for e in body["errors"])
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    rt = journal.get_entry_by_date(jdata, "2026-06-28")["rescuetime"]
+    assert rt["pulse"] == 70 and "top_activities" not in rt
+
+
+def test_rescuetime_sync_backfills_activities_on_legacy_days(client, app, monkeypatch):
+    """A day already synced before the feature (rescuetime present, no
+    top_activities) gets the breakdown backfilled without a force re-sync."""
+    import journal
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_rescuetime(jdata, "2026-06-28",
+        {"pulse": 55, "total_min": 200, "top_categories": [], "source": "rescuetime", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    d = I.load(app.config["INTEGRATIONS_FILE"])
+    I.set_api_key(d, "rescuetime", "KEY123")
+    I.save(app.config["INTEGRATIONS_FILE"], d)
+    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+        lambda key, transport=None: [
+            {"date": "2026-06-28", "productivity_pulse": 55, "total_hours": 3.33}])
+    monkeypatch.setattr("rescuetime.fetch_activities",
+        lambda key, date, transport=None: {
+            "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
+                            "Activity", "Category", "Productivity"],
+            "rows": [[1, 1200, 1, "slack.com", "Communication", 1]]})
+    client.post("/integrations/rescuetime/sync")
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    rt = journal.get_entry_by_date(jdata, "2026-06-28")["rescuetime"]
+    assert rt["pulse"] == 55                         # summary preserved (not rewritten)
+    assert rt["top_activities"] == [{"name": "slack.com", "min": 20,
+                                     "category": "Communication", "productivity": 1}]
 
 
 def test_rescuetime_sync_not_connected(client, app):

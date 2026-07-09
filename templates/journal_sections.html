@@ -30,7 +30,17 @@
     {% set fg = text_color_for(s.color) %}
     <section class="manage-section" style="--tag-bg: {{ s.color }}; --tag-fg: {{ fg }};">
 
-      <form class="manage-head tag-preview-group" method="post"
+      <button type="button" class="configure-btn" data-section="{{ s.id }}" data-name="{{ s.name }}"
+              title="Choose which analytics charts include this section">
+        <svg class="configure-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        Configure
+      </button>
+
+      <form class="manage-head tag-preview-group" method="post" id="section-form-{{ s.id }}"
             action="{{ url_for('journal_section_edit', section_id=s.id) }}">
         <input class="tag-name-input" type="text" name="name" value="{{ s.name }}" required>
         <input class="tag-color-input" type="color" name="color" value="{{ s.color }}">
@@ -44,7 +54,6 @@
           <input class="unit-input" type="text" name="unit"
                  value="{{ s.unit or '' }}" placeholder="unit label">
         {% endif %}
-        <button type="submit">save</button>
       </form>
 
       {% if s.type == "tag" %}
@@ -94,14 +103,17 @@
         </div>
       {% endif %}
 
-      <form class="delete-section" method="post"
-            action="{{ url_for('journal_section_delete', section_id=s.id) }}">
-        <button type="submit" class="delete"
-                data-confirm="Archive this section? Existing entries keep their data."
-                data-confirm-label="Archive">
-          archive section
-        </button>
-      </form>
+      <div class="manage-card-foot">
+        <form class="delete-section" method="post"
+              action="{{ url_for('journal_section_delete', section_id=s.id) }}">
+          <button type="submit" class="delete"
+                  data-confirm="Archive this section? Existing entries keep their data."
+                  data-confirm-label="Archive">
+            archive section
+          </button>
+        </form>
+        <button type="submit" form="section-form-{{ s.id }}">save</button>
+      </div>
 
     </section>
   {% endmacro %}
@@ -142,10 +154,13 @@
   <p class="muted">Connect a tracker or service to auto-fill each journal day.
     See the README for per-service setup steps.</p>
   {% include "_integrations_cards.html" %}
+
+  <script type="application/json" id="section-chart-opts-data">{{ chart_options | tojson }}</script>
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='journal-sections.js') }}" defer></script>
   <script src="{{ url_for('static', filename='tag-suggest.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='section-config.js') }}" defer></script>
   <script src="{{ url_for('static', filename='integrations-sync.js') }}" defer></script>
   <script src="{{ url_for('static', filename='vendor/qrcode.js') }}" defer></script>
   <script src="{{ url_for('static', filename='phone-qr.js') }}" defer></script>

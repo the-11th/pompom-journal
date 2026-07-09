@@ -43,6 +43,41 @@
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  function escapeHtml(str) {
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /** The first line of the entry's body containing any of the query words
+   * (whole-word, case-insensitive), trimmed. '' if none match. */
+  function matchingBodyLine(entry, words) {
+    if (!words.length) return '';
+    var lines = (entry.body || '').split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var lower = lines[i].toLowerCase();
+      for (var j = 0; j < words.length; j++) {
+        var re = new RegExp('\\b' + escapeRegExp(words[j].toLowerCase()) + '\\b');
+        if (re.test(lower)) return lines[i].trim();
+      }
+    }
+    return '';
+  }
+
+  /** Renders `line` as HTML with every query word wrapped in a highlight span
+   * (whole-word, case-insensitive; text otherwise HTML-escaped). */
+  function highlightWords(line, words) {
+    if (!words.length) return escapeHtml(line);
+    var re = new RegExp('\\b(' + words.map(escapeRegExp).join('|') + ')\\b', 'gi');
+    var html = '', last = 0, m;
+    while ((m = re.exec(line)) !== null) {
+      html += escapeHtml(line.slice(last, m.index));
+      html += '<span class="suggest-hl">' + escapeHtml(m[0]) + '</span>';
+      last = re.lastIndex;
+    }
+    html += escapeHtml(line.slice(last));
+    return html;
+  }
+
   /* ------------------------------------------------------------------ */
   /* Filter function                                                      */
   /* ------------------------------------------------------------------ */
@@ -103,6 +138,19 @@
       var row = document.querySelector('.entry-row[data-id="' + entry.id + '"]');
       if (row) {
         row.style.display = visible ? '' : 'none';
+
+        /* ---- Body-line snippet for the active text search ---- */
+        var snippetEl = row.querySelector('.entry-snippet');
+        if (snippetEl) {
+          var line = words.length ? matchingBodyLine(entry, words) : '';
+          if (line) {
+            snippetEl.innerHTML = highlightWords(line, words);
+            snippetEl.hidden = false;
+          } else {
+            snippetEl.innerHTML = '';
+            snippetEl.hidden = true;
+          }
+        }
       }
       if (visible) count++;
     });

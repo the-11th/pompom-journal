@@ -497,7 +497,7 @@ def test_analytics_payload_shape():
 
     assert set(payload) == {"sections", "entries", "date_range"}
     s = payload["sections"][0]
-    assert set(s) == {"id", "name", "type", "color", "tags", "unit"}
+    assert set(s) == {"id", "name", "type", "color", "tags", "unit", "chart_opts"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
     e = payload["entries"][0]
     assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage"}
@@ -955,6 +955,56 @@ def test_payload_includes_rescuetime():
          "source": "rescuetime", "fetched": "x"})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["rescuetime"]["pulse"] == 70
+
+
+def _rt_entry(date, activities):
+    """A minimal usable rescuetime entry carrying a top_activities list."""
+    return {
+        "id": date, "date": date, "title": "t", "body": "",
+        "tags": {}, "numbers": {}, "mood": None,
+        "rescuetime": {
+            "pulse": 60, "total_min": 300, "top_categories": [],
+            "top_activities": activities, "source": "rescuetime", "fetched": "x",
+        },
+    }
+
+
+def test_rescuetime_top_activities_aggregates_and_sorts():
+    import journal
+    entries = [
+        _rt_entry("2026-06-01", [
+            {"name": "github.com", "min": 60, "category": "Dev", "productivity": 2},
+            {"name": "youtube.com", "min": 30, "category": "Video", "productivity": -2},
+        ]),
+        _rt_entry("2026-06-02", [
+            {"name": "github.com", "min": 40, "category": "Dev", "productivity": 2},
+        ]),
+    ]
+    rows = journal.rescuetime_top_activities(entries)
+    assert rows[0] == {"name": "github.com", "min": 100,
+                       "category": "Dev", "productivity": 2}
+    assert rows[1]["name"] == "youtube.com" and rows[1]["min"] == 30
+
+
+def test_rescuetime_top_activities_ignores_days_without_breakdown():
+    import journal
+    data = journal._seeded()
+    # legacy day: rescuetime present, but no top_activities
+    journal.set_entry_rescuetime(data, "2026-06-05",
+        {"pulse": 70, "total_min": 150, "top_categories": [], "source": "rescuetime", "fetched": "x"})
+    assert journal.rescuetime_top_activities(data["entries"]) == []
+
+
+def test_rescuetime_activity_minutes_series_zero_fills():
+    import journal
+    entries = [
+        _rt_entry("2026-06-01", [{"name": "github.com", "min": 60}]),
+        _rt_entry("2026-06-02", [{"name": "youtube.com", "min": 45}]),
+    ]
+    out = journal.rescuetime_activity_minutes_series(entries, top_n=6)
+    assert out["dates"] == ["2026-06-01", "2026-06-02"]
+    assert out["series"]["github.com"] == [60, 0]
+    assert out["series"]["youtube.com"] == [0, 45]
 
 
 # Music analytics tab — payload regression test

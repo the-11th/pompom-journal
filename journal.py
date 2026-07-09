@@ -100,6 +100,12 @@ def load(path):
             s.setdefault("archived", False)
             s.setdefault("managed", None)
             s.setdefault("metric", None)
+            if not isinstance(s.get("chart_opts"), dict):
+                s["chart_opts"] = {}
+            if "cumulative" in s:   # migrate the short-lived single-flag field
+                legacy = s.pop("cumulative")
+                if s.get("type") == "numeric" and legacy is not None:
+                    s["chart_opts"].setdefault("numeric-cumulative", bool(legacy))
         for e in parsed["entries"]:
             if not isinstance(e.get("tags"), dict):
                 e["tags"] = {}
@@ -180,6 +186,50 @@ def _valid_name(name):
     return bool(name) and bool(_TAG_NAME_RE.match(name))
 
 
+# The Manage page's per-section "Configure" popup: which analytics charts (by
+# CHARTS registry id in analytics.js) a section can be included/excluded from.
+# (id, label) pairs, in the order they should list in the popup. Mirrors the
+# panel="numeric" / panel="tags" entries in analytics.js's CHARTS array —
+# update both together if a chart is added, renamed, or removed.
+NUMERIC_CHART_OPTIONS = [
+    ("numeric-stat-cards", "Stat cards"),
+    ("numeric-line", "Values over time"),
+    ("numeric-cumulative", "Cumulative total"),
+    ("numeric-period-delta", "Period-over-period delta"),
+    ("numeric-histogram", "Distribution histogram"),
+    ("numeric-calendar", "Calendar heatmap"),
+    ("numeric-dow", "Average by day of week"),
+    ("numeric-scatter", "Correlation scatter"),
+    ("numeric-correlation-matrix", "Correlation matrix"),
+    ("numeric-streaks", "Above/below-average streaks"),
+    ("numeric-coverage", "Coverage"),
+]
+
+TAG_CHART_OPTIONS = [
+    ("tag-frequency", "Tag frequency"),
+    ("tag-trend", "Top-tag trend"),
+    ("tag-heatmap", "Per-tag activity heatmap"),
+    ("tag-cooccurrence", "Co-occurrence"),
+]
+
+
+def chart_options_for(section_type):
+    """The (id, label) chart-option pairs applicable to a section type."""
+    return NUMERIC_CHART_OPTIONS if section_type == "numeric" else TAG_CHART_OPTIONS
+
+
+def section_chart_options(section):
+    """The Manage page's per-section chart checklist: [{id, label, enabled}].
+    `enabled` reflects `section["chart_opts"]`, defaulting True (shown) for any
+    chart id not yet recorded there — e.g. a chart added after the section was
+    last configured."""
+    opts = section.get("chart_opts") or {}
+    return [
+        {"id": opt_id, "label": label, "enabled": bool(opts.get(opt_id, True))}
+        for opt_id, label in chart_options_for(section.get("type"))
+    ]
+
+
 def add_section(data, name, type_, color, unit=None, managed=None, metric=None):
     """Create a section. Validates name (allowlist), type, and hex color.
     Names must be unique among non-archived sections. Returns the new section.
@@ -188,6 +238,10 @@ def add_section(data, name, type_, color, unit=None, managed=None, metric=None):
     (a stable metric key) mark an API-fed section: hidden from the entry form's
     editable inputs but still present in Search + Numeric analytics. Both default
     to None for ordinary user-created sections.
+
+    A fresh section's `chart_opts` starts empty (every chart shown by default —
+    see `section_chart_options`); adjust it after creation via the Manage page's
+    Configure popup / `set_section_chart_opts`.
     """
     name = _normalize_name(name)
     if not _valid_name(name):
@@ -210,6 +264,7 @@ def add_section(data, name, type_, color, unit=None, managed=None, metric=None):
         "archived": False,
         "managed": managed or None,
         "metric": metric or None,
+        "chart_opts": {},
     }
     data.setdefault("sections", []).append(section)
     return section
@@ -245,6 +300,21 @@ def set_section_unit(data, section_id, unit):
     s = section_by_id(data, section_id)
     if s is not None:
         s["unit"] = (unit or "").strip()[:_MAX_UNIT_LEN] or None
+    return data
+
+
+def set_section_chart_opts(data, section_id, enabled_ids):
+    """Set which analytics charts include this section, from the Manage page's
+    Configure popup. `enabled_ids` is an iterable of chart ids to mark enabled;
+    every other id in that section type's option list (`chart_options_for`) is
+    marked disabled. Unknown id = no-op."""
+    s = section_by_id(data, section_id)
+    if s is None:
+        return data
+    enabled = set(enabled_ids or [])
+    s["chart_opts"] = {
+        opt_id: (opt_id in enabled) for opt_id, _ in chart_options_for(s.get("type"))
+    }
     return data
 
 
@@ -1601,6 +1671,63 @@ def rescuetime_category_totals(entries, start=None, end=None):
     return rows[:8]
 
 
+def rescuetime_top_activities(entries, start=None, end=None, cap=8):
+    """Aggregate per-activity (website/application) minutes across the range.
+
+    Rows are ``{name, min, category, productivity}`` sorted by total minutes
+    desc, capped at ``cap``. ``category``/``productivity`` are taken from each
+    activity's first occurrence. Reads the ``top_activities`` list added to
+    ``entry["rescuetime"]`` by the sync (absent on days synced before the
+    website-breakdown feature; those simply contribute nothing).
+    """
+    totals, meta = {}, {}
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if not r:
+            continue
+        for a in r.get("top_activities") or []:
+            name = a.get("name")
+            if not name:
+                continue
+            totals[name] = totals.get(name, 0) + (a.get("min") or 0)
+            if name not in meta:
+                meta[name] = {"category": a.get("category"),
+                              "productivity": a.get("productivity")}
+    rows = [{"name": k, "min": v,
+             "category": meta[k]["category"],
+             "productivity": meta[k]["productivity"]}
+            for k, v in totals.items()]
+    rows.sort(key=lambda a: a["min"], reverse=True)
+    return rows[:cap]
+
+
+def rescuetime_activity_minutes_series(entries, start=None, end=None, top_n=6):
+    """Per-day minutes for the top-``top_n`` activities (by total minutes).
+
+    Shape (for a stacked/multi-line chart)::
+
+        {"activities": [{"name"}],      # top-N activities, most minutes first
+         "dates": ["YYYY-MM-DD", ...],  # sorted dates of usable entries
+         "series": {name: [minutes-per-date...]}}  # zero-filled, aligned to dates
+    """
+    top = rescuetime_top_activities(entries, start, end)[:max(0, top_n)]
+    acts = [{"name": a["name"]} for a in top]
+    keep = {a["name"] for a in acts}
+    by_date = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        r = _entry_rescuetime(e)
+        if not r:
+            continue
+        day = by_date.setdefault(e.get("date"), {})
+        for a in r.get("top_activities") or []:
+            name = a.get("name")
+            if name in keep:
+                day[name] = day.get(name, 0) + (a.get("min") or 0)
+    dates = sorted(by_date)
+    series = {a["name"]: [by_date[d].get(a["name"], 0) for d in dates] for a in acts}
+    return {"activities": acts, "dates": dates, "series": series}
+
+
 def rescuetime_dow_averages(entries, start=None, end=None):
     buckets = {i: [] for i in range(7)}
     for e in _filter_entries_by_date(entries, start, end):
@@ -2526,6 +2653,7 @@ def analytics_payload(data):
             "color": s["color"],
             "tags": list(s.get("tags") or []),
             "unit": s.get("unit"),
+            "chart_opts": dict(s.get("chart_opts") or {}),
         }
         for s in active_sections(data)
     ]

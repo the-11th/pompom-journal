@@ -807,11 +807,14 @@ def journal_entry_delete(entry_id):
 @app.route("/journal/sections")
 def journal_sections():
     data = journal.load(journal_file())
+    sections = journal.active_sections(data)
     return render_template("journal_sections.html", data=data,
-                           sections=journal.active_sections(data),
+                           sections=sections,
                            temporary_tags=journal.temporary_tags(data),
                            suggestions=journal.tag_suggestions(data, limit=8),
                            dormant=journal.dormant_tags(data),
+                           chart_options={s["id"]: journal.section_chart_options(s)
+                                          for s in sections},
                            **_integrations_context())
 
 
@@ -878,6 +881,16 @@ def journal_section_edit(section_id):
         journal.save(journal_file(), data)
     except ValueError:
         flash("Could not update section: check the name and color.")
+    return redirect(url_for("journal_sections"))
+
+
+@app.route("/journal/sections/<section_id>/chart-opts", methods=["POST"])
+def journal_section_chart_opts(section_id):
+    """The Manage page's Configure popup: which analytics charts include this
+    section. `enabled` is a repeated field of checked chart ids."""
+    data = journal.load(journal_file())
+    journal.set_section_chart_opts(data, section_id, request.form.getlist("enabled"))
+    journal.save(journal_file(), data)
     return redirect(url_for("journal_sections"))
 
 
@@ -1302,10 +1315,31 @@ def _rescuetime_sync(force=False, focus_date=None, now=None):
             if not date:
                 continue
             existing = journal.get_entry_by_date(jdata, date)
-            if not force and existing is not None and existing.get("rescuetime"):
+            ex_rt = existing.get("rescuetime") if existing else None
+            write_summary = force or not ex_rt
+            # Backfill the per-activity breakdown onto days synced before this
+            # feature existed (they have a rescuetime dict but no top_activities).
+            backfill_only = (not write_summary) and not (ex_rt or {}).get("top_activities")
+            if not write_summary and not backfill_only:
                 continue
-            journal.set_entry_rescuetime(jdata, date, day)
-            synced.append(date)
+            # Best-effort per-activity (website/app) breakdown; a failure here
+            # must not lose the day's summary, so it's isolated.
+            activities = None
+            try:
+                activities = rescuetime.parse_activities(
+                    rescuetime.fetch_activities(key, date))
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{date} activities: {exc}")
+            if write_summary:
+                if activities is not None:
+                    day["top_activities"] = activities
+                journal.set_entry_rescuetime(jdata, date, day)
+                synced.append(date)
+            elif activities is not None:
+                merged = dict(ex_rt)
+                merged["top_activities"] = activities
+                journal.set_entry_rescuetime(jdata, date, merged)
+                synced.append(date)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{row.get('date')}: {exc}")
     journal.save(journal_file(), jdata)
