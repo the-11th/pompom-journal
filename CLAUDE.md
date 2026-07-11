@@ -1,6 +1,76 @@
-# CLAUDE.md
+# Project guide (CLAUDE.md / AGENTS.md)
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the single source of truth for AI coding agents working in this repo.
+**`AGENTS.md` is a symlink to this file**, so Claude Code (reads `CLAUDE.md`) and
+Codex (reads `AGENTS.md`) get the exact same guidance — keep everything here
+tool-agnostic and edit only this one file. These instructions override default
+behavior; follow them exactly.
+
+## Read first: goals, design & expectations
+
+### What this app is (and its goals)
+A local-first, single-user **daily journal + to-do** web app ("TodoPup"):
+server-rendered Flask with JSON file storage (no database), run locally via a
+macOS dock app. Its two domains — **tasks** and **journal** — share one
+analytics-ready data model feeding a rich `/journal/analytics` dashboard.
+Third-party integrations (Google Health sleep, RescueTime productivity, Spotify
+music, Android phone usage) auto-fill structured fields on journal entries.
+
+The north star: **one pleasant, fast, private place to log your day, track tasks,
+and see cross-domain patterns** (mood ↔ sleep ↔ productivity ↔ music ↔ tags).
+It's an actively evolving work in progress — bias toward polish and fit with the
+existing whole, never one-off hacks. Before adding anything, ask: *"does this
+match what's already here, and serve that north star?"*
+
+### UI expectations — consistency is a feature (non-negotiable)
+Every new UI MUST match the existing **dark amber / monospace theme**. No
+native/unstyled browser chrome ever. Concretely:
+- Use the `:root` CSS variables; never hardcode theme colors — `--panel`,
+  `--text`, `--muted`, `--border`, `--accent` (#e0a955 amber), `--danger`
+  (#e0524d red).
+- Route every `<select>` through the themed custom dropdown; for selects created
+  dynamically after load, call `window.enhanceSelect(el)` — never ship a raw
+  native `<select>`.
+- **Reuse existing patterns rather than inventing new ones**: `.kind-toggle`
+  segmented radios, themed inputs/date pickers, the global
+  `window.confirmModal(msg, label)` (auto-wired to any `button[data-confirm]`),
+  the `.suggest-popup*` / `.tag-pop*` popover shells, `.cal-*` calendars,
+  `.section-filter` chips, `.analytics-panel*` chart boxes, `.sleep-stage-legend`
+  chart legends. Match the surrounding code's naming, spacing, and idioms.
+- Add a matching `style.css` rule for any new class; audit new elements for native
+  fallbacks (raw selects, range sliders, checkboxes, scrollbars, focus rings)
+  before shipping. Global polish (`color-scheme: dark`, themed scrollbars,
+  `::selection`, `::placeholder`, `accent-color`) is already in place — inherit it.
+- **No third-party JS/CSS libraries.** Everything is vanilla — charts are
+  hand-rolled SVG in `analytics.js`; drag-and-drop is native HTML5. Keep it so.
+
+### Engineering conventions (non-negotiable)
+- **Strict pure-logic / HTTP split.** Domain logic lives in the pure modules
+  (`todo.py`, `journal.py`, `oauth.py`, `google_health.py`, `rescuetime.py`,
+  `spotify.py`, `usage.py`, `integrations.py`) with **zero Flask imports**, plain
+  dict/list in and out. `app.py` is a thin HTTP layer only (parse → call domain →
+  render/redirect). Put new logic in the pure modules, not `app.py`.
+- **Test-first (TDD).** Add/adjust tests before implementation; the full `pytest`
+  suite must stay green. Unit tests use a fixed `now` + pytest `tmp_path`; route
+  tests use Flask `test_client()` with temp data files. Initialize stores with
+  `todo._empty()` / `journal._empty()`. Preserve the injectable `now=None`
+  parameter on any time-sensitive function.
+- **Post/Redirect/Get** for every state-changing route, with `flash()` for
+  validation errors; background JSON endpoints re-render in place.
+- **Forgiving `load()` + atomic `save()`** for every JSON store — when you add a
+  top-level key or per-entry field, extend both `load()` and `_empty()` to default
+  it (backward-compatible migration).
+- **Analytics come in pairs**: a pure helper in `journal.py`/`todo.py` computes
+  the numbers; a JS mirror in `analytics.js` renders them via the `CHARTS`
+  registry + `U.*` SVG utilities. Keep the Python helper and its JS mirror in
+  lockstep.
+
+### How to verify before declaring done
+1. `pytest` — full suite green; new behavior has new tests.
+2. `node -c static/<file>.js` after editing any JS file (catches syntax errors).
+3. Run it and click the affected flow: `flask --app app run --port 5001` →
+   `http://127.0.0.1:5001/`. For analytics/UI changes, **eyeball it in the
+   browser** — the SVG charts and layout aren't covered by unit tests.
 
 ## Commands
 

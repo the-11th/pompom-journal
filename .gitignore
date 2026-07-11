@@ -7,3 +7,6 @@ __pycache__/
 .pytest_cache/
 *.bak
 .superpowers/
+# Agent + OS local cruft (Claude Code local config, macOS Finder metadata)
+.claude/
+.DS_Store
