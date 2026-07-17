@@ -191,7 +191,7 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
 - **Tags**: titles are highlighted in the first tag's color (translucent,
   text-only via `color-mix`); extra tags render as chips. Colors are user-picked
   hex; tag names are normalized (strip+lowercase) and allowlisted
-  (`^[a-z0-9 _-]+$`) — names flow into `style` attributes so keep that
+  (`^[a-z0-9 ._-]+$`) — names flow into `style` attributes so keep that
   validation. Filtering (`?tags=a,b`) is multi-select OR semantics on active and
   archive pages; unknown/stale tags are dropped silently.
 - **Archive**: completed tasks move here. Accessible via `/archive`.
@@ -1323,16 +1323,25 @@ for full detail on routes, data models, and analytics helpers.
 - **RescueTime productivity**: `entry["rescuetime"]` (pulse/minutes by category) → **Productivity** tab (**Digital** category, gated on `hasRescueTime`): pulse trend, time breakdown, category totals, DOW bars, pulse↔mood scatter.
 - **Spotify music**: `entry["music"]` (tracks/minutes/distinct/top_artists + audio features) → **Music** tab (**Digital** category, gated on `hasMusic`): minutes trend, top artists, taste view (top tracks/artists/genres by 4wk/6mo/all-time), valence↔mood scatter and feature radar (gated on `hasFeatures`; gracefully absent for apps affected by the audio-features deprecation).
 
-### Phone usage — server side DONE (Plan 1); Android app = Plan 2
+### Android companion + phone usage — DONE
 
-The **Flask ingestion + analytics** side of the phone-usage integration is
-shipped (Plan 1): `usage.py`, the `phone` provider + shared-token routes
+The in-repo Android app is now the full offline-first TodoPup companion, not only
+a phone-usage worker. It uses private Tailscale HTTPS plus separate hashed,
+per-device bearer credentials to create/edit journal entries (mood, tags,
+numbers, speech transcript) and manage tasks (due dates, tags, notes, subtasks,
+completion, deletion). Android writes land in durable journal/task outboxes,
+retry idempotently through WorkManager, and preserve stale edits as explicit
+phone-vs-Mac conflicts. API routes live under `/api/mobile`; enrollment/revoke
+controls live in the Manage-page **TodoPup mobile** card. The Mac remains the
+only source of truth. See `docs/PHONE_ACCESS.md` and
+`docs/superpowers/plans/2026-07-15-android-journal-tasks.md`.
+
+The **phone-usage ingestion + analytics** feature remains alongside it:
+`usage.py`, the separate `phone` provider + shared-token routes
 (`/integrations/phone/{ingest,token,disconnect}`), `entry["usage"]` +
 `set_entry_usage`, the Manage-page **Phone usage** card, and the **Phone usage**
-analytics tab (gated on `hasUsage`). Fully `curl`-testable now. **Plan 2** (not
-built): the in-repo Android app (`android/`) that reads `UsageStatsManager` and
-pushes daily, its GitHub Actions APK build/Release, and the Manage-page download
-QR. See `docs/superpowers/specs/2026-07-07-phone-usage-integration-design.md`.
+analytics tab (gated on `hasUsage`). Its daily `UsageStatsManager` worker and
+GitHub Actions APK release remain intact.
 
 ### Shipped quality-of-life features
 

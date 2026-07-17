@@ -68,8 +68,10 @@
   }
 
   // Mirror journal.extract_mentions: '@' at a word boundary (start of string
-  // or preceded by a non-word char) followed by [A-Za-z0-9_-]+.
-  var MENTION_RE = /(^|\W)@([A-Za-z0-9_-]+)/g;
+  // or preceded by a non-word char) followed by period-separated name
+  // segments. A period must have name characters after it, so sentence-ending
+  // punctuation is not swallowed.
+  var MENTION_RE = /(^|\W)@([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)/g;
 
   // Resolve a mention token to a known tag name in INDEX, or null. Mirrors
   // journal._resolve_mention: try the token as-is, then with underscores as
@@ -299,10 +301,29 @@
   /* View swapping                                                        */
   /* ------------------------------------------------------------------ */
 
+  var bodyHeight = null;
+
+  function rememberInputHeight() {
+    if (input.hidden) return;
+    var box = input.getBoundingClientRect();
+    if (box && box.height > 0) {
+      bodyHeight = box.height + 'px';
+      input.style.height = bodyHeight;
+    }
+  }
+
+  function applyRememberedHeight() {
+    if (!bodyHeight) return;
+    input.style.height = bodyHeight;
+    rendered.style.minHeight = bodyHeight;
+  }
+
   function showRendered() {
+    rememberInputHeight();
     rendered.innerHTML = render(input.value, INDEX);
     reconcileChips(input.value);
     reflectNumbers(input.value);
+    applyRememberedHeight();
     rendered.hidden = false;
     input.hidden = true;
   }
@@ -310,6 +331,7 @@
   function showInput(focus) {
     input.hidden = false;
     rendered.hidden = true;
+    applyRememberedHeight();
     if (focus) input.focus();
   }
 

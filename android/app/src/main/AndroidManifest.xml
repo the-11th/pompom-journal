@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
@@ -29,8 +29,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Config deep link: todopup://config?url=...&token=... (the
-                 Manage-page config QR). Pre-fills + saves endpoint + token. -->
+            <!-- Pair/config deep links from the Manage-page QR. Journal pairing
+                 exchanges a one-use enrollment_token; the legacy usage flow
+                 accepts its separate url + token credential. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

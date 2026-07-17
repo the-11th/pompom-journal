@@ -1,6 +1,9 @@
 """Tests for the journal HTTP layer. Uses test_client() and a temp
 JOURNAL_FILE so the real data/journal.json is never touched."""
 
+import io
+import json
+
 import pytest
 
 import app as app_module
@@ -89,6 +92,21 @@ def test_save_permanent_new_tag_joins_registry(client):
     assert "cousin lee" in journal.get_entry_by_date(data, "2026-06-15")["tags"][sid]
 
 
+def test_save_permanent_tag_with_period(client):
+    sid = _first_tag_section_id()
+    response = client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "Office day", "body": "",
+        f"newtag-name:{sid}": "ID.me Office",
+        f"newtag-kind:{sid}": "permanent",
+    })
+
+    assert response.status_code == 302
+    data = journal.load(_journal_path())
+    assert "id.me office" in journal.section_by_id(data, sid)["tags"]
+    entry = journal.get_entry_by_date(data, "2026-06-15")
+    assert entry["tags"][sid] == ["id.me office"]
+
+
 def test_save_temporary_new_tag_stays_off_registry(client):
     sid = _first_tag_section_id()
     client.post("/journal/save", data={
@@ -105,6 +123,19 @@ def test_save_invalid_title_flashes_and_saves_nothing(client):
     assert resp.status_code == 302
     data = journal.load(_journal_path())
     assert journal.get_entry_by_date(data, "2026-06-15") is None
+
+
+def test_save_tag_before_title_creates_dated_entry(client):
+    sid = _first_tag_section_id()
+    resp = client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "  ", "body": "",
+        f"newtag-name:{sid}": "maya", f"newtag-kind:{sid}": "temporary",
+    })
+    assert resp.status_code == 302
+    data = journal.load(_journal_path())
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    assert e["title"] == "2026-06-15"
+    assert e["tags"][sid] == ["maya"]
 
 
 def test_edit_existing_date_prefills(client):
@@ -457,6 +488,16 @@ def test_add_permanent_tag_to_section(client):
     assert "maya" in journal.section_by_id(journal.load(_journal_path()), sid)["tags"]
 
 
+def test_add_multiword_permanent_tag_to_section(client):
+    sid = journal.active_sections(journal.load(_journal_path()))[0]["id"]
+    resp = client.post(
+        f"/journal/sections/{sid}/tags", data={"tag": "Alex Dad"}
+    )
+    assert resp.status_code == 302
+    section = journal.section_by_id(journal.load(_journal_path()), sid)
+    assert "alex dad" in section["tags"]
+
+
 def test_remove_permanent_tag_does_not_affect_entries(client):
     """Removing a tag from the master list must NOT remove it from existing entries."""
     sid = _first_tag_section_id()
@@ -795,6 +836,20 @@ def test_entry_page_embeds_mention_index(client):
     assert b'id="mention-index"' in resp.data
     assert b"journal-richtext.js" in resp.data
     assert b"maya" in resp.data
+
+
+def test_entry_page_embeds_voice_tag_catalog_and_convenience_script(client):
+    data = journal.load(_journal_path())
+    sid = data["sections"][0]["id"]
+    journal.add_section_tag(data, sid, "alex dad")
+    journal.save(_journal_path(), data)
+
+    resp = client.get("/journal")
+
+    assert b'id="tag-voice-catalog"' in resp.data
+    assert b'"alex dad"' in resp.data
+    assert b"journal-entry-convenience.js" in resp.data
+    assert resp.data.index(b'class="body-field"') < resp.data.index(b"Tag the day")
 
 
 # --------------------------------------------------------------------------- #
@@ -1216,6 +1271,7 @@ def test_integrations_page_has_phone_card(client, app):
 def test_phone_card_has_apk_download_url_and_qr(client, app):
     r = client.get("/journal/sections")
     # Real GitHub Release APK link (no placeholder "#").
+    assert b"github.com/the-11th/pompom-journal/" in r.data
     assert b"releases/latest/download/phone-usage.apk" in r.data
     # Download QR div carries the APK URL in its data-qr attribute.
     assert b'class="phone-qr" data-qr="https://github.com/' in r.data
@@ -1247,6 +1303,50 @@ def test_analytics_data_entries_carry_usage(client, app):
     journal.save(app.config["JOURNAL_FILE"], jdata)
     body = client.get("/journal/analytics/data").get_json()
     assert any(e.get("usage") for e in body["entries"])
+
+
+def test_health_token_ingest_and_disconnect(client, app):
+    r = client.post("/integrations/health/token")
+    assert r.status_code == 302
+    token = I.get_token(I.load(app.config["INTEGRATIONS_FILE"]), "health")
+    assert token
+
+    r = client.post("/integrations/health/ingest",
+                    json={"date": "2026-07-06", "steps": 8000,
+                          "heart_rate": [{"time": "09:00", "bpm": 72}]},
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.get_json()["dates"] == ["2026-07-06"]
+    h = journal.get_entry_by_date(
+        journal.load(app.config["JOURNAL_FILE"]), "2026-07-06")["health"]
+    assert h["steps"] == 8000
+    assert h["avg_hr"] == 72
+
+    client.post("/integrations/health/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "health")
+
+
+def test_health_ingest_requires_token(client):
+    r = client.post("/integrations/health/ingest",
+                    json={"date": "2026-07-06", "steps": 8000})
+    assert r.status_code == 401
+
+
+def test_integrations_page_has_health_card(client):
+    r = client.get("/journal/sections")
+    assert r.status_code == 200
+    assert b"Xiaomi health" in r.data
+    assert b"/integrations/health/ingest" in r.data
+
+
+def test_analytics_data_entries_carry_health(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_health(jdata, "2026-07-06",
+        {"date": "2026-07-06", "steps": 8000, "avg_hr": 72,
+         "heart_rate_samples": [], "source": "xiaomi", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    body = client.get("/journal/analytics/data").get_json()
+    assert any(e.get("health") for e in body["entries"])
 
 
 # --------------------------------------------------------------------------- #
@@ -1292,6 +1392,53 @@ def test_spotify_taste_endpoint(client, app):
     I.save(app.config["INTEGRATIONS_FILE"], d)
     body = client.get("/integrations/spotify/taste").get_json()
     assert body["genres"]["short_term"] == ["indie"]
+
+
+def test_spotify_analytics_endpoint_fetches_snapshot(client, app, monkeypatch):
+    _connect_spotify(app)
+    monkeypatch.setattr("spotify.fetch_playback_state",
+        lambda tok: {"item": {"name": "Now"}, "is_playing": True})
+    monkeypatch.setattr("spotify.parse_playback_state",
+        lambda raw: {"item": {"name": raw["item"]["name"]}, "is_playing": raw["is_playing"]})
+    monkeypatch.setattr("spotify.fetch_queue", lambda tok: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("spotify.parse_queue", lambda raw: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("spotify.fetch_devices", lambda tok: {"devices": [{"name": "Mac"}]})
+    monkeypatch.setattr("spotify.parse_devices", lambda raw: [{"name": "Mac"}])
+    monkeypatch.setattr("spotify.fetch_saved_tracks", lambda tok: {"total": 12, "items": []})
+    monkeypatch.setattr("spotify.parse_saved_tracks", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("spotify.fetch_saved_albums", lambda tok: {"total": 3, "items": []})
+    monkeypatch.setattr("spotify.parse_saved_albums", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("spotify.fetch_saved_episodes", lambda tok: {"total": 2, "items": []})
+    monkeypatch.setattr("spotify.parse_saved_episodes", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("spotify.fetch_current_user_playlists", lambda tok: {"items": []})
+    monkeypatch.setattr("spotify.parse_playlists", lambda raw: [])
+    monkeypatch.setattr("spotify.fetch_followed_artists", lambda tok: {"artists": {"items": []}})
+    monkeypatch.setattr("spotify.parse_followed_artists", lambda raw: [])
+
+    body = client.post("/integrations/spotify/analytics").get_json()
+    assert body["ok"] and body["analytics"]["playback"]["item"]["name"] == "Now"
+    saved = I.get_analytics(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+    assert saved["library"]["saved_tracks"]["total"] == 12
+
+
+def test_spotify_history_import_writes_daily_music(client, app, monkeypatch):
+    _connect_spotify(app)
+    rows = [{"ts": "2026-06-29T22:10:00Z", "master_metadata_track_name": "A",
+             "master_metadata_album_artist_name": "Artist", "ms_played": 180000}]
+    monkeypatch.setattr("spotify.parse_streaming_history",
+        lambda payload: [{"played_at": payload[0]["ts"], "date": "2026-06-29",
+                          "track_id": "t1", "name": "A", "artists": ["Artist"],
+                          "duration_ms": payload[0]["ms_played"], "source": "history_import"}])
+    monkeypatch.setattr("spotify.group_plays_by_day",
+        lambda plays: {"2026-06-29": plays})
+    r = client.post("/integrations/spotify/history/import",
+        data={"history": (io.BytesIO(json.dumps(rows).encode("utf-8")),
+                          "Streaming_History_Audio_2026.json")},
+        content_type="multipart/form-data")
+    assert r.status_code == 302
+    entry = journal.get_entry_by_date(journal.load(app.config["JOURNAL_FILE"]), "2026-06-29")
+    assert entry["music"]["tracks"] == 1
+    assert "history_import" in entry["music"]["sources"]
 
 
 def test_spotify_disconnect(client, app):

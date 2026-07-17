@@ -132,6 +132,17 @@ def test_add_task_empty_title_rejected():
     assert data["active"] == []   # nothing added
 
 
+def test_add_task_accepts_safe_client_id_and_rejects_collision():
+    data = todo._empty()
+    client_id = "12345678-1234-4abc-9def-1234567890ab"
+    todo.add_task(data, "offline", task_id=client_id)
+    assert data["active"][0]["id"] == client_id
+    with pytest.raises(ValueError):
+        todo.add_task(data, "duplicate", task_id=client_id)
+    with pytest.raises(ValueError):
+        todo.add_task(data, "unsafe", task_id="../bad")
+
+
 # --------------------------------------------------------------------------- #
 # delete_task
 # --------------------------------------------------------------------------- #
@@ -643,12 +654,19 @@ def test_set_tag_color_bad_color_rejected():
 
 
 def test_set_tag_color_accepts_allowed_names():
-    # Names made of lowercase letters, digits, spaces, underscores and
-    # hyphens are allowed.
+    # Names made of lowercase letters, digits, spaces, underscores, hyphens,
+    # and periods are allowed.
     data = todo._empty()
-    for name in ["work", "work item", "high-priority", "q1_2026", "a1 b2"]:
+    for name in ["work", "work item", "high-priority", "q1_2026", "a1 b2",
+                 "id.me office"]:
         todo.set_tag_color(data, name, "#abc")
         assert name in data["tags"]
+
+
+def test_set_tag_color_normalizes_name_with_period():
+    data = todo._empty()
+    todo.set_tag_color(data, "ID.me Office", "#abcdef")
+    assert data["tags"] == {"id.me office": "#abcdef"}
 
 
 def test_set_tag_color_rejects_injection_chars():
@@ -1002,6 +1020,19 @@ def test_add_subtask_unknown_id_noop():
     tid = data["active"][0]["id"]
     todo.add_subtask(data, "ghost", "x")
     assert data["active"][0]["subtasks"] == []
+
+
+def test_replace_subtasks_validates_and_copies_rows():
+    data = todo._empty()
+    todo.add_task(data, "trip")
+    task_id = data["active"][0]["id"]
+    rows = [{"text": " Pack ", "done": True}]
+    todo.replace_subtasks(data, task_id, rows)
+    assert data["active"][0]["subtasks"] == [{"text": "Pack", "done": True}]
+    rows[0]["text"] = "mutated"
+    assert data["active"][0]["subtasks"][0]["text"] == "Pack"
+    with pytest.raises(ValueError):
+        todo.replace_subtasks(data, task_id, [{"text": "", "done": False}])
 
 
 def test_toggle_subtask_flips_done():

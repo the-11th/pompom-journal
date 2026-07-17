@@ -71,6 +71,57 @@
                 data-confirm="Disconnect Spotify and remove stored tokens?">Disconnect</button>
       </form>
     {% endif %}
+    <form method="post" action="{{ url_for('spotify_history_import') }}"
+          enctype="multipart/form-data" class="integration-creds">
+      <label>History JSON <input type="file" name="history" accept=".json,application/json"></label>
+      <button type="submit">Import history</button>
+    </form>
+  </section>
+
+  <section class="integration-card">
+    <h2>TodoPup mobile <span class="integration-status {{ 'on' if mobile_devices else 'off' }}">
+      {{ (mobile_devices | length) ~ ' paired' if mobile_devices else 'Not paired' }}</span></h2>
+    <p class="muted">Write journal entries, dictate transcripts, add tags, pick
+      your mood, and manage tasks from Android. The Mac stays the source of
+      truth; private sync travels through Tailscale.</p>
+
+    <p class="muted">Private Mac URL:</p>
+    <code class="phone-endpoint">{{ mobile_base_url }}</code>
+
+    <p class="muted"><a href="{{ phone_apk_url }}" target="_blank" rel="noopener">
+      Download the TodoPup Android app</a>, then pair it while this Mac and the
+      phone are signed into the same Tailscale network.</p>
+
+    {% if mobile_pair_url %}
+      <p class="phone-token-reveal">Pairing code created. It works once and
+        expires in 10 minutes.</p>
+      <figure class="phone-qr-fig">
+        <div class="phone-qr" data-qr="{{ mobile_pair_url }}"
+             aria-label="QR code to pair the TodoPup Android app"></div>
+        <figcaption class="muted">Scan to pair</figcaption>
+      </figure>
+      <p><a class="btn" href="{{ mobile_pair_url }}">Open in TodoPup app</a></p>
+    {% else %}
+      <form method="post" action="{{ url_for('mobile_enrollment_create') }}">
+        <button type="submit" class="btn">Create pairing QR</button>
+      </form>
+    {% endif %}
+
+    {% if mobile_devices %}
+      <h3 class="mobile-device-heading">Paired devices</h3>
+      <ul class="mobile-device-list">
+        {% for device in mobile_devices %}
+          <li>
+            <span><strong>{{ device.name }}</strong>
+              <small class="muted">Last seen {{ device.last_seen or 'never' }}</small></span>
+            <form method="post" action="{{ url_for('mobile_device_revoke', device_id=device.id) }}">
+              <button type="submit" class="btn danger"
+                      data-confirm="Revoke TodoPup access for {{ device.name }}?">Revoke</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
   </section>
 
   <section class="integration-card">
@@ -119,6 +170,38 @@
       <form method="post" action="{{ url_for('phone_disconnect') }}" style="display:inline">
         <button type="submit" class="btn danger"
                 data-confirm="Disconnect phone usage and remove the stored token?">Disconnect</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="integration-card">
+    <h2>Xiaomi health <span class="integration-status {{ 'on' if health_connected else 'off' }}">
+      {{ 'Connected' if health_connected else 'Not connected' }}</span></h2>
+    <p class="muted">Auto-fills daily steps and heart-rate summaries from Xiaomi
+      wearables via Health Connect, an export importer, or a local bridge. Xiaomi
+      does not offer a stable public personal-health cloud API, so this endpoint
+      accepts normalized pushed data instead.</p>
+
+    <p class="muted">Endpoint URL (paste into the bridge):</p>
+    <code class="phone-endpoint">{{ health_endpoint }}</code>
+
+    {% if health_token %}
+      <p class="phone-token-reveal">New token (copy it now — shown once):
+        <code>{{ health_token }}</code></p>
+    {% endif %}
+
+    <div class="muted">
+      <form method="post" action="{{ url_for('health_token') }}" style="display:inline">
+        <button type="submit" class="btn">
+          {{ 'Rotate token' if health_connected else 'Generate token' }}</button>
+      </form>
+    </div>
+
+    {% if health_connected %}
+      <p class="muted">Last received: {{ health_last_sync or 'never' }}</p>
+      <form method="post" action="{{ url_for('health_disconnect') }}" style="display:inline">
+        <button type="submit" class="btn danger"
+                data-confirm="Disconnect Xiaomi health and remove the stored token?">Disconnect</button>
       </form>
     {% endif %}
   </section>

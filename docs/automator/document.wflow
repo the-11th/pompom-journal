@@ -59,26 +59,7 @@
 				<key>ActionParameters</key>
 				<dict>
 					<key>COMMAND_STRING</key>
-					<string>cd /Users/julia.xi/workspace/todo-cli
-
-PORT=5001
-URL="http://127.0.0.1:${PORT}"
-
-EXISTING=$(lsof -ti "tcp:${PORT}" 2&gt;/dev/null)
-if [ -n "$EXISTING" ]; then
-  kill $EXISTING 2&gt;/dev/null
-  sleep 1
-  STILL=$(lsof -ti "tcp:${PORT}" 2&gt;/dev/null)
-  [ -n "$STILL" ] &amp;&amp; kill -9 $STILL 2&gt;/dev/null
-fi
-
-.venv/bin/python start_server.py
-
-for i in $(seq 1 20); do
-  sleep 0.5
-  curl -s --max-time 1 "$URL" -o /dev/null &amp;&amp; break
-done
-open "$URL"</string>
+					<string>__TODO_PUP_COMMAND__</string>
 					<key>CheckedForUserDefaultShell</key>
 					<true/>
 					<key>inputMethod</key>

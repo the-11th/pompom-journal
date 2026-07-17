@@ -500,7 +500,7 @@ def test_analytics_payload_shape():
     assert set(s) == {"id", "name", "type", "color", "tags", "unit", "chart_opts"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
     e = payload["entries"][0]
-    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage"}
+    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage", "health"}
     assert e["date"] == "2026-06-10"
     assert e["mood"] == 5
     assert payload["date_range"] == {"min": "2026-06-10", "max": "2026-06-10"}
@@ -1020,6 +1020,27 @@ def test_payload_includes_music():
          "source": "spotify", "fetched": "x"})
     p = journal.analytics_payload(data)
     assert p["entries"][0]["music"]["minutes"] == 40
+
+
+def test_payload_includes_sanitized_rich_music_dict():
+    import journal
+    data = journal._seeded()
+    journal.set_entry_music(data, "2026-06-29", {
+        "tracks": 2,
+        "minutes": 8,
+        "top_tracks": [{"name": "Song A", "artist": "Artist A", "count": 2}],
+        "top_albums": [{"name": "Album A", "artist": "Artist A", "count": 2}],
+        "contexts": [{"name": "focus", "minutes": 8}],
+        "source": "spotify_import",
+        "access_token": "secret",
+        "nested": {"refresh_token": "secret", "kept": "ok"},
+    })
+    music = journal.analytics_payload(data)["entries"][0]["music"]
+    assert music["top_tracks"][0]["name"] == "Song A"
+    assert music["top_albums"][0]["name"] == "Album A"
+    assert music["contexts"][0]["name"] == "focus"
+    assert "access_token" not in music
+    assert music["nested"] == {"kept": "ok"}
 
 
 # --------------------------------------------------------------------------- #

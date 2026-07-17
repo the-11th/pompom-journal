@@ -1,15 +1,47 @@
-# TodoPup Usage — Android phone-usage pusher
+# TodoPup for Android
 
-A tiny Android app that reads on-device usage stats (screen time, unlocks, top
-apps) via `UsageStatsManager` and **pushes** them once a day to the TodoPup Flask
-app's ingest endpoint. It mirrors the RescueTime-style shared-token model — there
-is no cloud API for Android usage stats, so the phone pushes instead of the
-server pulling.
+An offline-first Android companion for TodoPup. It writes journal entries,
+captures speech transcripts, selects moods and tags, and manages tasks. Changes
+are saved on the phone before being sent over private Tailscale HTTPS to the Mac,
+which remains the only authoritative TodoPup data store.
+
+The original phone-usage integration remains included: with optional Android
+Usage access, a daily WorkManager job pushes screen time, unlocks, and top apps.
 
 See the full design in
 `docs/superpowers/specs/2026-07-07-phone-usage-integration-design.md`.
 
-## What it sends
+## Mobile features
+
+- Journal date, title, body, the same seven Pompompurin mood images as the web
+  app, section-grouped tags, temporary/permanent tag addition, and Android speech
+  recognition with transcript insertion.
+- Active and completed tasks, due dates, tags, notes, subtasks, completion,
+  editing, and deletion.
+- Keystore-protected device credentials, durable journal/task outboxes,
+  idempotent retries, and an explicit phone-versus-Mac conflict choice.
+- The same dark amber, monospace TodoPup visual language and app/mood assets.
+- Optional phone-usage upload described below.
+
+Tailscale is installed separately; TodoPup does not embed or control a VPN. The
+app calls the Mac's private `https://…ts.net` URL like any HTTPS origin.
+
+## Install and pair
+
+1. Enable persistent phone access on the Mac as described in
+   [`../docs/PHONE_ACCESS.md`](../docs/PHONE_ACCESS.md).
+2. Install Tailscale on the Mac and Android phone and sign both into the same
+   tailnet.
+3. In desktop TodoPup open **Journal → Manage → Integrations → TodoPup mobile**.
+4. Install the latest APK, press **Create pairing QR**, and scan the QR with the
+   phone. The code works once and expires after ten minutes.
+5. Open TodoPup on Android. Journal/task writes will queue locally whenever the
+   Mac is asleep or unreachable and retry later.
+
+Device access can be revoked independently from the same Manage card without
+changing the phone-usage integration credential.
+
+## Optional phone-usage payload
 
 On each run the worker POSTs a JSON **array** of the last **3 full days** (so a
 missed night self-heals on the next push) to your endpoint with header
@@ -42,30 +74,20 @@ The debug APK lands at `app/build/outputs/apk/debug/app-debug.apk`. A
 **debug-signed** APK is intentional — no keystore/signing ceremony is needed for
 personal sideloading.
 
-CI builds it automatically on every push under `android/**` and publishes it as
-`phone-usage.apk` on a GitHub Release, so you normally just download it from the
-Manage page (see below) rather than building locally.
+CI builds it automatically on every push under `android/**` and publishes the
+backward-compatible release asset name `phone-usage.apk`. The Manage page links
+to that latest APK.
 
-## Install (sideload)
+## Optional usage-access setup
 
-1. On your computer open the journal **Manage** page → **Integrations** →
-   **Phone usage** card.
-2. Scan the **download QR** with the phone (or open the "Download the app" link).
-   It points at the latest GitHub Release `phone-usage.apk`, reachable from the
-   phone anywhere over the internet.
-3. Open the downloaded `.apk`; allow "install unknown apps" for your browser/Files
-   app once, then install.
-
-## First-run setup
-
-1. **Configure** — either **scan the config QR** on the Manage page (a
+1. **Configure usage** — either scan the Phone usage config QR (a
    `todopup://config?url=…&token=…` deep link that pre-fills + saves both fields),
    or paste the **endpoint URL** and **token** manually and tap **Save config**.
-2. Tap **Grant Usage access** → toggle *TodoPup Usage* on under
+2. Tap **Grant usage access** → toggle *TodoPup* on under
    *Settings → Special access → Usage access*. (This is the special
    `PACKAGE_USAGE_STATS` permission; it is granted here, not via a runtime prompt.)
-3. Tap **Exclude from battery optimization** (see the Samsung gotcha below).
-4. Tap **Send test now** and watch the status line for a success time. Refresh a
+3. Exclude TodoPup from battery optimization (see the Samsung note below).
+4. Tap **Send usage now** and watch the status line for a success time. Refresh a
    recent journal day on the computer — the usage panel + Phone-usage analytics
    tab should populate.
 
@@ -80,7 +102,7 @@ then stops" on Samsung. **You must exclude this app from battery optimization**:
 - On Samsung, also check *Settings → Battery → Background usage limits →
   Never sleeping apps* and add TodoPup Usage.
 
-## Reachability of the daily push
+## Reachability
 
 The endpoint must be reachable from the phone when the worker runs:
 
@@ -88,9 +110,9 @@ The endpoint must be reachable from the phone when the worker runs:
 - **Anywhere (recommended):** run **Tailscale** on both the computer and the
   phone and use the computer's Tailscale hostname in the endpoint URL.
 
-Note the Flask server **auto-quits when the last browser tab closes**, so a push
-only lands while a tab is open. Missed days self-heal via the 3-day backfill on
-the next successful push.
+Persistent phone mode keeps the localhost server running after browser tabs
+close. If phone mode is not installed, both entry sync and usage pushes queue or
+retry until TodoPup is opened on the Mac again.
 
 ## Scheduling
 

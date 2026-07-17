@@ -31,10 +31,13 @@ DEFAULT_TAG_COLOR = "#8a8f99"
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 # Allowlist for tag names (after they've been stripped + lowercased). Only
-# lowercase letters, digits, spaces, underscores and hyphens are allowed. This
+# lowercase letters, digits, spaces, periods, underscores and hyphens are allowed. This
 # makes the "tag names can never carry HTML/JS/CSS" invariant explicit instead
 # of relying solely on Jinja auto-escaping downstream.
-_TAG_NAME_RE = re.compile(r"^[a-z0-9 _-]+$")
+_TAG_NAME_RE = re.compile(r"^[a-z0-9 ._-]+$")
+_TASK_ID_RE = re.compile(
+    r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12})$", re.IGNORECASE)
 
 
 # Recurrence values we accept. "every:N" (N a positive int) is handled
@@ -99,6 +102,27 @@ def add_subtask(data, task_id, text):
     task = _active_task(data, task_id)
     if task is not None:
         task.setdefault("subtasks", []).append({"text": text, "done": False})
+    return data
+
+
+def replace_subtasks(data, task_id, subtasks):
+    """Replace an active task's subtask list with validated, detached rows."""
+    if not isinstance(subtasks, list):
+        raise ValueError("Subtasks must be a list")
+    clean = []
+    for row in subtasks:
+        if not isinstance(row, dict):
+            raise ValueError("Each subtask must be an object")
+        text = row.get("text")
+        text = text.strip() if isinstance(text, str) else ""
+        if not text:
+            raise ValueError("Subtask text must not be empty")
+        if not isinstance(row.get("done", False), bool):
+            raise ValueError("Subtask done must be a boolean")
+        clean.append({"text": text, "done": row.get("done", False)})
+    task = _active_task(data, task_id)
+    if task is not None:
+        task["subtasks"] = clean
     return data
 
 
@@ -193,7 +217,7 @@ def set_tag_color(data, name, color):
 
     The tag name is normalized for consistency: stripped of surrounding
     whitespace and lowercased (so "Work", "work " and "WORK" are one tag). It
-    must then match the allowlist `^[a-z0-9 _-]+$` -- this rejects HTML/JS/CSS
+    must then match the allowlist `^[a-z0-9 ._-]+$` -- this rejects HTML/JS/CSS
     metacharacters (<, >, ;, {, quotes, &, ...) so a tag name can never carry
     an injection payload, independent of template escaping.
     `color` must be a valid hex string -- #rgb or #rrggbb. Raises ValueError
@@ -565,7 +589,12 @@ def _advance_until_future(due_iso, recurrence, now):
 # Task operations
 # --------------------------------------------------------------------------- #
 
-def add_task(data, title, due=None, recurrence=None, now=None, tags=None):
+class TaskIdConflictError(ValueError):
+    pass
+
+
+def add_task(data, title, due=None, recurrence=None, now=None, tags=None,
+             task_id=None):
     """Add a new active task.
 
     Raises ValueError on an empty/whitespace title, on a non-empty `due`
@@ -587,11 +616,16 @@ def add_task(data, title, due=None, recurrence=None, now=None, tags=None):
         raise ValueError(f"Invalid due date: {due!r}")
     if not _valid_recurrence(recurrence):
         raise ValueError(f"Invalid recurrence: {recurrence!r}")
+    if task_id is not None:
+        if not isinstance(task_id, str) or not _TASK_ID_RE.fullmatch(task_id):
+            raise ValueError(f"Invalid task id: {task_id!r}")
+        if task_by_id(data, task_id)[0] is not None:
+            raise TaskIdConflictError(f"Task id already exists: {task_id!r}")
     now = now or datetime.now()
     if recurrence and not due:
         due = _default_due(recurrence, now)
     task = {
-        "id": uuid.uuid4().hex,
+        "id": task_id or uuid.uuid4().hex,
         "title": title,
         "due": due or None,
         "recurrence": recurrence or None,
@@ -631,6 +665,35 @@ def edit_task(data, task_id, title, due=None, recurrence=None, tags=None, now=No
             task["tags"] = _normalize_tags(tags)
             break
     return data
+
+
+def task_by_id(data, task_id):
+    """Return ``(task, status)`` across all buckets, or ``(None, None)``."""
+    statuses = {"active": "active", "archive": "completed", "expired": "expired"}
+    for bucket, status in statuses.items():
+        for task in data.get(bucket, []):
+            if task.get("id") == task_id:
+                return task, status
+    return None, None
+
+
+def mobile_task_view(data, task_id):
+    task, status = task_by_id(data, task_id)
+    if task is None:
+        return None
+    result = dict(task)
+    result["status"] = status
+    result["done"] = status == "completed"
+    return result
+
+
+def mobile_tasks(data):
+    """All task buckets in a stable API representation."""
+    result = []
+    for bucket in ("active", "archive", "expired"):
+        for task in data.get(bucket, []):
+            result.append(mobile_task_view(data, task.get("id")))
+    return result
 
 
 def delete_task(data, task_id):

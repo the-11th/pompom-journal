@@ -254,6 +254,13 @@ def test_add_section_tag_appends_normalized_unique():
     assert journal.section_by_id(data, s["id"])["tags"] == ["maya"]
 
 
+def test_add_section_tag_accepts_periods():
+    data = journal._empty()
+    section = journal.add_section(data, "places", "tag", "#fff")
+    journal.add_section_tag(data, section["id"], "ID.me Office")
+    assert section["tags"] == ["id.me office"]
+
+
 def test_add_section_tag_rejects_bad_name_and_numeric_section():
     data = journal._empty()
     tag_s = journal.add_section(data, "people", "tag", "#fff")
@@ -331,6 +338,23 @@ def test_upsert_validates_date_and_title():
         journal.upsert_entry(data, "bad-date", "t", "", now=NOW)
     with pytest.raises(ValueError):
         journal.upsert_entry(data, "2026-06-15", "   ", "", now=NOW)
+
+
+def test_suggest_entry_title_uses_first_meaningful_sentence():
+    assert journal.suggest_entry_title(
+        "\n**A really good morning** with @alex. More text."
+    ) == "A really good morning with alex"
+
+
+def test_suggest_entry_title_cleans_task_syntax_and_truncates():
+    assert journal.suggest_entry_title("[] call mom >tomorrow") == "Call mom"
+    title = journal.suggest_entry_title("word " * 30)
+    assert len(title) <= 60
+    assert not title.endswith(" ")
+
+
+def test_suggest_entry_title_empty_body_is_empty():
+    assert journal.suggest_entry_title("   \n") == ""
 
 
 def test_upsert_cleans_tags_and_numbers():
@@ -905,6 +929,12 @@ def test_extract_mentions_underscore_matches_multiword_tag():
     assert out == {"S1": ["alex dad"]}
 
 
+def test_extract_mentions_period_and_underscore_match_tag():
+    index = {"id.me office": "S1"}
+    out = journal.extract_mentions("worked at @ID.me_Office today", index)
+    assert out == {"S1": ["id.me office"]}
+
+
 def test_extract_mentions_literal_underscore_tag_wins():
     # When both exist, a literal-underscore tag beats the spaced form.
     index = {"alex_dad": "S1", "alex dad": "S2"}
@@ -1389,6 +1419,13 @@ def _entry_music(date, minutes, tracks=10, valence=None, artists=None):
                       "tempo": None, "source": "spotify", "fetched": "x"}}
 
 
+def _rich_music_entry(date, **music):
+    base = {"tracks": 0, "minutes": 0, "source": "spotify", "fetched": "x"}
+    base.update(music)
+    return {"date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+            "sleep": None, "rescuetime": None, "music": base}
+
+
 def test_set_entry_music_create_update_clear():
     data = journal._seeded()
     journal.set_entry_music(data, "2026-06-29", {"tracks": 10, "minutes": 40})
@@ -1404,6 +1441,27 @@ def test_music_minutes_series_sorted():
     entries = [_entry_music("2026-06-29", 40), _entry_music("2026-06-28", 90)]
     assert journal.music_minutes_series(entries) == [
         {"date": "2026-06-28", "minutes": 90}, {"date": "2026-06-29", "minutes": 40}]
+
+
+def test_entry_music_accepts_minutes_without_tracks_and_imported_plays():
+    entries = [
+        _rich_music_entry("2026-06-28", tracks=0, minutes=35),
+        _rich_music_entry("2026-06-29", history=[
+            {"master_metadata_track_name": "Song A",
+             "master_metadata_album_artist_name": "Artist A",
+             "master_metadata_album_album_name": "Album A",
+             "ms_played": 180000},
+        ], source="spotify_import"),
+    ]
+    assert journal.music_minutes_series(entries) == [
+        {"date": "2026-06-28", "minutes": 35},
+        {"date": "2026-06-29", "minutes": 3},
+    ]
+    assert journal.music_tracks_series(entries)[1] == {"date": "2026-06-29", "tracks": 1}
+    assert journal.music_top_tracks(entries)[0] == {
+        "name": "Song A", "artist": "Artist A", "count": 1}
+    assert journal.music_top_albums(entries)[0] == {
+        "name": "Album A", "artist": "Artist A", "count": 1}
 
 
 def test_music_top_artists_aggregated():
@@ -1429,7 +1487,82 @@ def test_music_feature_averages_skip_none():
 
 
 def test_music_stats_empty():
-    assert journal.music_stats([]) == {"avg_minutes": None, "total_tracks": 0, "days": 0}
+    assert journal.music_stats([]) == {
+        "avg_minutes": None,
+        "total_tracks": 0,
+        "days": 0,
+        "total_minutes": 0,
+        "avg_tracks": None,
+        "distinct_tracks": 0,
+        "imported_days": 0,
+        "sources": {},
+    }
+
+
+def test_music_top_tracks_and_albums_aggregate_and_filter_dates():
+    entries = [
+        _rich_music_entry("2026-06-28", top_tracks=[
+            {"name": "Song A", "artist": "Artist A", "count": 2},
+        ], top_albums=[
+            {"name": "Album A", "artist": "Artist A", "count": 1},
+        ]),
+        _rich_music_entry("2026-06-29", top_tracks=[
+            {"name": "Song A", "artist": "Artist A", "count": 3},
+            {"name": "Song B", "artist": "Artist B", "count": 1},
+        ], top_albums=[
+            {"name": "Album A", "artist": "Artist A", "count": 4},
+        ]),
+    ]
+    assert journal.music_top_tracks(entries, start="2026-06-29") == [
+        {"name": "Song A", "artist": "Artist A", "count": 3},
+        {"name": "Song B", "artist": "Artist B", "count": 1},
+    ]
+    assert journal.music_top_albums(entries) == [
+        {"name": "Album A", "artist": "Artist A", "count": 5},
+    ]
+
+
+def test_music_imported_source_stats_and_music_stats():
+    entries = [
+        _rich_music_entry("2026-06-28", tracks=4, minutes=20, distinct=3, source="spotify"),
+        _rich_music_entry("2026-06-29", plays=[
+            {"track_id": "a", "name": "Song A", "duration_ms": 120000},
+            {"track_id": "b", "name": "Song B", "duration_ms": 180000},
+        ], source="spotify_import"),
+    ]
+    assert journal.music_source_stats(entries) == {
+        "days": 2,
+        "imported_days": 1,
+        "sources": {"spotify": 1, "spotify_import": 1},
+    }
+    assert journal.music_stats(entries) == {
+        "avg_minutes": 12,
+        "total_tracks": 6,
+        "days": 2,
+        "total_minutes": 25,
+        "avg_tracks": 3,
+        "distinct_tracks": 5,
+        "imported_days": 1,
+        "sources": {"spotify": 1, "spotify_import": 1},
+    }
+
+
+def test_music_mood_minutes_tracks_pairs_and_contexts():
+    e1 = _rich_music_entry("2026-06-28", tracks=8, minutes=42, contexts=[
+        {"name": "commute", "minutes": 20},
+        {"name": "focus", "minutes": 22},
+    ])
+    e1["mood"] = 6
+    e2 = _rich_music_entry("2026-06-29", tracks=3, minutes=12, contexts=[
+        {"name": "commute", "minutes": 12},
+    ])
+    e2["mood"] = None
+    assert journal.music_mood_minutes_pairs([e1, e2]) == [{"minutes": 42, "mood": 6}]
+    assert journal.music_mood_tracks_pairs([e1, e2]) == [{"tracks": 8, "mood": 6}]
+    assert journal.music_listening_contexts([e1, e2]) == [
+        {"name": "commute", "minutes": 32, "count": 2},
+        {"name": "focus", "minutes": 22, "count": 1},
+    ]
 
 
 def test_load_defaults_music(tmp_path):

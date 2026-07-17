@@ -5,8 +5,38 @@ import integrations as I
 
 def test_empty_has_all_providers():
     d = I._empty()
-    assert set(d) == {"google", "rescuetime", "spotify", "phone"}
+    assert set(d) == {"google", "rescuetime", "spotify", "phone", "health", "mobile"}
     assert d["google"] == {}
+
+
+def test_mobile_enrollment_creates_separate_device_token():
+    d = I._empty()
+    enrollment = I.issue_mobile_enrollment(d, now="2026-07-15T10:00:00")
+    device, token = I.enroll_mobile_device(
+        d, enrollment, "Pixel 9", now="2026-07-15T10:01:00")
+    assert device["name"] == "Pixel 9"
+    assert token not in json.dumps(d)
+    assert I.authenticate_mobile_device(d, token)["id"] == device["id"]
+    assert I.authenticate_mobile_device(d, enrollment) is None
+    # Enrollment tokens are single-use.
+    assert I.enroll_mobile_device(d, enrollment, "Other") is None
+
+
+def test_mobile_enrollment_expires_after_ten_minutes():
+    d = I._empty()
+    enrollment = I.issue_mobile_enrollment(d, now="2026-07-15T10:00:00")
+    assert I.enroll_mobile_device(
+        d, enrollment, "Pixel", now="2026-07-15T10:10:01") is None
+
+
+def test_mobile_request_receipts_are_scoped_per_device():
+    d = I._empty()
+    enrollment = I.issue_mobile_enrollment(d)
+    device, _ = I.enroll_mobile_device(d, enrollment, "Pixel")
+    assert I.mobile_request_receipt(d, device["id"], "r1") is None
+    I.remember_mobile_request(d, device["id"], "r1", 200, {"ok": True})
+    assert I.mobile_request_receipt(d, device["id"], "r1") == {
+        "status": 200, "body": {"ok": True}}
 
 
 def test_phone_token_and_is_connected():
@@ -32,6 +62,15 @@ def test_phone_provider_defaulted_on_load(tmp_path):
     p.write_text('{"google": {}}')
     d = I.load(str(p))
     assert d["phone"] == {}
+    assert d["health"] == {}
+
+
+def test_health_token_and_is_connected():
+    d = I._empty()
+    assert I.is_connected(d, "health") is False
+    I.set_token(d, "health", "SECRET-TOKEN")
+    assert I.get_token(d, "health") == "SECRET-TOKEN"
+    assert I.is_connected(d, "health") is True
 
 
 def test_load_missing_file_returns_empty(tmp_path):
@@ -118,3 +157,12 @@ def test_plays_buffer_roundtrip_and_clear():
     assert "2026-06-29" in I.get_plays_buffer(d, "spotify")
     I.clear_provider(d, "spotify")
     assert I.get_plays_buffer(d, "spotify") == {} and I.get_taste(d, "spotify") is None
+
+
+def test_spotify_analytics_roundtrip_and_clear():
+    d = I._empty()
+    assert I.get_analytics(d, "spotify") == {}
+    I.set_analytics(d, "spotify", {"library": {"saved_tracks": 12}})
+    assert I.get_analytics(d, "spotify")["library"]["saved_tracks"] == 12
+    I.clear_provider(d, "spotify")
+    assert I.get_analytics(d, "spotify") == {}

@@ -91,7 +91,7 @@
   }
 
   function hasMusic() {
-    return _data.entries.some(function (e) { return e && e.music && e.music.tracks; });
+    return _data.entries.some(function (e) { return musicOf(e); });
   }
 
   function hasUsage() {
@@ -3221,34 +3221,197 @@
   // Cache for the /integrations/spotify/taste endpoint.
   var _tasteCache = null;
 
-  // Return the music dict if it has a usable tracks count, else null.
-  // Mirrors journal._entry_music.
-  function musicOf(e) {
-    var m = e && e.music;
-    if (m && typeof m === "object" && m.tracks) return m;
+  function asArray(v) {
+    return Array.isArray(v) ? v : [];
+  }
+  function finiteNum(v) {
+    var n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  function firstNum(obj, keys) {
+    for (var i = 0; i < keys.length; i++) {
+      var n = finiteNum(obj && obj[keys[i]]);
+      if (n != null) return n;
+    }
     return null;
   }
+  function fmtMusicTime(min) {
+    min = Math.round(min || 0);
+    var h = Math.floor(min / 60), m = min % 60;
+    if (h && m) return h + "h " + m + "m";
+    if (h) return h + "h";
+    return m + "m";
+  }
 
-  // Stat cards: avg minutes/day, total tracks, days tracked.
+  // Return the music dict if it has usable listening data, else null.
+  // Mirrors journal._entry_music for existing entries, with tolerance for
+  // richer/backfilled payloads where tracks may be an array instead of a count.
+  function musicOf(e) {
+    var m = e && e.music;
+    if (!m || typeof m !== "object") return null;
+    var tracks = firstNum(m, ["tracks", "track_count", "plays", "play_count"]);
+    if (tracks == null && Array.isArray(m.tracks)) tracks = m.tracks.length;
+    if (tracks == null && Array.isArray(m.plays)) tracks = m.plays.length;
+    var minutes = firstNum(m, ["minutes", "listened_minutes", "duration_min", "duration_minutes"]);
+    var hasLists = ["top_artists", "top_tracks", "top_albums", "contexts", "top_contexts"].some(function (k) {
+      return Array.isArray(m[k]) && m[k].length;
+    });
+    if (tracks || minutes || hasLists) {
+      if (tracks != null && typeof m.tracks !== "number") m._track_count = tracks;
+      if (minutes != null && m.minutes == null) m._minutes = minutes;
+      return m;
+    }
+    return null;
+  }
+  function musicTracks(m) {
+    return firstNum(m, ["tracks", "track_count", "plays", "play_count", "_track_count"]) || 0;
+  }
+  function musicMinutes(m) {
+    return firstNum(m, ["minutes", "listened_minutes", "duration_min", "duration_minutes", "_minutes"]) || 0;
+  }
+  function musicDistinct(m) {
+    return firstNum(m, ["distinct", "distinct_tracks", "distinct_track_count", "unique_tracks"]);
+  }
+  function itemName(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return null;
+    return item.name || item.title || item.album || item.context || item.source || item.uri || null;
+  }
+  function itemCount(item) {
+    if (!item || typeof item !== "object") return 1;
+    return firstNum(item, ["count", "plays", "play_count", "tracks", "minutes"]) || 1;
+  }
+  function addNamedTotals(totals, items) {
+    asArray(items).forEach(function (item) {
+      var name = itemName(item);
+      if (!name) return;
+      totals[name] = (totals[name] || 0) + itemCount(item);
+    });
+  }
+  function addObjectTotals(totals, obj) {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+    Object.keys(obj).forEach(function (name) {
+      var count = finiteNum(obj[name]);
+      totals[name] = (totals[name] || 0) + (count == null ? 1 : count);
+    });
+  }
+  function rowsFromTotals(totals, limit) {
+    return Object.keys(totals)
+      .map(function (k) { return { name: k, count: totals[k] }; })
+      .sort(function (a, b) { return b.count - a.count; })
+      .slice(0, limit || 10);
+  }
+  function renderHorizontalBars(container, rows, c) {
+    var maxV = rows[0].count || 1;
+    var w = 600, h = Math.max(120, rows.length * 28 + 20);
+    var svg = U.svg(w, h);
+    var barW = w - 180;
+    rows.forEach(function (row, i) {
+      var y = i * 28 + 10;
+      var bw = barW * (row.count / maxV);
+      U.drawBar(svg, 170, y, bw, 18, c.accent);
+      U.text(svg, 164, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
+      U.text(svg, 170 + bw + 4, y + 13, String(row.count), c.muted, { size: 9 });
+    });
+    container.appendChild(svg);
+  }
+  function aggregateMusicNames(entries, keys, derive) {
+    var totals = {};
+    entries.forEach(function (e) {
+      var m = musicOf(e);
+      if (!m) return;
+      keys.forEach(function (k) { addNamedTotals(totals, m[k]); });
+      if (derive) derive(m, totals);
+    });
+    return rowsFromTotals(totals, 10);
+  }
+  function trackDisplayName(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return null;
+    var name = item.name || item.title;
+    var artists = asArray(item.artists).filter(Boolean).join(", ");
+    return name && artists ? name + " · " + artists : name;
+  }
+  function albumDisplayName(item) {
+    if (typeof item === "string") return item;
+    if (!item || typeof item !== "object") return null;
+    var name = item.album || item.album_name || item.name;
+    var artists = asArray(item.artists).filter(Boolean).join(", ");
+    return name && artists ? name + " · " + artists : name;
+  }
+  function addDerivedTrackTotals(m, totals) {
+    asArray(m.tracks).concat(asArray(m.plays)).forEach(function (item) {
+      var name = trackDisplayName(item);
+      if (!name) return;
+      totals[name] = (totals[name] || 0) + itemCount(item);
+    });
+  }
+  function addDerivedAlbumTotals(m, totals) {
+    asArray(m.tracks).concat(asArray(m.plays)).forEach(function (item) {
+      var name = albumDisplayName(item);
+      if (!name) return;
+      totals[name] = (totals[name] || 0) + itemCount(item);
+    });
+  }
+  function sourceOf(m) {
+    var sources = asArray(m.sources).filter(Boolean);
+    if (sources.length) return sources.join(" + ");
+    return m.source || m.import_source || m.imported_from || m.provider || null;
+  }
+  function hasImportMarker(m) {
+    var sources = asArray(m.sources).join(" ");
+    return !!(m.imported || m.import_id || m.imported_at || m.import_source ||
+              m.imported_from || sources.indexOf("history_import") !== -1);
+  }
+  function normalizeTaste(taste) {
+    var terms = ["short_term", "medium_term", "long_term"];
+    var out = {};
+    terms.forEach(function (term) {
+      out[term] = {
+        tracks: (taste && taste[term] && taste[term].tracks) || (taste && taste.tracks && taste.tracks[term]) || [],
+        artists: (taste && taste[term] && taste[term].artists) || (taste && taste.artists && taste.artists[term]) || [],
+        genres: (taste && taste[term] && taste[term].genres) || (taste && taste.genres && taste.genres[term]) || [],
+      };
+    });
+    return out;
+  }
+
+  // Stat cards: total listening time, average, total tracks, days tracked.
   // Mirrors journal.music_stats.
   CHARTS.push({
-    id: "music-stat-cards", panel: "music", title: "Music at a glance",
+    id: "music-stat-cards", panel: "music", title: "Music Summary",
     render: function (container, entries, sections, c) {
       var musicEntries = entries.filter(function (e) { return musicOf(e); });
       if (!musicEntries.length) {
         U.empty(container, "No music data in this range."); return;
       }
-      var mins = musicEntries.map(function (e) { return musicOf(e).minutes || 0; });
-      var avgMin = mins.reduce(function (a, b) { return a + b; }, 0) / mins.length;
+      var mins = musicEntries.map(function (e) { return musicMinutes(musicOf(e)); });
+      var totalMin = mins.reduce(function (a, b) { return a + b; }, 0);
+      var avgMin = totalMin / mins.length;
       var totalTracks = musicEntries.reduce(function (acc, e) {
-        return acc + (musicOf(e).tracks || 0);
+        return acc + musicTracks(musicOf(e));
       }, 0);
+      var distinctTotal = 0, hasDistinct = false;
+      var sources = {}, imported = 0;
+      musicEntries.forEach(function (e) {
+        var m = musicOf(e);
+        var d = musicDistinct(m);
+        if (d != null) { hasDistinct = true; distinctTotal += d; }
+        var src = sourceOf(m);
+        if (src) sources[src] = true;
+        if (hasImportMarker(m)) imported++;
+      });
+      var sourceCount = Object.keys(sources).length;
+      var daySub = [];
+      if (sourceCount) daySub.push(sourceCount + " source" + (sourceCount === 1 ? "" : "s"));
+      if (imported) daySub.push(imported + " imported");
 
       var grid = document.createElement("div");
       grid.className = "stat-cards";
+      statCard(grid, fmtMusicTime(totalMin), "total time", null);
       statCard(grid, Math.round(avgMin) + " min", "avg per day", null);
-      statCard(grid, totalTracks, "total tracks", null);
-      statCard(grid, musicEntries.length, "days tracked", null);
+      statCard(grid, totalTracks, "track plays", hasDistinct ? distinctTotal + " distinct" : null);
+      statCard(grid, musicEntries.length, "days tracked", daySub.join(" · "));
       container.appendChild(grid);
     },
   });
@@ -3260,11 +3423,11 @@
     render: function (container, entries, sections, c) {
       var series = entries
         .filter(function (e) { return musicOf(e); })
-        .map(function (e) { return { date: e.date, minutes: musicOf(e).minutes || 0 }; })
+        .map(function (e) { return { date: e.date, minutes: musicMinutes(musicOf(e)) }; })
         .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       if (!series.length) { U.empty(container, "No music data in this range."); return; }
       var vals = series.map(function (s) { return s.minutes; });
-      var max = Math.max.apply(null, vals) || 1, min = 0, span = max - min;
+      var max = Math.max.apply(null, vals) || 1, min = 0, span = max - min || 1;
       var w = 600, h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
@@ -3293,36 +3456,124 @@
     },
   });
 
+  function renderMusicMoodScatter(container, entries, c, metric, label, unit) {
+    var pairs = entries.filter(function (e) {
+      var m = musicOf(e);
+      return m && e.mood != null && metric(m) != null;
+    }).map(function (e) {
+      var m = musicOf(e);
+      return { x: metric(m), y: Number(e.mood) };
+    });
+    if (pairs.length < 2) {
+      U.empty(container, "Need 2+ days with both " + label.toLowerCase() + " and mood data."); return;
+    }
+    var xs = pairs.map(function (p) { return p.x; });
+    var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
+    var xSpan = xMax - xMin || 1;
+    var yMin = 1, yMax = 7, ySpan = yMax - yMin;
+    var w = 600, h = 240, pad = 36;
+    var svg = U.svg(w, h);
+    U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+    pairs.forEach(function (p) {
+      var x = (xMax - xMin) === 0
+        ? pad + (w - pad - 10) / 2
+        : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
+      var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
+      U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
+    });
+    U.text(svg, 0, 14, "7", c.muted, { size: 9 });
+    U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+    U.text(svg, w / 2, h - 2, label + (unit ? " (" + unit + ")" : "") + " (x)  vs  mood (y)", c.muted,
+           { anchor: "middle", size: 9 });
+    container.appendChild(svg);
+    var r = pearson(xs, pairs.map(function (p) { return p.y; }));
+    U.statsRow(container, [
+      ["pairs", pairs.length],
+      ["correlation r", r == null ? null : U.fmt(r)],
+    ]);
+  }
+
+  CHARTS.push({
+    id: "music-minutes-mood-scatter", panel: "music", title: "Minutes vs. mood",
+    render: function (container, entries, sections, c) {
+      renderMusicMoodScatter(container, entries, c, musicMinutes, "Minutes", "min");
+    },
+  });
+
+  CHARTS.push({
+    id: "music-tracks-mood-scatter", panel: "music", title: "Tracks vs. mood",
+    render: function (container, entries, sections, c) {
+      renderMusicMoodScatter(container, entries, c, musicTracks, "Tracks", "plays");
+    },
+  });
+
   // Top artists: horizontal bars for the top 10 aggregated across the range.
   // Mirrors productivity-categories / music_top_artists.
   CHARTS.push({
     id: "music-top-artists", panel: "music", title: "Top artists",
     render: function (container, entries, sections, c) {
-      var totals = {};
+      var rows = aggregateMusicNames(entries, ["top_artists", "artists"]);
+      if (!rows.length) { U.empty(container, "No artist data in this range."); return; }
+      renderHorizontalBars(container, rows, c);
+    },
+  });
+
+  CHARTS.push({
+    id: "music-top-tracks", panel: "music", title: "Top tracks",
+    render: function (container, entries, sections, c) {
+      var rows = aggregateMusicNames(entries, ["top_tracks", "tracks_list", "played_tracks"], addDerivedTrackTotals);
+      if (!rows.length) { U.empty(container, "No track detail in this range."); return; }
+      renderHorizontalBars(container, rows, c);
+    },
+  });
+
+  CHARTS.push({
+    id: "music-top-albums", panel: "music", title: "Top albums",
+    render: function (container, entries, sections, c) {
+      var rows = aggregateMusicNames(entries, ["top_albums", "albums"], addDerivedAlbumTotals);
+      if (!rows.length) { U.empty(container, "No album detail in this range."); return; }
+      renderHorizontalBars(container, rows, c);
+    },
+  });
+
+  CHARTS.push({
+    id: "music-source-mix", panel: "music", title: "Source mix & import coverage",
+    render: function (container, entries, sections, c) {
+      var totals = {}, imported = 0, withSource = 0, tracked = 0;
       entries.forEach(function (e) {
         var m = musicOf(e);
         if (!m) return;
-        (m.top_artists || []).forEach(function (a) {
-          totals[a.name] = (totals[a.name] || 0) + (a.count || 0);
-        });
+        tracked++;
+        var src = sourceOf(m);
+        if (src) {
+          withSource++;
+          totals[src] = (totals[src] || 0) + 1;
+        }
+        if (hasImportMarker(m)) imported++;
       });
-      var rows = Object.keys(totals).map(function (k) { return { name: k, count: totals[k] }; });
-      rows.sort(function (a, b) { return b.count - a.count; });
-      rows = rows.slice(0, 10);
-      if (!rows.length) { U.empty(container, "No artist data in this range."); return; }
+      var rows = rowsFromTotals(totals, 10);
+      if (!tracked) { U.empty(container, "No music data in this range."); return; }
+      if (!rows.length && !imported) {
+        U.empty(container, "No source or import metadata in this range."); return;
+      }
+      if (rows.length) renderHorizontalBars(container, rows, c);
+      U.statsRow(container, [
+        ["days tracked", tracked],
+        ["with source", withSource],
+        ["imported", imported],
+      ]);
+    },
+  });
 
-      var maxV = rows[0].count || 1;
-      var w = 600, h = Math.max(120, rows.length * 28 + 20), pad = 0;
-      var svg = U.svg(w, h);
-      var barW = w - 180;
-      rows.forEach(function (row, i) {
-        var y = i * 28 + 10;
-        var bw = barW * (row.count / maxV);
-        U.drawBar(svg, 170, y, bw, 18, c.accent);
-        U.text(svg, 164, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, 170 + bw + 4, y + 13, String(row.count), c.muted, { size: 9 });
+  CHARTS.push({
+    id: "music-top-contexts", panel: "music", title: "Top contexts",
+    render: function (container, entries, sections, c) {
+      var rows = aggregateMusicNames(entries, ["top_contexts", "contexts", "listening_contexts"], function (m, totals) {
+        addObjectTotals(totals, m.contexts);
+        if (m.context) totals[m.context] = (totals[m.context] || 0) + 1;
       });
-      container.appendChild(svg);
+      if (!rows.length) { U.empty(container, "No listening context data in this range."); return; }
+      renderHorizontalBars(container, rows, c);
     },
   });
 
@@ -3341,8 +3592,9 @@
         container.removeChild(placeholder);
         var terms = ["short_term", "medium_term", "long_term"];
         var termLabels = { short_term: "Last 4 weeks", medium_term: "Last 6 months", long_term: "All time" };
-        var hasAny = taste && terms.some(function (t) {
-          var td = taste[t];
+        var normalized = normalizeTaste(taste || {});
+        var hasAny = terms.some(function (t) {
+          var td = normalized[t];
           return td && ((td.artists && td.artists.length) ||
                         (td.tracks && td.tracks.length) ||
                         (td.genres && td.genres.length));
@@ -3356,7 +3608,7 @@
         }
 
         terms.forEach(function (term) {
-          var td = taste[term];
+          var td = normalized[term];
           if (!td) return;
           var section = document.createElement("div");
           section.className = "music-taste-section";

@@ -56,7 +56,7 @@ stored or applied). The reference clock is `datetime.now()`.
 ## Project layout
 
 ```
-todo-cli/
+pompom-journal/
 ├── app.py              # Flask routes (thin HTTP layer only)
 ├── todo.py             # to-do domain logic (no Flask imports, unit-tested)
 ├── journal.py          # journal domain logic (no Flask imports, unit-tested)
@@ -66,7 +66,7 @@ todo-cli/
 ├── data/               # local JSON storage (gitignored, auto-created)
 ├── templates/          # Jinja templates (base, active, journal, analytics, …)
 ├── static/             # style.css, vanilla JS, images
-├── android/            # phone-usage companion app (Kotlin) — see Integrations
+├── android/            # offline-first journal/task + phone-usage app (Kotlin)
 ├── tests/              # pytest suite
 ├── docs/               # specs, Automator dock-app files
 └── TodoPup.command     # double-click launcher (macOS)
@@ -98,7 +98,7 @@ browser automatically. Close the Terminal window (or press `Ctrl+C`) to stop.
 (First time: right-click → Open → Open to get past the unidentified-developer
 warning.)
 
-### macOS: Automator dock app (TodoPup.app)
+### macOS: Automator dock app (TodoPom.app)
 
 A proper macOS app that lives in `/Applications` and can be pinned to your
 Dock — no Terminal window. It starts the server in the background, opens your
@@ -123,14 +123,14 @@ pip install -r requirements.txt
 bash docs/automator/install.sh
 ```
 
-This creates `/Applications/TodoPup.app` and copies the Automator workflow into
+This creates `/Applications/TodoPom.app` and copies the Automator workflow into
 it. It's safe to re-run (updates an existing app in place).
 
 **Step 3 — Bypass Gatekeeper on first launch.** macOS will block an app it
 hasn't verified. Right-click `TodoPup` in `/Applications` (or Finder), choose
 **Open**, then click **Open** in the dialog. You only need to do this once.
 
-**Step 4 — Add to your Dock** (optional). Drag `TodoPup.app` from
+**Step 4 — Add to your Dock** (optional). Drag `TodoPom.app` from
 `/Applications` into your Dock, or launch it once and right-click its Dock
 icon → **Options → Keep in Dock**.
 
@@ -139,7 +139,7 @@ icon → **Options → Keep in Dock**.
 After installing, set the Pompompurin icon:
 
 1. Open **Finder** → navigate to `/Applications`
-2. Right-click `TodoPup` → **Get Info**
+2. Right-click `TodoPom` → **Get Info**
 3. Open `docs/automator/icon.gif` in **Preview**
 4. Press **⌘A** then **⌘C** to copy the image
 5. Click the small icon in the top-left of the Get Info window to select it
@@ -153,7 +153,7 @@ After installing, set the Pompompurin icon:
 4. Paste the script from `docs/automator/document.wflow` (the
    `COMMAND_STRING` value) into the action, replacing the placeholder — update
    the `cd` path at the top to your repo location
-5. **File → Save** → save as **TodoPup** to `/Applications/`
+5. **File → Save** → save as **TodoPom** to `/Applications/`
 
 #### Updating after script changes
 
@@ -166,7 +166,7 @@ bash docs/automator/install.sh
 To export changes you've made directly in Automator back to the repo:
 
 ```bash
-cp /Applications/TodoPup.app/Contents/document.wflow docs/automator/document.wflow
+cp /Applications/TodoPom.app/Contents/document.wflow docs/automator/document.wflow
 git add docs/automator/document.wflow
 git commit -m "Update Automator workflow"
 ```
@@ -180,6 +180,7 @@ separate field:
 - **`@mention` tagging.** Type `@alex` in your entry — if `alex` is an existing
   tag, it's highlighted in that tag's color and added to the day's tags when you
   save. Underscores match multi-word tags: `@alex_dad` → the `alex dad` tag.
+  Periods are supported too: `@ID.me_Office` → the `id.me office` tag.
   Mentions are **additive** — they never remove a tag you picked from the chips.
   *Example:* `lunch with @alex, then @gym` tags the day `alex` and `gym`.
 
@@ -216,16 +217,32 @@ separate field:
   |---|---|
   | "at symbol" *word* | `@word` (glued to the next word — feeds `@mention` tagging) |
   | "hashtag" *word* | `#word` (feeds `#numeric` capture) |
+  | "underscore" | `_` (glued on both sides for multi-word tags/sections) |
   | "checkbox" *or* "open close bracket" | `[]` (feeds `[]` task spawning) |
   | "new line" | line break |
-  | "period" / "comma" | `.` / `,` |
+  | "period" / "comma" / "colon" | `.` / `,` / `:` |
   | "question mark" / "exclamation mark" | `?` / `!` |
   | "dot dot dot" | `...` |
+  | "left quote" / "right quote" | `“` / `”` |
+  | "slash" | `/` (glued on both sides) |
   | "parenthesis" … "parenthesis" | `(` then `)` — alternates open/close |
 
+  To tag the day without putting the command in the entry, repeat **“tag”**:
+  “had lunch with Alex, tag Alex, then went to the gym, tag gym.” TodoPup
+  removes the command words, previews the matched chips below the body, and
+  applies them only when you confirm the dictation. Unknown names become
+  temporary tags after you choose their section. Saying “at symbol Alex” still
+  produces an inline `@alex` mention when the tag belongs in the prose.
+
   Because these produce real `@`/`#`/`[]` text, dictation feeds straight into the
-  inline grammar above. Requires Google Chrome (uses the Web Speech API); you'll
-  be asked for microphone access the first time.
+  inline grammar above. For example, saying "at symbol alex underscore dad"
+  produces `@alex_dad`, which matches the `alex dad` tag. Requires Google Chrome
+  (uses the Web Speech API); you'll be asked for microphone access the first time.
+
+- **Recovery drafts + title help.** The browser preserves each date's form
+  locally while you type and restores it after a refresh. If the body is filled
+  but the title is blank, TodoPup proposes a title without overriding anything
+  you wrote. **⌘Enter** finishes the entry; **⌘⇧M** starts or stops dictation.
 
 - **Mood quick-pick.** Choose a **1–7** mood for the day from the row of
   Pompompurin faces on the "What happened today" line; click the chosen face
@@ -392,7 +409,7 @@ downloadable APK by GitHub Actions.
 1. In **Manage → Integrations → Phone usage**, click **Generate token** — this
    shows the **endpoint URL**, a **config QR**, and a **download QR**.
 2. On the phone, **scan the download QR** (or open
-   [the latest release APK](https://github.com/jxi-idme/todo-cli/releases/latest/download/phone-usage.apk)).
+   [the latest release APK](https://github.com/the-11th/pompom-journal/releases/latest/download/phone-usage.apk)).
    Allow "install unknown apps" for your browser once, then install.
 
 #### Connect your phone (step by step)
@@ -424,11 +441,29 @@ downloadable APK by GitHub Actions.
 > **Tailscale** on both the Mac and the phone and use the Mac's Tailscale hostname
 > as the endpoint.
 >
-> **Server availability:** the server auto-quits shortly after you close the last
-> browser tab, so a push only lands while a tab is open — but the 3-day backfill
-> means a missed day catches up on the next successful push.
+> **Server availability:** normal dock mode auto-quits shortly after the last
+> browser tab closes. Enable the persistent, localhost-only phone server in
+> `docs/PHONE_ACCESS.md` for background delivery; otherwise the 3-day usage
+> backfill catches up after TodoPup next opens.
 
 See `android/README.md` for building/sideloading the app yourself.
+
+### TodoPup mobile journal and tasks
+
+The same Android APK is also a private, offline-first TodoPup client. It supports
+journal title/body/date, the same seven mood images, section-grouped tags and tag
+creation, speech-to-text transcript capture, and task creation/editing,
+completion, due dates, notes, tags, subtasks, and deletion.
+
+The phone saves every mutation locally before sending it. WorkManager retries
+temporary failures, request IDs make retries idempotent, and stale journal edits
+become an explicit phone-versus-Mac conflict instead of overwriting either copy.
+The Mac's existing JSON stores remain the sole source of truth.
+
+For private anywhere access and pairing instructions, see
+[`docs/PHONE_ACCESS.md`](docs/PHONE_ACCESS.md). In short: enable the localhost-only
+persistent server, proxy it with Tailscale Serve, then open **Manage →
+Integrations → TodoPup mobile** and create the ten-minute, one-use pairing QR.
 
 ## Development
 

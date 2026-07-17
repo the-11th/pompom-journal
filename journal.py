@@ -116,6 +116,8 @@ def load(path):
             e.setdefault("rescuetime", None)
             e.setdefault("music", None)
             e.setdefault("usage", None)
+            e.setdefault("health", None)
+            e.setdefault("audio_transcript", "")
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -519,6 +521,36 @@ def get_entry_by_date(data, date):
     return None
 
 
+def suggest_entry_title(body, limit=60):
+    """Return a short deterministic title suggestion for journal prose.
+
+    This is deliberately conservative and local: use the first meaningful
+    sentence/line, remove TodoPup's inline control syntax and rich-text markers,
+    then truncate at a word boundary.  The helper only proposes text; callers
+    must never replace a non-empty user title with it.
+    """
+    text = str(body or "").strip()
+    if not text:
+        return ""
+    first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    first = re.split(r"(?<=[.!?])\s+", first, maxsplit=1)[0]
+    first = re.sub(r"^(?:-\s*)?\[\s*\]\s*", "", first)
+    first = re.sub(r"\s+>(?:today|tomorrow|[a-z]+|\+\d+[dwm]|\d{4}-\d{2}-\d{2})\b",
+                   "", first, flags=re.IGNORECASE)
+    first = re.sub(r"\[task:[0-9a-f]+\]\s*", "", first, flags=re.IGNORECASE)
+    first = re.sub(r"(?:\*\*|__|~~|\*)", "", first)
+    first = re.sub(r"@([A-Za-z0-9_.-]+)", lambda m: m.group(1).replace("_", " "), first)
+    first = re.sub(r"#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)",
+                   lambda m: f"{m.group(1).replace('_', ' ')} {m.group(2)}", first)
+    first = re.sub(r"\s+", " ", first).strip(" \t.,:;!?-–—")
+    if not first:
+        return ""
+    if len(first) > limit:
+        clipped = first[:limit + 1]
+        first = clipped[:clipped.rfind(" ")] if " " in clipped else clipped[:limit]
+    return first[:1].upper() + first[1:]
+
+
 def entries_sorted(data):
     """Entries newest date first."""
     return sorted(data.get("entries", []), key=lambda e: e.get("date", ""), reverse=True)
@@ -528,7 +560,8 @@ def entries_sorted(data):
 # Task 6: Entry upsert & delete
 # --------------------------------------------------------------------------- #
 
-def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None, now=None):
+def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None,
+                 now=None, audio_transcript=None):
     """Create or update the entry for `date` (the unique key).
 
     `tags` is {section_id: [tag names]} and `numbers` is {section_id: value};
@@ -587,6 +620,8 @@ def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None, no
         existing["tags"] = clean_tags
         existing["numbers"] = clean_numbers
         existing["mood"] = clean_mood
+        if audio_transcript is not None:
+            existing["audio_transcript"] = str(audio_transcript)
         existing["updated"] = now.isoformat()
         return existing
 
@@ -600,9 +635,48 @@ def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None, no
         "tags": clean_tags,
         "numbers": clean_numbers,
         "mood": clean_mood,
+        "audio_transcript": str(audio_transcript or ""),
     }
     data.setdefault("entries", []).append(entry)
     return entry
+
+
+class EntryConflictError(ValueError):
+    """A mobile edit was based on an older version of the entry."""
+
+    def __init__(self, current):
+        super().__init__("Entry changed since it was loaded")
+        self.current = current
+
+
+def upsert_mobile_entry(data, date, title, body, tags=None, numbers=None,
+                        mood=None, audio_transcript=None, base_updated=None,
+                        now=None):
+    """Validate and apply a versioned mobile entry edit.
+
+    Explicit tag/number maps are the starting point. Inline ``@mention`` tags
+    are added, while inline ``#numeric`` values fill only missing explicit
+    numbers, matching the browser save semantics. ``base_updated`` must equal
+    the current timestamp for an existing entry; ``None`` means the phone
+    expects to create a new date.
+    """
+    existing = get_entry_by_date(data, date)
+    if existing is not None:
+        if base_updated != existing.get("updated"):
+            raise EntryConflictError(existing)
+    elif base_updated is not None:
+        raise EntryConflictError(None)
+
+    merged_tags = dict(tags or {})
+    mentions = extract_mentions(body or "", tag_section_index(data))
+    merged_tags = merge_entry_tags(merged_tags, mentions)
+    merged_numbers = dict(numbers or {})
+    for section_id, value in extract_numbers(
+            body or "", numeric_section_index(data)).items():
+        merged_numbers.setdefault(section_id, value)
+    return upsert_entry(
+        data, date, title, body, tags=merged_tags, numbers=merged_numbers,
+        mood=mood, now=now, audio_transcript=audio_transcript)
 
 
 def delete_entry(data, entry_id):
@@ -654,6 +728,21 @@ def set_entry_usage(data, date, value, now=None):
     if entry is None:
         entry = upsert_entry(data, date, date, "", now=now)
     entry["usage"] = value
+    entry["updated"] = now.isoformat()
+    return entry
+
+
+def set_entry_health(data, date, value, now=None):
+    """Set (or clear, with value=None) the auto-filled health dict for `date`.
+
+    Same get-or-create rule as set_entry_sleep."""
+    if not _valid_date(date):
+        raise ValueError(f"Invalid date: {date!r}")
+    now = now or datetime.now()
+    entry = get_entry_by_date(data, date)
+    if entry is None:
+        entry = upsert_entry(data, date, date, "", now=now)
+    entry["health"] = value
     entry["updated"] = now.isoformat()
     return entry
 
@@ -803,9 +892,12 @@ def apply_sleep_metrics(data, date, sleep, now=None):
 # --------------------------------------------------------------------------- #
 
 # A mention token: '@' at a word boundary (start of string or a non-word char
-# before it) followed by one or more name chars. The leading boundary group is
-# captured so `a@b.com` does NOT match (the char before '@' is a word char).
-_MENTION_RE = re.compile(r"(?:^|(?<=\W))@([A-Za-z0-9_-]+)")
+# before it) followed by one or more name segments. Periods are accepted only
+# between segments, so sentence punctuation is not swallowed. The leading
+# boundary makes `a@b.com` not match (the char before '@' is a word char).
+_MENTION_RE = re.compile(
+    r"(?:^|(?<=\W))@([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)"
+)
 
 
 def tag_section_index(data):
@@ -862,7 +954,8 @@ def extract_mentions(body, index):
     """Find @mentions in `body` that match a known tag.
 
     Returns {section_id: [names]}. A mention is an '@' at a word boundary
-    followed by [A-Za-z0-9_-]+ (so `a@b.com` does not match). Each token is
+    followed by period-separated [A-Za-z0-9_-]+ segments (so `a@b.com` does
+    not match and trailing punctuation is excluded). Each token is
     resolved to a known tag name (underscores match spaces, so `@alex_dad`
     matches `alex dad`); unknown tokens are dropped. Resolved names are grouped
     by section id and deduped within a section, preserving first-seen order.
@@ -1762,11 +1855,147 @@ def rescuetime_stats(entries, start=None, end=None):
     }
 
 
+_SECRET_KEYS = {
+    "access_token", "refresh_token", "client_secret", "api_key", "authorization",
+    "password", "token",
+}
+
+
+def _sanitized_dict(value):
+    if isinstance(value, dict):
+        return {
+            k: _sanitized_dict(v)
+            for k, v in value.items()
+            if str(k).lower() not in _SECRET_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitized_dict(v) for v in value]
+    return value
+
+
+def _music_plays(m):
+    for key in ("plays", "imported_plays", "history", "streaming_history"):
+        plays = m.get(key)
+        if isinstance(plays, dict):
+            return list(plays.values())
+        if isinstance(plays, list):
+            return plays
+    return []
+
+
+def _music_has_meaningful_data(m):
+    for key in ("tracks", "minutes", "distinct"):
+        if m.get(key):
+            return True
+    for key in ("top_artists", "top_tracks", "top_albums", "contexts"):
+        if m.get(key):
+            return True
+    return bool(_music_plays(m))
+
+
 def _entry_music(entry):
     m = entry.get("music")
-    if isinstance(m, dict) and m.get("tracks"):
-        return m
+    if isinstance(m, dict) and _music_has_meaningful_data(m):
+        return _sanitized_dict(m)
     return None
+
+
+def _music_minutes(m):
+    plays = _music_plays(m)
+    if m.get("minutes") or not plays:
+        return m.get("minutes") or 0
+    if plays:
+        total_ms = sum(
+            _music_play_duration_ms(p) for p in plays if isinstance(p, dict)
+        )
+        return round(total_ms / 60000)
+    return 0
+
+
+def _music_track_count(m):
+    plays = _music_plays(m)
+    if m.get("tracks") or not plays:
+        return m.get("tracks") or 0
+    if plays:
+        return len(plays)
+    return 0
+
+
+def _music_distinct_tracks(m):
+    plays = _music_plays(m)
+    if m.get("distinct") or not plays:
+        return m.get("distinct") or 0
+    if plays:
+        seen = set()
+        for p in plays:
+            if not isinstance(p, dict):
+                continue
+            ident = (p.get("track_id") or p.get("id") or p.get("spotify_track_uri")
+                     or p.get("name") or p.get("master_metadata_track_name"))
+            if ident:
+                seen.add(ident)
+        return len(seen)
+    return 0
+
+
+def _music_is_imported(m):
+    source = str(m.get("source") or "").lower()
+    sources = " ".join(str(s).lower() for s in (m.get("sources") or []))
+    return bool(m.get("imported") or "import" in source or "import" in sources
+                or m.get("imported_plays")
+                or m.get("history") or m.get("streaming_history"))
+
+
+def _music_source(m):
+    sources = [str(s) for s in (m.get("sources") or []) if s]
+    if sources:
+        return " + ".join(sources)
+    return m.get("source") or ("imported" if _music_is_imported(m) else "unknown")
+
+
+def _music_artist_name(row):
+    artists = row.get("artists")
+    if isinstance(artists, list):
+        return ", ".join(a for a in artists if a)
+    return (row.get("artist") or row.get("album_artist")
+            or row.get("master_metadata_album_artist_name"))
+
+
+def _music_play_duration_ms(row):
+    return row.get("duration_ms") or row.get("ms_played") or 0
+
+
+def _music_named_totals(entries, key, start=None, end=None, cap=10):
+    totals, meta = {}, {}
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if not m:
+            continue
+        rows = m.get(key)
+        if not rows and key in {"top_tracks", "top_albums"}:
+            rows = _music_plays(m)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if key == "top_albums":
+                name = (row.get("name") or row.get("album")
+                        or row.get("master_metadata_album_album_name"))
+            else:
+                name = (row.get("name") or row.get("track") or row.get("title")
+                        or row.get("master_metadata_track_name"))
+            if not name:
+                continue
+            artist = _music_artist_name(row)
+            ident = (name, artist)
+            totals[ident] = totals.get(ident, 0) + (row.get("count") or 1)
+            if ident not in meta:
+                meta[ident] = {"name": name, "artist": artist}
+    out = [{"name": v["name"], "artist": v["artist"], "count": totals[k]}
+           for k, v in meta.items()]
+    out.sort(key=lambda d: d["count"], reverse=True)
+    return out[:cap]
 
 
 def _entry_usage(entry):
@@ -1776,12 +2005,19 @@ def _entry_usage(entry):
     return None
 
 
+def _entry_health(entry):
+    h = entry.get("health")
+    if isinstance(h, dict) and (h.get("steps") or h.get("avg_hr") or h.get("heart_rate_samples")):
+        return h
+    return None
+
+
 def music_minutes_series(entries, start=None, end=None):
     out = []
     for e in _filter_entries_by_date(entries, start, end):
         m = _entry_music(e)
         if m:
-            out.append({"date": e["date"], "minutes": m.get("minutes", 0)})
+            out.append({"date": e["date"], "minutes": _music_minutes(m)})
     out.sort(key=lambda d: d["date"])
     return out
 
@@ -1791,7 +2027,7 @@ def music_tracks_series(entries, start=None, end=None):
     for e in _filter_entries_by_date(entries, start, end):
         m = _entry_music(e)
         if m:
-            out.append({"date": e["date"], "tracks": m.get("tracks", 0)})
+            out.append({"date": e["date"], "tracks": _music_track_count(m)})
     out.sort(key=lambda d: d["date"])
     return out
 
@@ -1807,6 +2043,15 @@ def music_top_artists(entries, start=None, end=None):
     rows = [{"name": n, "count": c} for n, c in counts.items()]
     rows.sort(key=lambda d: d["count"], reverse=True)
     return rows[:10]
+
+
+def music_top_tracks(entries, start=None, end=None):
+    return _music_named_totals(entries, "top_tracks", start, end)
+
+
+def music_top_albums(entries, start=None, end=None):
+    rows = _music_named_totals(entries, "top_albums", start, end)
+    return rows
 
 
 def music_feature_averages(entries, start=None, end=None):
@@ -1833,15 +2078,83 @@ def music_mood_pairs(entries, start=None, end=None):
     return out
 
 
+def music_mood_minutes_pairs(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        mood = _entry_mood(e)
+        if m and mood is not None:
+            out.append({"minutes": _music_minutes(m), "mood": mood})
+    return out
+
+
+def music_mood_tracks_pairs(entries, start=None, end=None):
+    out = []
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        mood = _entry_mood(e)
+        if m and mood is not None:
+            out.append({"tracks": _music_track_count(m), "mood": mood})
+    return out
+
+
+def music_listening_contexts(entries, start=None, end=None):
+    totals = {}
+    for e in _filter_entries_by_date(entries, start, end):
+        m = _entry_music(e)
+        if not m:
+            continue
+        for c in m.get("contexts") or []:
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name") or c.get("context")
+            if not name:
+                continue
+            row = totals.setdefault(name, {"name": name, "minutes": 0, "count": 0})
+            row["minutes"] += c.get("minutes") or 0
+            row["count"] += c.get("count") or 1
+    out = list(totals.values())
+    out.sort(key=lambda d: (d["minutes"], d["count"]), reverse=True)
+    return out
+
+
+def music_source_stats(entries, start=None, end=None):
+    rows = [_entry_music(e) for e in _filter_entries_by_date(entries, start, end)]
+    rows = [m for m in rows if m]
+    sources = {}
+    imported_days = 0
+    for m in rows:
+        source = _music_source(m)
+        sources[source] = sources.get(source, 0) + 1
+        if _music_is_imported(m):
+            imported_days += 1
+    return {"days": len(rows), "imported_days": imported_days, "sources": sources}
+
+
 def music_stats(entries, start=None, end=None):
     rows = [_entry_music(e) for e in _filter_entries_by_date(entries, start, end)]
     rows = [m for m in rows if m]
     if not rows:
-        return {"avg_minutes": None, "total_tracks": 0, "days": 0}
-    mins = [m.get("minutes", 0) for m in rows]
+        return {"avg_minutes": None, "total_tracks": 0, "days": 0,
+                "total_minutes": 0, "avg_tracks": None, "distinct_tracks": 0,
+                "imported_days": 0, "sources": {}}
+    mins = [_music_minutes(m) for m in rows]
+    track_counts = [_music_track_count(m) for m in rows]
+    sources = {}
+    imported_days = 0
+    for m in rows:
+        source = _music_source(m)
+        sources[source] = sources.get(source, 0) + 1
+        if _music_is_imported(m):
+            imported_days += 1
     return {"avg_minutes": round(sum(mins) / len(mins)),
-            "total_tracks": sum(m.get("tracks", 0) for m in rows),
-            "days": len(rows)}
+            "total_tracks": sum(track_counts),
+            "days": len(rows),
+            "total_minutes": sum(mins),
+            "avg_tracks": round(sum(track_counts) / len(track_counts), 1),
+            "distinct_tracks": sum(_music_distinct_tracks(m) for m in rows),
+            "imported_days": imported_days,
+            "sources": sources}
 
 
 def mood_series(entries, start, end):
@@ -2669,6 +2982,7 @@ def analytics_payload(data):
             "rescuetime": _entry_rescuetime(e),
             "music": _entry_music(e),
             "usage": _entry_usage(e),
+            "health": _entry_health(e),
         }
         for e in data.get("entries", [])
     ]

@@ -422,6 +422,18 @@ def test_post_add_with_existing_and_new_tag(client):
     assert data["tags"]["urgent"] == "#e0524d"
 
 
+def test_post_add_accepts_multiword_new_tag(client):
+    client.post("/add", data={
+        "title": "Call the dentist",
+        "new_tag": "Life Admin",
+        "new_tag_color": "#e0a955",
+    })
+
+    data = todo.load(_data_path(client))
+    assert data["tags"]["life admin"] == "#e0a955"
+    assert data["active"][0]["tags"] == ["life admin"]
+
+
 def test_post_add_invalid_new_tag_color_not_saved(client):
     resp = client.post("/add", data={
         "title": "Bad tag",

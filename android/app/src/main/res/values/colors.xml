@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#1c1917</color>
+    <color name="ic_launcher_background">#14161a</color>
     <color name="accent">#e0a955</color>
+    <color name="background">#14161a</color>
+    <color name="panel">#1c1f26</color>
+    <color name="text">#e6e6e6</color>
+    <color name="muted">#8a8f99</color>
+    <color name="border">#2a2e37</color>
+    <color name="danger">#e0524d</color>
 </resources>
