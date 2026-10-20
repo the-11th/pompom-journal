@@ -1,9 +1,9 @@
 from datetime import datetime
 
 import app as app_module
-import integrations
+from integrations import store as integrations
 import journal
-import usage
+from integrations import usage
 
 NOW = datetime(2026, 10, 19, 22)
 

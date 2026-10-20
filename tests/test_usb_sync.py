@@ -4,7 +4,7 @@ import subprocess
 import shutil
 import time
 import textwrap
-import integrations as integration_store
+from integrations import store as integration_store
 import pytest
 
 

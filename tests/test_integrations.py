@@ -1,6 +1,6 @@
 # tests/test_integrations.py
 import json
-import integrations as I
+from integrations import store as I
 
 
 def test_empty_has_all_providers():

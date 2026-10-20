@@ -1,4 +1,4 @@
-import oauth
+from integrations import oauth
 from urllib.parse import urlparse, parse_qs
 
 

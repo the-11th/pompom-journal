@@ -7,7 +7,7 @@ injectable transport (default oauth.urllib_transport); tests pass a fake.
 import urllib.parse
 from datetime import datetime, timedelta
 
-import oauth
+from . import oauth
 
 _AUTHORIZE = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN = "https://oauth2.googleapis.com/token"

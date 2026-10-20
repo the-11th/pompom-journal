@@ -1,4 +1,4 @@
-import integrations
+from integrations import store as integrations
 import journal
 import todo
 import pytest

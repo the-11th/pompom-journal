@@ -60,9 +60,13 @@ pompom-journal/
 ├── app.py              # Flask routes (thin HTTP layer only)
 ├── todo.py             # to-do domain logic (no Flask imports, unit-tested)
 ├── journal.py          # journal domain logic (no Flask imports, unit-tested)
-├── oauth.py            # shared OAuth2 helpers (Google Health, Spotify)
-├── google_health.py / rescuetime.py / spotify.py / usage.py   # integration clients
-├── integrations.py     # third-party credential/token store
+├── integrations/       # provider clients, authentication, imports, and sync
+│   ├── store.py        # third-party credentials, tokens, and mobile devices
+│   ├── oauth.py        # shared OAuth2 helpers (Google Health, Spotify)
+│   ├── google_health.py / rescuetime.py / spotify.py   # provider clients
+│   ├── health.py / usage.py   # pushed health and Android usage data
+│   ├── music_history.py / provider_sync.py   # imports and reconciliation
+│   └── discord_journal.py / discord_receiver.py / discord_setup.py
 ├── data/               # local JSON storage (gitignored, auto-created)
 ├── templates/          # Jinja templates (base, active, journal, analytics, …)
 ├── static/             # style.css, vanilla JS, images

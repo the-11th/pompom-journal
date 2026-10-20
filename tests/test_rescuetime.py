@@ -1,4 +1,4 @@
-import rescuetime
+from integrations import rescuetime
 
 ROW = {
     "date": "2026-06-28",

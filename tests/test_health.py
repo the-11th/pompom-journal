@@ -1,6 +1,6 @@
 from datetime import datetime
 
-import health
+from integrations import health
 
 NOW = datetime(2026, 7, 7, 2, 5, 0)
 

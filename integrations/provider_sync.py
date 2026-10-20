@@ -6,11 +6,11 @@ provider clients retain their injectable transports for tests.
 from copy import deepcopy
 from datetime import datetime
 
-import google_health
-import integrations
+from . import google_health
+from . import store as integrations
 import journal
-import rescuetime
-import spotify
+from . import rescuetime
+from . import spotify
 
 
 def same_connection(before, current, provider):

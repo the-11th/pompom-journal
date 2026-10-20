@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import tempfile
 
-import discord_journal
+from . import discord_journal
 
 
 API = 'https://discord.com/api/v10'

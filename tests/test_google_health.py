@@ -1,4 +1,4 @@
-import google_health as gh
+from integrations import google_health as gh
 from urllib.parse import urlparse, parse_qs
 
 STAGES = {"dataPoints": [{

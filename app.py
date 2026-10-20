@@ -20,17 +20,17 @@ from urllib.parse import urlencode
 from flask import (Flask, flash, jsonify, redirect, render_template, request,
                    session, url_for, g)
 
-import google_health
-import health
-import integrations
+from integrations import google_health
+from integrations import health
+from integrations import store as integrations
 import journal
-import music_history
+from integrations import music_history
 import places
-import provider_sync
-import rescuetime
-import spotify
+from integrations import provider_sync
+from integrations import rescuetime
+from integrations import spotify
 import todo
-import usage
+from integrations import usage
 
 app = Flask(__name__)
 

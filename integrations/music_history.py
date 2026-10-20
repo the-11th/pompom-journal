@@ -6,7 +6,7 @@ import json
 import re
 
 import journal
-import spotify
+from . import spotify
 
 
 def _empty():

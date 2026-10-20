@@ -7,7 +7,7 @@ a fake so no test hits the network.
 import urllib.parse
 from datetime import datetime, timedelta
 
-import oauth
+from . import oauth
 
 _AUTHORIZE = "https://accounts.spotify.com/authorize"
 _TOKEN = "https://accounts.spotify.com/api/token"

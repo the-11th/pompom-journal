@@ -6,7 +6,7 @@ from threading import Event, Thread
 import pytest
 
 import app as app_module
-import integrations
+from integrations import store as integrations
 
 NOW = datetime(2026, 9, 10, 12)
 

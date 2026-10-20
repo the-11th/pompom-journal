@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 from datetime import datetime
 
-import oauth
+from . import oauth
 
 _FEED = "https://www.rescuetime.com/anapi/daily_summary_feed"
 _ANALYTIC = "https://www.rescuetime.com/anapi/data"

@@ -7,8 +7,8 @@ import warnings
 
 import pytest
 
-import discord_journal
-import discord_setup
+from integrations import discord_journal
+from integrations import discord_setup
 
 
 APP_ID = '1547087341162602516'

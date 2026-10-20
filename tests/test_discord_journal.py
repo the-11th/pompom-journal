@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-import discord_journal as discord
+from integrations import discord_journal as discord
 
 NOW = datetime(2026, 9, 8, 12, tzinfo=timezone.utc)
 
@@ -42,7 +42,7 @@ def test_signed_selected_message_only():
 
 
 def test_receiver_refuses_unsigned_and_other_users(tmp_path):
-    from discord_receiver import create_app
+    from integrations.discord_receiver import create_app
     key = Ed25519PrivateKey.generate()
     app = create_app(tmp_path, key.public_key().public_bytes_raw().hex(), '42', INBOX_TOKEN, now=lambda: NOW)
     client = app.test_client()
@@ -120,7 +120,7 @@ def test_pull_lost_ack_replay_keeps_local_message_edits(tmp_path):
 
 @pytest.fixture
 def receiver(tmp_path):
-    from discord_receiver import create_app
+    from integrations.discord_receiver import create_app
     key = Ed25519PrivateKey.generate()
     clock = [NOW]
     app = create_app(tmp_path, key.public_key().public_bytes_raw().hex(), '42', INBOX_TOKEN, now=lambda: clock[0])
@@ -206,7 +206,7 @@ def test_receiver_inbox_responses_cannot_be_cached(receiver):
     ('allowed_user', 'bad'), ('allowed_user', '٣٣'), ('allowed_user', 42),
     ('inbox_token', ''), ('inbox_token', 'x' * 31), ('inbox_token', None)])
 def test_receiver_fails_closed_with_invalid_configuration(tmp_path, field, bad):
-    from discord_receiver import create_app
+    from integrations.discord_receiver import create_app
     values = {'public_key': Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex(),
               'allowed_user': '42', 'inbox_token': INBOX_TOKEN}
     values[field] = bad

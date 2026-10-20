@@ -11,7 +11,7 @@ import pytest
 import app as app_module
 import journal
 import todo
-import integrations as I
+from integrations import store as I
 
 
 @pytest.fixture
@@ -997,7 +997,7 @@ def test_google_callback_exchanges_code(client, app, monkeypatch):
     client.get("/integrations/google/connect")
     d = I.load(app.config["INTEGRATIONS_FILE"])
     state = d["google"]["oauth_state"]
-    monkeypatch.setattr("google_health.exchange_code",
+    monkeypatch.setattr("integrations.google_health.exchange_code",
         lambda *a, **k: {"access_token": "A", "refresh_token": "R",
                          "scope": "sleep", "expires_at": 9e9})
     # avoid network on the post-connect backfill
@@ -1043,7 +1043,7 @@ def test_google_sync_writes_sleep(client, app, monkeypatch):
     I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R",
                                "expires_at": 9e9})
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",
@@ -1083,8 +1083,8 @@ def test_google_sync_refreshes_on_401(client, app, monkeypatch):
                 "endTime": f"{date}T12:00:00Z", "endUtcOffset": "0s"},
             "sleepType": "CLASSIC", "sleepStages": [],
             "sleepSummary": {"efficiency": 90}}}]}
-    monkeypatch.setattr("google_health.fetch_sleep", fake_fetch)
-    monkeypatch.setattr("google_health.refresh_tokens",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep", fake_fetch)
+    monkeypatch.setattr("integrations.google_health.refresh_tokens",
         lambda *a, **k: {"access_token": "NEW", "refresh_token": "R2",
                          "scope": "sleep", "expires_at": 9e9})
     r = client.post("/integrations/google/sync?days=1")
@@ -1129,12 +1129,12 @@ def test_rescuetime_sync_writes_entries(client, app, monkeypatch):
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 70,
              "all_productive_hours": 2.0, "total_hours": 3.0}])
     # Isolate the per-activity fetch (a separate Analytic Data API call).
-    monkeypatch.setattr("rescuetime.fetch_activities",
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities",
         lambda key, date, transport=None: {
             "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
                             "Activity", "Category", "Productivity"],
@@ -1156,13 +1156,13 @@ def test_rescuetime_sync_activity_fetch_failure_keeps_summary(client, app, monke
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 70,
              "all_productive_hours": 2.0, "total_hours": 3.0}])
     def boom(key, date, transport=None):
         raise RuntimeError("anapi down")
-    monkeypatch.setattr("rescuetime.fetch_activities", boom)
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities", boom)
     body = client.post("/integrations/rescuetime/sync?date=2026-06-28").get_json()
     assert "2026-06-28" in body["synced"]           # summary still written
     assert any("activities" in e for e in body["errors"])
@@ -1183,10 +1183,10 @@ def test_rescuetime_sync_backfills_activities_on_legacy_days(client, app, monkey
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 55, "total_hours": 3.33}])
-    monkeypatch.setattr("rescuetime.fetch_activities",
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities",
         lambda key, date, transport=None: {
             "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
                             "Activity", "Category", "Productivity"],
@@ -1388,7 +1388,7 @@ def test_spotify_callback_exchanges_code(client, app, monkeypatch):
                 data={"client_id": "CID", "client_secret": "SEC"})
     client.get("/integrations/spotify/connect")
     state = I.load(app.config["INTEGRATIONS_FILE"])["spotify"]["oauth_state"]
-    monkeypatch.setattr("spotify.exchange_code",
+    monkeypatch.setattr("integrations.spotify.exchange_code",
         lambda *a, **k: {"access_token": "A", "refresh_token": "R",
                          "scope": "s", "expires_at": 9e9})
     monkeypatch.setattr("app._spotify_sync", lambda *a, **k: {"connected": True, "synced": [], "errors": []})
@@ -1415,24 +1415,24 @@ def test_spotify_taste_endpoint(client, app):
 
 def test_spotify_analytics_endpoint_fetches_snapshot(client, app, monkeypatch):
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_playback_state",
+    monkeypatch.setattr("integrations.spotify.fetch_playback_state",
         lambda tok: {"item": {"name": "Now"}, "is_playing": True})
-    monkeypatch.setattr("spotify.parse_playback_state",
+    monkeypatch.setattr("integrations.spotify.parse_playback_state",
         lambda raw: {"item": {"name": raw["item"]["name"]}, "is_playing": raw["is_playing"]})
-    monkeypatch.setattr("spotify.fetch_queue", lambda tok: {"queue": [{"name": "Next"}]})
-    monkeypatch.setattr("spotify.parse_queue", lambda raw: {"queue": [{"name": "Next"}]})
-    monkeypatch.setattr("spotify.fetch_devices", lambda tok: {"devices": [{"name": "Mac"}]})
-    monkeypatch.setattr("spotify.parse_devices", lambda raw: [{"name": "Mac"}])
-    monkeypatch.setattr("spotify.fetch_saved_tracks", lambda tok: {"total": 12, "items": []})
-    monkeypatch.setattr("spotify.parse_saved_tracks", lambda raw: {"total": raw["total"]})
-    monkeypatch.setattr("spotify.fetch_saved_albums", lambda tok: {"total": 3, "items": []})
-    monkeypatch.setattr("spotify.parse_saved_albums", lambda raw: {"total": raw["total"]})
-    monkeypatch.setattr("spotify.fetch_saved_episodes", lambda tok: {"total": 2, "items": []})
-    monkeypatch.setattr("spotify.parse_saved_episodes", lambda raw: {"total": raw["total"]})
-    monkeypatch.setattr("spotify.fetch_current_user_playlists", lambda tok: {"items": []})
-    monkeypatch.setattr("spotify.parse_playlists", lambda raw: [])
-    monkeypatch.setattr("spotify.fetch_followed_artists", lambda tok: {"artists": {"items": []}})
-    monkeypatch.setattr("spotify.parse_followed_artists", lambda raw: [])
+    monkeypatch.setattr("integrations.spotify.fetch_queue", lambda tok: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("integrations.spotify.parse_queue", lambda raw: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("integrations.spotify.fetch_devices", lambda tok: {"devices": [{"name": "Mac"}]})
+    monkeypatch.setattr("integrations.spotify.parse_devices", lambda raw: [{"name": "Mac"}])
+    monkeypatch.setattr("integrations.spotify.fetch_saved_tracks", lambda tok: {"total": 12, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_tracks", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_saved_albums", lambda tok: {"total": 3, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_albums", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_saved_episodes", lambda tok: {"total": 2, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_episodes", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_current_user_playlists", lambda tok: {"items": []})
+    monkeypatch.setattr("integrations.spotify.parse_playlists", lambda raw: [])
+    monkeypatch.setattr("integrations.spotify.fetch_followed_artists", lambda tok: {"artists": {"items": []}})
+    monkeypatch.setattr("integrations.spotify.parse_followed_artists", lambda raw: [])
 
     body = client.post("/integrations/spotify/analytics").get_json()
     assert body["ok"] and body["analytics"]["playback"]["item"]["name"] == "Now"
@@ -1444,11 +1444,11 @@ def test_spotify_history_import_writes_daily_music(client, app, monkeypatch):
     _connect_spotify(app)
     rows = [{"ts": "2026-06-29T22:10:00Z", "master_metadata_track_name": "A",
              "master_metadata_album_artist_name": "Artist", "ms_played": 180000}]
-    monkeypatch.setattr("spotify.parse_streaming_history",
+    monkeypatch.setattr("integrations.spotify.parse_streaming_history",
         lambda payload: [{"played_at": payload[0]["ts"], "date": "2026-06-29",
                           "track_id": "t1", "name": "A", "artists": ["Artist"],
                           "duration_ms": payload[0]["ms_played"], "source": "history_import"}])
-    monkeypatch.setattr("spotify.group_plays_by_day",
+    monkeypatch.setattr("integrations.spotify.group_plays_by_day",
         lambda plays: {"2026-06-29": plays})
     r = client.post("/integrations/spotify/history/import",
         data={"history": (io.BytesIO(json.dumps(rows).encode("utf-8")),
@@ -1493,9 +1493,9 @@ def test_spotify_sync_writes_music(client, app, monkeypatch):
     from datetime import date
     today = date.today().isoformat()
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: _rp_on(today))
-    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
-    monkeypatch.setattr("spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
+    monkeypatch.setattr("integrations.spotify.fetch_recently_played", lambda tok, transport=None: _rp_on(today))
+    monkeypatch.setattr("integrations.spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("integrations.spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
     r = client.post("/integrations/spotify/sync?date=" + today)
     body = r.get_json()
     assert body["ok"] and body["connected"]
@@ -1512,9 +1512,9 @@ def test_spotify_sync_not_connected(client, app):
 
 def test_spotify_sync_refreshes_taste(client, app, monkeypatch):
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: {"items": []})
-    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
-    monkeypatch.setattr("spotify.fetch_top",
+    monkeypatch.setattr("integrations.spotify.fetch_recently_played", lambda tok, transport=None: {"items": []})
+    monkeypatch.setattr("integrations.spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("integrations.spotify.fetch_top",
         lambda tok, kind, tr, transport=None: {"items": [{"name": "X", "genres": ["indie"]}]}
         if kind == "artists" else {"items": [{"name": "Song"}]})
     client.post("/integrations/spotify/sync")
@@ -1644,7 +1644,7 @@ def _connect_google(app):
 
 def test_google_sync_creates_managed_sections_staged(client, app, monkeypatch):
     _connect_google(app)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:14:00Z", "startUtcOffset": "-25200s",
@@ -1675,7 +1675,7 @@ def test_google_sync_creates_managed_sections_staged(client, app, monkeypatch):
 
 def test_google_sync_classic_creates_only_two(client, app, monkeypatch):
     _connect_google(app)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",

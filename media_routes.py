@@ -7,7 +7,7 @@ import todo
 import journal_media as media
 import places
 import map_packs
-import discord_journal
+from integrations import discord_journal
 
 
 def register(app, journal_file, mobile_authenticated, lock, data_file):

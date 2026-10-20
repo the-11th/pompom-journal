@@ -11,7 +11,8 @@ import json, tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
 from app import app
-import journal, todo, integrations
+import journal, todo
+from integrations import store as integrations
 with tempfile.TemporaryDirectory(prefix='datapom-tag-controls-') as directory:
     root = Path(directory)
     app.config.update(TESTING=True, DATA_FILE=str(root/'tasks.json'), JOURNAL_FILE=str(root/'journal.json'), INTEGRATIONS_FILE=str(root/'integrations.json'))

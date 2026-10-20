@@ -4,7 +4,7 @@ import re
 import pytest
 import journal
 import todo
-import integrations
+from integrations import store as integrations
 import hashlib
 import struct
 from pathlib import Path
@@ -404,7 +404,7 @@ def test_discord_status_never_exposes_receiver_token(client):
 
 
 def test_discord_pull_cannot_mark_replaced_credentials_as_synced(client, monkeypatch):
-    import discord_journal
+    from integrations import discord_journal
     import journal_media
     from pathlib import Path
     initial = {'receiver_url': 'https://inbox.example.com', 'receiver_token': 'old-secret', 'application_id': '123'}

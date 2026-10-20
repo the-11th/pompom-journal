@@ -4,10 +4,10 @@ from datetime import datetime
 import pytest
 
 import app as app_module
-import health
-import integrations
+from integrations import health
+from integrations import store as integrations
 import journal
-import usage
+from integrations import usage
 
 NOW = datetime(2026, 9, 10, 12)
 

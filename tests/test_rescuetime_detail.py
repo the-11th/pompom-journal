@@ -6,10 +6,10 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import app as app_module
-import integrations
+from integrations import store as integrations
 import journal
-import provider_sync
-import rescuetime
+from integrations import provider_sync
+from integrations import rescuetime
 import todo
 
 NOW = datetime(2026, 9, 19, 14, 0)

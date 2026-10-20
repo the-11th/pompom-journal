@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 import app as app_module
-import integrations
+from integrations import store as integrations
 import journal
 import journal_media
 import todo

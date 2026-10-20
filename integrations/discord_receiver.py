@@ -6,7 +6,7 @@ import json
 import os
 import threading
 from flask import Flask, request, jsonify
-import discord_journal
+from . import discord_journal
 import journal_media
 
 

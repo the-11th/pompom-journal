@@ -6,9 +6,9 @@ from threading import Event, Thread
 import pytest
 
 import app as app_module
-import integrations
+from integrations import store as integrations
 import journal
-import spotify
+from integrations import spotify
 import todo
 
 SECTIONS = [
@@ -117,7 +117,7 @@ def test_all_failed_sections_leave_file_bytes_unchanged(store, monkeypatch):
 
 
 def test_snapshot_clock_and_reconcile_preserve_newer_section(store):
-    import provider_sync
+    from integrations import provider_sync
     initial = integrations.load(store.config["INTEGRATIONS_FILE"])
     fetched, current = deepcopy(initial), deepcopy(initial)
     result = provider_sync.spotify_analytics(fetched, now=datetime(2026, 9, 10, 12))
