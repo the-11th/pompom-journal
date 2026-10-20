@@ -1,4 +1,4 @@
-# todo·pup
+# datapom
 
 A server-rendered **daily journal + to-do** web app built with Flask, with a
 dark-mode "typewriter" aesthetic. Everything is stored in local JSON files (no
