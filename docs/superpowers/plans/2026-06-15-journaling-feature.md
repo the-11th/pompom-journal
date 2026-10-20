@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a daily-journal section to TodoPup — per-date entries with configurable tag/numeric sections — alongside the existing to-do app, with an analytics-ready data model.
+**Goal:** Add a daily-journal section to Datapom — per-date entries with configurable tag/numeric sections — alongside the existing to-do app, with an analytics-ready data model.
 
 **Architecture:** A new pure-logic module `journal.py` (zero Flask imports, injectable `now`) mirrors `todo.py`. Journal routes are added to `app.py` using Post/Redirect/Get. Data lives in a separate `data/journal.json` with its own forgiving `load()`/atomic `save()`. Templates share a refactored `base.html` (brand/nav become blocks). `journal.py` imports only `todo.py`'s pure validators/`text_color_for` for a single source of truth.
 

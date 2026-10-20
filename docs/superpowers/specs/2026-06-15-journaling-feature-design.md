@@ -6,7 +6,7 @@
 
 ## Summary
 
-Extend TodoPup from a pure to-do app into a combined **daily journal + to-do**
+Extend Datapom from a pure to-do app into a combined **daily journal + to-do**
 web app. The journal lets the user write one dated entry per day (title + free
 text), tag the day across configurable **sections** (e.g. people, places,
 food), and record per-day **numbers** (e.g. sleep, screen time). Sections and

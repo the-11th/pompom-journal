@@ -1,4 +1,4 @@
-# todo·pup
+# Datapom
 
 A server-rendered **daily journal + to-do** web app built with Flask, with a
 dark-mode "typewriter" aesthetic. Everything is stored in local JSON files (no
@@ -69,7 +69,7 @@ pompom-journal/
 ├── android/            # offline-first journal/task + phone-usage app (Kotlin)
 ├── tests/              # pytest suite
 ├── docs/               # specs, Automator dock-app files
-└── TodoPup.command     # double-click launcher (macOS)
+└── Datapom.command     # double-click launcher (macOS)
 ```
 
 ## Setup
@@ -93,12 +93,12 @@ Then open http://127.0.0.1:5001/ in your browser. Your data is saved to `data/`
 
 ### macOS: launch from an icon
 
-Double-click **`TodoPup.command`** in Finder to start the app and open your
+Double-click **`Datapom.command`** in Finder to start the app and open your
 browser automatically. Close the Terminal window (or press `Ctrl+C`) to stop.
 (First time: right-click → Open → Open to get past the unidentified-developer
 warning.)
 
-### macOS: Automator dock app (TodoPom.app)
+### macOS: Automator dock app (Datapom.app)
 
 A proper macOS app that lives in `/Applications` and can be pinned to your
 Dock — no Terminal window. It starts the server in the background, opens your
@@ -123,14 +123,14 @@ pip install -r requirements.txt
 bash docs/automator/install.sh
 ```
 
-This creates `/Applications/TodoPom.app` and copies the Automator workflow into
+This creates `/Applications/Datapom.app` and copies the Automator workflow into
 it. It's safe to re-run (updates an existing app in place).
 
 **Step 3 — Bypass Gatekeeper on first launch.** macOS will block an app it
-hasn't verified. Right-click `TodoPup` in `/Applications` (or Finder), choose
+hasn't verified. Right-click `Datapom` in `/Applications` (or Finder), choose
 **Open**, then click **Open** in the dialog. You only need to do this once.
 
-**Step 4 — Add to your Dock** (optional). Drag `TodoPom.app` from
+**Step 4 — Add to your Dock** (optional). Drag `Datapom.app` from
 `/Applications` into your Dock, or launch it once and right-click its Dock
 icon → **Options → Keep in Dock**.
 
@@ -139,7 +139,7 @@ icon → **Options → Keep in Dock**.
 After installing, set the Pompompurin icon:
 
 1. Open **Finder** → navigate to `/Applications`
-2. Right-click `TodoPom` → **Get Info**
+2. Right-click `Datapom` → **Get Info**
 3. Open `docs/automator/icon.gif` in **Preview**
 4. Press **⌘A** then **⌘C** to copy the image
 5. Click the small icon in the top-left of the Get Info window to select it
@@ -153,7 +153,7 @@ After installing, set the Pompompurin icon:
 4. Paste the script from `docs/automator/document.wflow` (the
    `COMMAND_STRING` value) into the action, replacing the placeholder — update
    the `cd` path at the top to your repo location
-5. **File → Save** → save as **TodoPom** to `/Applications/`
+5. **File → Save** → save as **Datapom** to `/Applications/`
 
 #### Updating after script changes
 
@@ -166,7 +166,7 @@ bash docs/automator/install.sh
 To export changes you've made directly in Automator back to the repo:
 
 ```bash
-cp /Applications/TodoPom.app/Contents/document.wflow docs/automator/document.wflow
+cp /Applications/Datapom.app/Contents/document.wflow docs/automator/document.wflow
 git add docs/automator/document.wflow
 git commit -m "Update Automator workflow"
 ```
@@ -228,7 +228,7 @@ separate field:
   | "parenthesis" … "parenthesis" | `(` then `)` — alternates open/close |
 
   To tag the day without putting the command in the entry, repeat **“tag”**:
-  “had lunch with Alex, tag Alex, then went to the gym, tag gym.” TodoPup
+  “had lunch with Alex, tag Alex, then went to the gym, tag gym.” Datapom
   removes the command words, previews the matched chips below the body, and
   applies them only when you confirm the dictation. Unknown names become
   temporary tags after you choose their section. Saying “at symbol Alex” still
@@ -241,7 +241,7 @@ separate field:
 
 - **Recovery drafts + title help.** The browser preserves each date's form
   locally while you type and restores it after a refresh. If the body is filled
-  but the title is blank, TodoPup proposes a title without overriding anything
+  but the title is blank, Datapom proposes a title without overriding anything
   you wrote. **⌘Enter** finishes the entry; **⌘⇧M** starts or stops dictation.
 
 - **Mood quick-pick.** Choose a **1–7** mood for the day from the row of
@@ -401,7 +401,7 @@ Get your daily **screen time, unlocks, and top apps** onto each journal day, wit
 a dedicated **Phone usage** analytics tab. Android exposes usage stats only
 on-device (there is no cloud API), so this integration works differently from the
 others: a small companion app on your phone reads the stats and **pushes** them
-to todo·pup once a day. The app source lives in `android/` and is built into a
+to Datapom once a day. The app source lives in `android/` and is built into a
 downloadable APK by GitHub Actions.
 
 #### Install the app
@@ -419,38 +419,29 @@ downloadable APK by GitHub Actions.
 2. Tap **Exclude from battery optimization** (or *Settings → Apps → the app →
    Battery → Unrestricted*). **Don't skip this** — Samsung's Device Care will
    otherwise sleep the app and the daily push stops after a few days.
-3. Back in the app, **scan the config QR** from the Manage page to auto-fill the
-   endpoint URL + token (or paste them manually).
-4. Tap **Send test now**. Refresh yesterday's/today's journal entry on the
+3. Connect the unlocked phone by USB and run `scripts/sync_android_usb.sh`; the
+   helper configures both the journal/task and usage credentials automatically.
+4. Tap **Send usage now** if you want an additional immediate usage upload.
+   Refresh yesterday's/today's journal entry on the
    computer — the **usage** panel should show screen time + top app, and the
    **Phone usage** analytics tab should populate.
 
 #### Day-to-day
 
-- The app pushes **yesterday + the prior 2 days** roughly once a day (best-effort
-  within a 24-hour window), retrying on failure and surviving reboots. Nothing to
-  plug in.
-- If a night is missed, the next successful push **backfills** it (the 3-day
-  window self-heals).
+- Each USB sync pushes **yesterday + the prior 2 days**. If a day is missed, the
+  next cable connection backfills it.
 - The **Phone usage** analytics tab appears once any usage data exists — screen
   time over time, top apps, unlocks, by-weekday, and a screen-time-vs-mood
   comparison.
 
-> **Reachability:** the phone must reach the Flask app when it pushes. On the same
-> home Wi-Fi, the endpoint's LAN IP works; to sync from anywhere, install
-> **Tailscale** on both the Mac and the phone and use the Mac's Tailscale hostname
-> as the endpoint.
->
-> **Server availability:** normal dock mode auto-quits shortly after the last
-> browser tab closes. Enable the persistent, localhost-only phone server in
-> `docs/PHONE_ACCESS.md` for background delivery; otherwise the 3-day usage
-> backfill catches up after TodoPup next opens.
+> **Reachability:** phone data travels only through the authorized USB cable and
+> localhost ADB tunnel. No Wi-Fi or remotely reachable endpoint is supported.
 
 See `android/README.md` for building/sideloading the app yourself.
 
-### TodoPup mobile journal and tasks
+### Datapom mobile journal and tasks
 
-The same Android APK is also a private, offline-first TodoPup client. It supports
+The same Android APK is also a private, offline-first Datapom client. It supports
 journal title/body/date, the same seven mood images, section-grouped tags and tag
 creation, speech-to-text transcript capture, and task creation/editing,
 completion, due dates, notes, tags, subtasks, and deletion.
@@ -460,10 +451,19 @@ temporary failures, request IDs make retries idempotent, and stale journal edits
 become an explicit phone-versus-Mac conflict instead of overwriting either copy.
 The Mac's existing JSON stores remain the sole source of truth.
 
-For private anywhere access and pairing instructions, see
-[`docs/PHONE_ACCESS.md`](docs/PHONE_ACCESS.md). In short: enable the localhost-only
-persistent server, proxy it with Tailscale Serve, then open **Manage →
-Integrations → TodoPup mobile** and create the ten-minute, one-use pairing QR.
+For pairing instructions, see [`docs/PHONE_ACCESS.md`](docs/PHONE_ACCESS.md).
+Connect and unlock the phone, run `scripts/sync_android_usb.sh`, and review the
+full result in Datapom's Connect screen.
+
+## Photos, places, and messages
+
+The journal supports inline photos, visible or hidden captions, grouped photo
+tags, text-to-photo links, pen drawings, and personal stickers on web and Android.
+The **Photos** and **Places** analytics pages show photo tags, maps, visits, and
+time spent at places. Download offline map regions in **Manage → Photos & places**
+on the Mac; USB sync copies maps, originals, edits, and location history to the phone.
+See [the feature guide](docs/PHOTOS_PLACES.md) for the editing and tracking flows,
+and [Discord setup](docs/DISCORD_INBOX.md) for the optional selected-message inbox.
 
 ## Development
 

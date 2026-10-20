@@ -9,7 +9,7 @@ behavior; follow them exactly.
 ## Read first: goals, design & expectations
 
 ### What this app is (and its goals)
-A local-first, single-user **daily journal + to-do** web app ("TodoPup"):
+A local-first, single-user **daily journal + to-do** web app ("Datapom"):
 server-rendered Flask with JSON file storage (no database), run locally via a
 macOS dock app. Its two domains — **tasks** and **journal** — share one
 analytics-ready data model feeding a rich `/journal/analytics` dashboard.
@@ -92,7 +92,7 @@ pytest tests/test_journal_app.py         # journal route tests only
 pytest -k time_remaining                 # single test by name substring
 ```
 
-macOS dock app: click **TodoPup** in the dock (Automator app at `/Applications/TodoPup.app`). The server starts as a background daemon and auto-quits ~2 s after the last browser tab is closed (it stays alive while any tab is open, even backgrounded). See `SETUP.md` for first-time installation.
+macOS dock app: click **Datapom** in the dock (Automator app at `/Applications/Datapom.app`). The server starts as a background daemon and auto-quits ~2 s after the last browser tab is closed (it stays alive while any tab is open, even backgrounded). See `SETUP.md` for first-time installation.
 
 ## Architecture
 
@@ -127,6 +127,12 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   a fake. See the Integrations section below.
 - **`spotify.py`** — Spotify Web API client (zero Flask, OAuth via `oauth.py`).
   Same injectable-transport pattern. See the Integrations section below.
+- **`music_history.py`** — pure Spotify history import logic. Validates a complete
+  batch before changing the caller's store, deduplicates exact play receipts,
+  and retains legacy/live snapshots separately from imported totals.
+- **`provider_sync.py`** — provider fetches over copied stores and pure
+  reconciliation into current data. HTTP adapters release the shared store lock
+  during network I/O, then verify the connection and preserve concurrent edits.
 - **`usage.py`** — phone-usage (Android) parse/aggregate (zero Flask, no network,
   no OAuth). Unlike the pull-based clients the phone *pushes* usage stats;
   `parse_push` normalizes an inbound push (a single day dict OR a list of days)
@@ -140,7 +146,7 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   `flash()` for validation errors. Config keys `DATA_FILE`, `JOURNAL_FILE`, and
   `INTEGRATIONS_FILE` let tests point at temp files. Also owns the auto-quit
   watchdog (see below).
-- **`start_server.py`** — double-fork daemon launcher used by `TodoPup.command`
+- **`start_server.py`** — double-fork daemon launcher used by `Datapom.command`
   and the Automator dock app. Starts Flask detached from the calling process so
   macOS Shortcuts/Automator exits immediately rather than waiting for Flask.
 
@@ -153,7 +159,11 @@ design rule is a **strict split between pure logic and the HTTP layer**:
   suggestion was dismissed; words are suppressed for a 30-day cooldown). Each
   entry also has a `sleep` field (structured dict or null), a `rescuetime` field
   (structured dict or null), and a `music` field (structured dict or null), all
-  defaulted to `None` by `load()`.
+  defaulted to `None` by `load()`. Music imports add nullable `music_history`
+  (receipt/counter state), `music_legacy` (unchanged pre-import snapshot), and
+  `music_live` (later API snapshot); these are also defaulted by `load()` and new
+  entry creation. Entry views omit those internal fields while retaining source
+  metadata on the displayed `music` summary.
 - **`data/integrations.json`** — third-party credential/token store (gitignored
   via the existing `data/*` rule). Top-level keys: `google` (OAuth tokens +
   credentials), `rescuetime` (api_key + last_sync), `spotify` (OAuth tokens +
@@ -184,6 +194,23 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
 
 ### Core behaviors
 
+- **Android task presentation** mirrors the journal's compact headings, 18dp
+  gutters, flat panels, monospace text, and circular controls. Completed tasks
+  live under a counted dropdown, collapsed initially. Expansion and quick-add
+  text survive task actions and activity recreation; Journal task links reveal
+  the completed section when needed.
+- **Web task presentation** shares Journal's mascot, field spacing, amber
+  actions, and circular controls. The Active page includes a counted Completed
+  dropdown, collapsed initially and remembered for the browser session by
+  `task-history.js`. Tag filters apply to both lists. Completed rows share
+  `_completed_tasks.html` with Archive; notes/subtasks are read-only, difficulty
+  stays editable, and Reopen returns the task to Active with its details intact.
+  The active form's **Save completed** button archives only checked active tasks.
+- **Live task countdowns**: web `task-countdown.js` and Android `TaskCountdown`
+  mirror `todo.time_remaining`: days at 48 hours or more, hours below 48 hours,
+  and "due soon" below an hour. Active-task labels and overdue colors update
+  in place every 30 seconds and immediately on return to the page/app. Android
+  pauses its timer off-screen; neither client reloads tasks or submits edits.
 - **Recurring tasks** (`recurrence`: `daily`/`weekly`/`monthly`/`every:N`):
   `refresh()` archives checked tasks (spawning the next occurrence if recurring),
   moves missed recurring occurrences to `expired` and spawns the next future one,
@@ -191,8 +218,9 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
 - **Tags**: titles are highlighted in the first tag's color (translucent,
   text-only via `color-mix`); extra tags render as chips. Colors are user-picked
   hex; tag names are normalized (strip+lowercase) and allowlisted
-  (`^[a-z0-9 ._-]+$`) — names flow into `style` attributes so keep that
-  validation. Filtering (`?tags=a,b`) is multi-select OR semantics on active and
+  (Unicode letters and numbers, ASCII spaces, periods, underscores and hyphens)
+  — full-match validation excludes controls and markup. Chinese tag names work
+  across web, mobile, mentions and sync; retain the same character policy in all validators. Filtering (`?tags=a,b`) is multi-select OR semantics on active and
   archive pages; unknown/stale tags are dropped silently.
 - **Archive**: completed tasks move here. Accessible via `/archive`.
 - **Difficulty**: optional `easy`/`medium`/`hard` rating (`set_difficulty`). A
@@ -222,8 +250,9 @@ unset). Archived tasks add `completed`; expired add `expired_at`.
 ### Todo templates
 
 `base.html` (layout, nav, shared JS, flash area, global `confirmModal`),
-`active.html`, `archive.html`, `edit.html`, `tags.html`, `_macros.html` (shared
-`toggle_url` filter-chip macro).
+`tasks_base.html` (shared Tasks presentation), `active.html`, `archive.html`,
+`edit.html`, `_task_form.html` (Add/Edit), `_completed_tasks.html` (history rows),
+`tags.html`, `_macros.html` (shared `toggle_url` filter-chip macro).
 
 ---
 
@@ -616,14 +645,19 @@ OAuth delegated to `oauth.py` with `client_auth="body"` and authorize extras
 
 ### `rescuetime.py` — RescueTime client (zero Flask, API-key auth)
 
-No OAuth; authentication is a personal API key passed as a query param.
+No OAuth; authentication is a personal API key in the `Authorization: Bearer` header (never the URL). Provider errors use safe messages without response bodies or credentials.
 Transport seam: same `transport(method, url, headers, body) -> (status, json)`
 injectable callable, defaulting to `oauth.urllib_transport`.
 
-- `fetch_daily_summary(api_key, transport=None)` → raw JSON from the daily-summary feed (≈ last two weeks, newest first).
-- `parse_day(row, now=None)` → `{date, pulse, productive_min, distracting_min, neutral_min, total_min, top_categories:[{name,min}], source:"rescuetime", fetched}`. Pure. Hours fields converted to minutes; top_categories capped at 5, sorted by minutes desc.
+- `fetch_daily_summary(api_key, transport=None)` → raw JSON from `anapi/daily_summary_feed` (≈ last two weeks, excluding today).
+- `parse_day(row, now=None)` → `{date, pulse, productive_min, distracting_min, neutral_min, total_min, top_categories:[{name,min}], source:"rescuetime", fetched}`. Pure. Hours fields converted to minutes; all nonempty categories retained, sorted by minutes desc. `unrated_min` defaults to zero.
 - `fetch_activities(api_key, date, transport=None)` → raw JSON from the **Analytic Data API** (`anapi/data`, `restrict_kind=activity`, rank perspective, single-day range). This is the **per-website/app breakdown** feed (the daily-summary feed only carries broad category totals).
-- `parse_activities(payload, cap=8)` → `[{name, min, category, productivity}]` sorted by minutes desc, capped, 0-min rows dropped. Pure & defensive: tolerates a non-dict payload / short rows, locates columns from `row_headers` (fallback to the documented order `[Rank, Time Spent (seconds), Number of People, Activity, Category, Productivity]`). `productivity` is RescueTime's -2..2 score.
+- `parse_activities(payload, cap=None)` → `[{name, min, category, productivity}]` sorted by minutes desc. Keeps all positive durations, including fractional minutes; the optional cap is for display only. Pure & defensive: tolerates a non-dict payload / short rows, locates columns from `row_headers` (fallback to the documented order `[Rank, Time Spent (seconds), Number of People, Activity, Category, Productivity]`). `productivity` is RescueTime's -2..2 score.
+
+- `fetch_hourly` / `parse_hourly` → per-activity hourly rows (`date`, `hour`, `name`, `min`, `category`, `productivity`), using `perspective=interval&resolution_time=hour`. Account-local buckets, not exact sessions.
+- `fetch_documents` / `parse_documents` → page/document rows (`title` plus activity fields) using `restrict_kind=document`. Titles/URLs are retained only as returned by the provider; report availability depends on the account and tracking settings. This is foreground time, not verified video playback.
+- `activity_summary(date, activities, now=None)` builds totals when no daily feed summary exists, including `unrated_min` for missing scores. Its pulse is null, and `summary_source` is `activities`.
+- `validate_report` rejects malformed envelopes, columns, and incomplete rows before a fetched report can replace cached data.
 
 ### `integrations.py` — credential/token store (zero Flask)
 
@@ -632,8 +666,8 @@ Same forgiving-load/atomic-save pattern as `journal.py`.
 - `_empty()` → `{"google": {}, "rescuetime": {}, "spotify": {}}`.
 - `load(path)` / `save(path, data)` — forgiving read (missing → empty; corrupt → `.bak` + empty), atomic write.
 - Accessors: `get_provider`, `set_credentials`, `set_tokens`, `set_api_key`
-  (stores `api_key` on a provider dict — used by RescueTime), `clear_provider`
-  (removes `tokens`, `last_sync`, `oauth_state`, **and** `api_key`), `is_connected`
+  (stores `api_key` on a provider dict — used by RescueTime; changing the key clears the detail cache and last-sync timestamp), `clear_provider`
+  (removes `tokens`, `last_sync`, `oauth_state`, `api_key`, and cached analytics), `is_connected`
   (true when an `access_token` OR a non-empty `api_key` exists), `last_sync`,
   `set_last_sync`.
 
@@ -711,7 +745,7 @@ already-synced days); both are idempotent and persisted by the single `save`.
 
 Added by auto-sync; `None` when no RescueTime data. `journal.load()` defaults
 every entry's `rescuetime` to `None` (`e.setdefault("rescuetime", None)`).
-Read-only on the form; a re-sync overwrites it.
+Read-only on the form; successful syncs merge updated provider fields and retain previous activity details when their refresh fails.
 
 ```json
 "rescuetime": {
@@ -721,6 +755,10 @@ Read-only on the form; a re-sync overwrites it.
   "distracting_min": 45,
   "neutral_min": 90,
   "total_min": 447,
+  "unrated_min": 0,
+  "summary_source": "daily_feed",
+  "activity_version": 2,
+  "activities_fetched": "2026-06-29T08:15:00",
   "top_categories": [{"name": "Software Development", "min": 240}],
   "top_activities": [{"name": "github.com", "min": 120, "category": "General Software Development", "productivity": 2}],
   "source": "rescuetime",
@@ -728,10 +766,7 @@ Read-only on the form; a re-sync overwrites it.
 }
 ```
 
-`top_activities` (per-website/app breakdown, from the Analytic Data API) is
-**absent on days synced before the feature shipped**; the sync backfills it on
-the next sync (see below). Each activity carries a `category` and a RescueTime
-`productivity` score (-2..2).
+`top_activities` retains its legacy field name but now stores **every reported activity**, with fractional minutes. Older imports may be absent or capped at eight; `activity_version: 2` marks complete imports. Sync backfills older versions for requested/feed dates. Each activity has a `category` and productivity score (-2..2, or null when unrated). Existing official summaries outside the recent feed remain intact when fetching fresh detail.
 
 Writer: `journal.set_entry_rescuetime(data, date, value, now=None)` — same
 get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
@@ -753,7 +788,8 @@ fed by `_integrations_context()`; there is no standalone integrations nav link.
 | `POST /integrations/google/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], sleep:{<date>: sleep\|null}}`. |
 | `POST /integrations/rescuetime/key` | POST | Save the personal API key (PRG + flash). |
 | `POST /integrations/rescuetime/disconnect` | POST | Clear the key + last_sync (confirmModal-guarded). |
-| `POST /integrations/rescuetime/sync` | POST | JSON. `?days=N` (default 7), optional `?date=`. Returns `{ok, connected, synced:[dates], errors:[...], data:{<date>: rescuetime\|null}}`. |
+| `POST /integrations/rescuetime/sync` | POST | JSON. Optional `?date=YYYY-MM-DD` and `?force=1`. Returns `{ok, connected, synced:[dates], errors:[...], data:{<date>: rescuetime\|null}}`. |
+| `POST /integrations/rescuetime/detail` | POST | JSON. Required `?date=YYYY-MM-DD`, optional `?force=1`. Returns `{ok, connected, date, reports:{activities, hourly, documents}}`; reads and caches reports without editing journal entries. |
 
 **Google Health sync internals** (`_google_sync`): if not connected, returns early.
 Refreshes tokens (via `google_health.refresh_tokens`, passing stored tokens as
@@ -766,19 +802,9 @@ caught per-day and reported in `errors` without aborting the rest. Sets
 `google_connected`, `google_has_creds`, `google_client_id`, `google_last_sync`,
 `google_redirect_uri`.
 
-**RescueTime sync internals** (`_rescuetime_sync`): fetches the full recent feed
-once via `rescuetime.fetch_daily_summary`, then iterates rows. For each date it
-(a) writes the day's summary via `rescuetime.parse_day` →
-`journal.set_entry_rescuetime` when `force` or the day has no `entry.rescuetime`
-yet, and (b) fetches the **per-activity (website/app) breakdown** for that date
-via `rescuetime.fetch_activities` → `rescuetime.parse_activities` and attaches it
-as `rescuetime.top_activities`. Days already synced **before** the breakdown
-feature (rescuetime present, no `top_activities`) are **backfilled** — the
-breakdown is fetched and merged onto the existing dict without rewriting the
-summary. The activity fetch is a **separate Analytic Data API call per day**,
-isolated in its own try/except so a failure reports an error but never loses the
-day's summary. Per-row errors are isolated and reported in `errors` without
-aborting remaining rows. Sets `last_sync` on completion.
+**RescueTime sync internals** (`provider_sync.rescuetime_sync`, HTTP adapter `_rescuetime_sync`): fetches the recent summary feed plus per-activity reports for today, yesterday, the requested date, and dates needing a full-list backfill. Explicit `force` refreshes all feed dates. Today and older requested dates can be fetched even when absent from the feed. Activity-derived totals have no invented pulse; existing official historical summaries are preserved. A later daily summary finalizes a provisional snapshot. Failures retain previous activity lists and report errors; `last_sync` advances only after an error-free run. The shared reconciliation layer preserves concurrent journal edits and discards stale results after credentials change.
+
+**Day detail cache** (`provider_sync.rescuetime_detail`): each report has independent `status`, `rows`, `fetched`, and optional `message`. Errors retain saved rows and timestamps. Reuses cached reports for one hour; `force=1` retries immediately. Keeps the 31 most recently checked dates in `integrations.rescuetime.analytics.days`, defaulting missing cache fields to empty. The route releases the store lock during network I/O and checks the connection again before saving. Disconnecting or changing the API key clears this private cache.
 
 ### Sleep analytics (`journal.py` + `analytics.js`)
 
@@ -812,9 +838,10 @@ Pure helpers (all injectable date bounds; ignore entries without usable rescueti
 data; degrade gracefully on too few points):
 
 - `rescuetime_pulse_series(entries, start=None, end=None)` → `[{date, pulse}]`.
-- `rescuetime_time_series(entries, ...)` → `[{date, productive_min, distracting_min, neutral_min}]`.
+- `rescuetime_time_series(entries, ...)` → `[{date, productive_min, distracting_min, neutral_min, unrated_min}]`.
 - `rescuetime_category_totals(entries, ...)` → `[{name, min}]` aggregate across all days.
-- `rescuetime_top_activities(entries, ..., cap=8)` → `[{name, min, category, productivity}]` per-website/app aggregate over the range, sorted by minutes desc, capped (category/productivity from first occurrence). Reads `top_activities`; days without it contribute nothing.
+- `rescuetime_top_activities(entries, ..., cap=8)` → `[{name, min, category, productivity}]` per-website/app aggregate over the range, sorted by minutes desc (`cap=None` returns all; category/productivity from first occurrence). Reads `top_activities`; days without it contribute nothing.
+- `rescuetime_hourly_totals(rows)` → 24 hourly totals split into productive, distracting, neutral, and unrated minutes; mirrors `rtHourlyTotals` in JS. Page/document rows are never added to activity totals.
 - `rescuetime_activity_minutes_series(entries, ..., top_n=6)` → `{activities:[{name}], dates:[...], series:{name:[min-per-date...]}}` (zero-filled, for a multi-line chart), mirroring `usage_app_minutes_series`.
 - `rescuetime_dow_averages(entries, ...)` → 7 mean-pulse values Mon–Sun.
 - `productivity_mood_pairs(entries, ...)` → `[{pulse, mood}]` same-day pairs for pulse↔mood correlation (ignores null moods).
@@ -824,11 +851,10 @@ data; degrade gracefully on too few points):
 `analytics_payload` carries each entry's `rescuetime` (structured dict or `null`)
 so the client can render without a new endpoint.
 
-**Productivity tab** in `static/analytics.js` (**Digital** category, gated on
-`hasRescueTime`, first sub-tab): stat cards (avg pulse,
+**Productivity tab** in `static/analytics.js` (**Digital** category, available with a connected RescueTime account or imported data, first sub-tab): stat cards (avg pulse,
 avg productive hours, days tracked); pulse over time with 7-day rolling avg;
-time breakdown stacked bar (productive/distracting/neutral); category totals bar;
-**top activities by time** (per-website/app bars, colored by productivity via
+time breakdown stacked bar (productive/distracting/neutral/unrated); category totals bar;
+**apps and websites**, searchable across all imported activities with a Show more button (per-website/app bars, colored by productivity via
 `rtProdColor` — accent = productive, danger = distracting, muted = neutral;
 mirror of `rescuetime_top_activities` via the `aggRtActivities` JS helper);
 **time by activity over time** (multi-line chart of the top-6 activities' daily
@@ -837,8 +863,7 @@ minutes with a per-activity color legend reusing `.sleep-stage-legend`, mirror o
 correlation scatter with Pearson `r`. Mirrors the Sleep tab pattern via
 `rescuetimeOf(e)` (the JS-side `_entry_rescuetime` mirror). Panel CSS reuses
 `.rt-row` (`.rt-pulse`, `.rt-prod`) from `style.css`. The two activity charts
-show a "Re-sync RescueTime to fetch the per-website/app detail" empty state until
-the breakdown has synced.
+show an empty state until activity data has synced. The **Explore a day** panel uses the themed date picker independently of the dashboard range, with Load/Refresh buttons, hourly bars, searchable app/site and page/document lists, and per-report availability and saved-data notices. Page titles use text nodes, never HTML; page times are included in app totals rather than added again. `journal_analytics_data` supplies only the `rescuetime_connected` boolean alongside the usual analytics payload, never credentials or cached titles.
 
 ### `spotify.py` — Spotify client (zero Flask, OAuth via `oauth.py`)
 
@@ -861,7 +886,7 @@ signatures).
 
 Added by auto-sync; `None` when no Spotify data. `journal.load()` defaults every
 entry's `music` to `None` (`e.setdefault("music", None)`). Read-only on the form;
-a re-sync overwrites it.
+a re-sync updates it unless receipt-backed imported history covers that date.
 
 ```json
 "music": {
@@ -884,7 +909,36 @@ at ~50 tracks/~24h, so per-day data is accumulated from the rolling plays-buffer
 going forward — no historical backfill.
 
 Writer: `journal.set_entry_music(data, date, value, now=None)` — same
-get-or-create + bump-updated pattern as `set_entry_sleep`. `value=None` clears.
+get-or-create + bump-updated pattern as `set_entry_sleep`. For a date covered by
+`music_history`, live values (including a null clear) go to `music_live` and leave
+the displayed import summary unchanged. Other dates continue updating `music`.
+
+### Spotify history imports
+
+`POST /integrations/spotify/history/import` accepts a JSON file. ZIP uploads are
+rejected with an instruction to extract and choose JSON. The HTTP route parses,
+calls `spotify.parse_streaming_history` and `music_history.import_plays`, then
+saves the journal once after the whole batch succeeds. A duplicate import is a
+no-op, including file bytes and timestamps.
+
+Each day's `music_history` holds version 1, SHA256 `receipts`, `duration_ms`,
+`track_ids`, and complete `artists`/`tracks`/`albums` counters. Receipts identify
+the normalized UTC stream-end timestamp, track identity and duration. Repeated
+or overlapping files with the same normalized identities count once; formats
+missing track IDs may identify plays differently. No approximate cross-source
+matching is used. Import date grouping retains the export's UTC dates.
+
+For covered dates, `music` shows only receipt-backed history totals, labeled
+**Imported history** (`source: history_import`). `music_legacy` preserves the
+pre-import summary unchanged and is never added to those totals. Later live API
+results remain in `music_live`, separately from displayed totals. The UI states:
+“Imported days use history totals. Live sync stays saved separately.” Source
+metadata stays in analytics exports; internal receipts/counter snapshots stay
+out of mobile/web entry payloads.
+
+The separate Spotify analytics snapshot endpoint preserves failed sections
+while refreshing successful ones. Its full-snapshot `fetched` time advances only
+on complete success; it never changes the daily-play `last_sync` timestamp.
 
 ### Taste snapshot
 
@@ -957,19 +1011,25 @@ and radar views degrade gracefully to the muted-note state.
 All three planned integrations (Google Health sleep, RescueTime productivity,
 Spotify music) are now shipped.
 
-### Phone usage (Android push — server side shipped; Android app = Plan 2)
+### Phone usage (Android daily archive + USB upload)
 
 Unlike the cloud integrations there is **no REST API** for Android usage stats;
 the data lives on-device (`UsageStatsManager`). So this integration **inverts the
 flow**: an on-phone app *pushes* daily usage to the Flask app. Auth is a
 **shared bearer token** (RescueTime-style stored secret, **not OAuth** — no
 `oauth.py` involvement); provider key `phone` in `integrations.json`; entry field
-`usage`. **Plan 1 (this) is the Flask ingestion + analytics side only** — the
-Android app + APK CI + Manage-page download QR are Plan 2.
+`usage`. Android `UsageCollectionWorker` captures completed daily summaries every
+six hours without network/charging constraints, on app resume, and after boot or
+package replacement. `UsageArchive` retains atomic per-day files indefinitely.
+`UsagePushWorker` sends all pending snapshots in acknowledged batches of 30 over
+USB. Destination-specific receipts never clear newer snapshots; interrupted
+uploads retain unsent days. Initial recovery uses retained DAILY system intervals
+only, never weekly totals; unavailable events have `details_available: false`.
+Recovered days carry `recovered: true` and only fill missing Mac usage.
 
 - **`usage.py`** (pure, zero Flask): `parse_push(payload, now=None)` accepts a
-  single day dict OR a **list** of days (the worker pushes the last 3 days per
-  Decision 8) → list of normalized `usage` dicts (defensive: coerce types, clamp
+  single day dict OR a **list** of archived days
+  → list of normalized `usage` dicts (defensive: coerce types, clamp
   negatives to 0, cap `top_apps` at 8 sorted by minutes desc, skip days without a
   valid YYYY-MM-DD `date`, `source:"phone"`). Each `top_apps[]` entry carries
   `{name, label, min, opens}` — `opens` is the per-app foreground-launch count
@@ -1129,9 +1189,9 @@ set `AUTO_QUIT=1` so the watchdog thread never starts.
 ### Related files
 
 - `start_server.py` — double-fork daemon; sets `AUTO_QUIT=1` before `execv`
-- `TodoPup.command` — calls `start_server.py`, polls until ready, opens browser
+- `Datapom.command` — calls `start_server.py`, polls until ready, opens browser
 - `docs/automator/document.wflow` — Automator app embedded script (same logic)
-- `docs/automator/install.sh` — installs `/Applications/TodoPup.app` from repo
+- `docs/automator/install.sh` — installs `/Applications/Datapom.app` from repo
 - `SETUP.md` — full setup instructions for a new machine
 
 ---
@@ -1150,7 +1210,12 @@ Most analytics functionality is complete; only minor UI polish remains.
 What exists today:
 
 - **Routes**: `GET /journal/analytics` (page shell) and
-  `GET /journal/analytics/data` (`jsonify(journal.analytics_payload(data))`).
+  `GET /journal/analytics/data` (combined journal and task payloads). Pure
+  `journal.analytics_date_range` widens their default bounds with nonempty
+  cached tracking-day receipts, so Places includes days without journal text.
+  Missing/empty/corrupt days do not establish a bound; conflicting day files
+  are skipped only for dashboard bounds and remain errors for sync manifests.
+  The feed stays unfiltered; explicit date selections remain client-side.
 - **Pure aggregation helpers** in `journal.py` (all testable, injectable date
   bounds): `analytics_payload`, `describe`, `tag_frequency`, `tag_cooccurrence`,
   `tag_trend`, `tag_streak`, `entry_streak`, `numeric_series`, `dow_averages`,
@@ -1325,16 +1390,24 @@ for full detail on routes, data models, and analytics helpers.
 
 ### Android companion + phone usage — DONE
 
-The in-repo Android app is now the full offline-first TodoPup companion, not only
-a phone-usage worker. It uses private Tailscale HTTPS plus separate hashed,
+The in-repo Android app is now the full offline-first Datapom companion, not only
+a phone-usage worker. It uses an ADB reverse USB tunnel plus separate hashed,
 per-device bearer credentials to create/edit journal entries (mood, tags,
 numbers, speech transcript) and manage tasks (due dates, tags, notes, subtasks,
 completion, deletion). Android writes land in durable journal/task outboxes,
 retry idempotently through WorkManager, and preserve stale edits as explicit
-phone-vs-Mac conflicts. API routes live under `/api/mobile`; enrollment/revoke
-controls live in the Manage-page **TodoPup mobile** card. The Mac remains the
+phone-vs-Mac conflicts. API routes live under `/api/mobile`; revoke controls
+live in the Manage-page **Datapom mobile** card. The Mac remains the
 only source of truth. See `docs/PHONE_ACCESS.md` and
 `docs/superpowers/plans/2026-07-15-android-journal-tasks.md`.
+
+The USB helper provisions mobile and usage credentials through JSON-only
+`POST /integrations/mobile/usb` within the server's existing store transaction.
+It accepts only literal loopback peer addresses, rejects cross-site browser
+requests, and returns `Cache-Control: no-store`. The pure
+`integrations.provision_usb` reuses valid cached credentials or replaces revoked
+ones; the helper writes only its atomic, mode-600 token cache, never the whole
+integrations store. Updated helpers require the updated server to be running.
 
 The **phone-usage ingestion + analytics** feature remains alongside it:
 `usage.py`, the separate `phone` provider + shared-token routes
@@ -1356,6 +1429,64 @@ subagent implementation, TDD). See the feature sections above for detail:
 - **Spotify music** — auto-filled `entry["music"]` + Music analytics tab (taste view + audio-feature charts with graceful 403 degradation).
 
 All three planned integrations (Google Health, RescueTime, Spotify) are shipped.
+
+### Photos, places, and selected messages
+
+- `journal_media.py` owns the versioned media store, immutable original files,
+  JPEG/PNG/WebP/GIF/AVIF/HEIF import, editable derivatives, ordered documents,
+  grouped tags, and photo analytics. `journal_commands.py` owns explicit task
+  commitment; draft autosaves must never spawn incomplete task lines.
+- `places.py` derives daily routes, ten-minute visits, speed/transport estimates,
+  replay positions, photo-time matching, and compact cross-day analytics. Its
+  `location-day.js` mirror is checked against shared fixtures. Uncertain fixes,
+  gaps, and session changes break routes; city regions provide context rather
+  than stationary visits. `history_analytics` reads one day at a time and keeps
+  compact summaries. Past daily observations gzip losslessly; receipt hashes
+  describe canonical uncompressed content so archival alone does not resync.
+- `location-day-view.js` supplies each entry's map, photo pins, stop details,
+  and hour scrubber. Mobile **Places** uses only the selected journal day, with
+  map/replay first and daily totals, stops/photos, and movement details below;
+  changing the shared date picker preserves Places. `location-analytics.js`
+  supplies web Analytics with cross-day patterns and an optional daily map at
+  the end. Maps and photos remain shared assets, never daily copies.
+  Inferred photo locations are display-only and never replace original EXIF.
+- `map_packs.py` manages PMTiles coverage, downloads, and verified manifests.
+  The vanilla canvas/MVT renderer in `offline-map.js` reads local byte ranges.
+  Keep old packs usable during replacement and invalidate caches by checksum.
+  Web/native readers with an obsolete `?v=` checksum receive409 plus
+  `X-Datapom-Error: map_version_changed`; the viewer refreshes its manifest once
+  per obsolete URL. Version checks and opening streams share the publication
+  lock so a range cannot combine an old directory with newly replaced bytes.
+- `media_routes.py` supplies web/mobile adapters. Media, maps, and tracking live
+  beside the configured journal file so route tests remain isolated. Dynamic
+  store transactions share the app RLock; streaming files are excluded.
+- `media-ui.js`, `media-entry.js`, `photo-edit.js`, and `media-settings.js` share
+  the journal theme. Android bundles those assets and serves them from its private
+  WebView origin through `MediaJournalView`; do not load remote bridge content.
+- Photo groups carry a permanent `tags` list (default `[]` on both stores).
+  Temporary choices derive from tagged photos and appear only while typing;
+  permanent choices and the current photo's selected tags share one row without
+  separate kind headings. Changing permanence never removes a tag from a photo.
+  The shared circle picker, kind toggle, and gallery are in
+  `media-ui.js`. Android's `PhotoGalleryDialog` queries only granted images and
+  supports partial access; `MediaStore.importUri` requests original bytes with
+  `ACCESS_MEDIA_LOCATION` so EXIF GPS survives import. Missing GPS stays unknown.
+  Journal insertion passes its date to the native gallery: **This day** uses
+  `PhotoGalleryDates` to match `DATE_TAKEN` in the phone's local time zone, and
+  **All photos** includes other days and unknown dates without clearing selections.
+  Mobile Photos starts with themed From/To calendars and an offline thumbnail
+  map; capture dates (journal-date fallback) filter both pins and the gallery.
+  Overlapping pins offer photo choices; unlocated photos remain in the gallery.
+- Android's `MediaStore`/`MediaSync` preserve offline files and conflicting metadata;
+  `LocationTrackingService` records permission-enabled visits and outings. USB
+  updates must preserve `files`, `shared_prefs`, and `app_webview` together.
+- `discord_journal.py` and `discord_receiver.py` implement an optional signed,
+  single-user message-action inbox. Live use requires a user-owned Discord
+  application and hosted receiver. Never use personal Discord account tokens.
+- See `docs/PHOTOS_PLACES.md`, `docs/DISCORD_INBOX.md`, and the September 8 design
+  record. New tests include the media/map Python suites, standalone Node contracts,
+  and isolated Android storage instrumentation. Device lock prevents visual QA;
+  storage tests alone must not be reported as a completed visual check.
 
 ### Future features
 

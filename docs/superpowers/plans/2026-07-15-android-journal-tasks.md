@@ -1,19 +1,18 @@
-# TodoPup Android Journal + Tasks Implementation Plan
+# Datapom Android Journal + Tasks Implementation Plan
 
 **Date:** 2026-07-15  
 **Status:** In progress  
-**Goal:** Expand the existing TodoPup Usage Android app into a polished private
-TodoPup companion that creates and edits journal entries and manages tasks over
-Tailscale, without introducing a second source of truth.
+**Goal:** Expand the existing Datapom Usage Android app into a polished private
+Datapom companion that creates and edits journal entries and manages tasks over
+an authorized USB connection, without introducing a second source of truth.
 
 ## Product contract
 
 - The Mac remains authoritative. Android never edits or synchronizes the JSON
   files directly; it calls authenticated Flask endpoints that delegate to the
   existing pure `journal.py` and `todo.py` behavior.
-- Tailscale is the private transport. The user installs Tailscale separately on
-  Android and macOS. TodoPup stores an HTTPS `*.ts.net` base URL and uses normal
-  HTTP requests; it does not embed a VPN SDK or manage the VPN.
+- An ADB reverse tunnel is the only transport. Datapom accepts the Mac loopback
+  origin and rejects LAN or remote endpoints.
 - Phone writes are local-first. A journal or task mutation is persisted to an
   Android outbox before transmission, survives process death/reboot, and is
   retried by WorkManager when the Mac is reachable.
@@ -29,7 +28,7 @@ The Android app should feel like the web app, not like an unrelated settings
 utility:
 
 - Dark background/panels, amber accent, muted text, danger red, monospace type.
-- Reuse the web app's TodoPup/Pompompurin launcher, mascot, integration, and
+- Reuse the web app's Datapom/Pompompurin launcher, mascot, integration, and
   seven mood images. Raster files are copied into Android resources rather than
   fetched from the Flask server.
 - Bottom navigation: **Journal**, **Tasks**, **Sync**, **Settings**.
@@ -55,12 +54,10 @@ All mobile routes live under `/api/mobile`. JSON errors use
 `{"ok": false, "error": {"code": "...", "message": "..."}}`. Device routes
 authenticate with `Authorization: Bearer <device token>`.
 
-### Enrollment and device lifecycle
+### USB pairing and device lifecycle
 
-- `POST /api/mobile/enroll` exchanges a short-lived, one-use setup token for a
-  scoped device token and device id.
-- The Manage page generates a QR deep link containing the Tailscale base URL and
-  enrollment token. Long-lived credentials are never placed in that QR.
+- The Mac USB helper creates a scoped device token and configures it through an
+  ADB-triggered app deep link.
 - Device records contain id, display name, token digest, scopes, created,
   last_seen, and revoked state. The plaintext token is shown only once.
 - Manage UI lists and revokes enrolled devices. Journal access uses a distinct
@@ -127,16 +124,15 @@ authenticate with `Authorization: Bearer <device token>`.
 - Existing `UsagePushWorker` and usage settings remain separate so revoking a
   journal device does not break phone-usage uploads.
 
-## Mac availability and Tailscale
+## Mac availability and USB
 
-- Configure `tailscale serve --bg 5001` to proxy private HTTPS to
-  `127.0.0.1:5001`; do not expose Flask on the LAN and do not use Funnel.
-- Add an optional always-on-at-login mode. In this mode the server does not run
-  the tab auto-quit watchdog, and the dock app opens the existing server.
+- Configure `adb reverse tcp:5001 tcp:5001`; keep Flask on `127.0.0.1:5001` and
+  never expose it on the LAN.
+- Add an optional USB watcher at login; it starts the server when needed.
 - Replace the Flask development server in always-on mode with a production WSGI
   runner while retaining the current local development command.
-- Surface a readiness endpoint and actionable Android errors for: Tailscale off,
-  Mac asleep, server stopped, token revoked, and certificate/hostname mismatch.
+- Surface actionable Android errors for: cable disconnected, USB authorization
+  missing, server stopped, and token revoked.
 
 ## Security and consistency requirements
 
@@ -175,7 +171,7 @@ authenticate with `Authorization: Bearer <device token>`.
 
 ### Manual end-to-end
 
-1. Enroll by QR while both devices are on Tailscale.
+1. Pair through the Mac USB helper.
 2. Create a rich entry with mood, existing/new tags, numeric capture, mention,
    transcript text, and an inline task; confirm desktop parity.
 3. Queue an entry with the Mac unavailable, restart the phone app, restore the
@@ -195,8 +191,7 @@ authenticate with `Authorization: Bearer <device token>`.
    adding, transcript review, retry/conflict UI.
 3. **Tasks:** active/archive reads, create/edit/toggle, notes/subtasks, queued
    mutations and conflicts.
-4. **Operational mode:** always-on Mac launcher, Tailscale setup/status docs,
-   readiness and diagnostics.
+4. **Operational mode:** USB watcher, loopback server, readiness and diagnostics.
 5. **Hardening and polish:** full regression suite, Android build, device/browser
    inspection, accessibility, security review, and updated README/SETUP/AGENTS.
 
@@ -206,7 +201,7 @@ authenticate with `Authorization: Bearer <device token>`.
 - Offline or unreachable-Mac writes survive and later deliver exactly once.
 - Conflicting edits cannot silently destroy either version.
 - All requested journal, mood, tag, transcript, tag-add, and task-management
-  flows are usable and visually consistent with TodoPup web.
+  flows are usable and visually consistent with Datapom web.
 - Existing phone-usage integration still works.
 - Full Python tests, Android tests/build, and affected JavaScript syntax checks
   pass; the mobile UI is inspected on an Android-sized viewport/device.
