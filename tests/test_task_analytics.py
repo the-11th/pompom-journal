@@ -19,6 +19,22 @@ def test_completion_throughput_counts_by_day_in_range():
     assert todo.completion_throughput(arch, end="2026-06-15") == {"2026-06-15": 2}
 
 
+def test_completion_summary_includes_quiet_days_in_daily_mean():
+    archive = [{"completed": "2026-09-04T10:00:00"}, {"completed": "2026-09-10T10:00:00"}]
+    summary = todo.completion_summary(archive, "2026-09-04", "2026-09-10")
+    assert summary == {"total": 2, "best_day": 1, "days": 7,
+                       "mean_per_day": 2 / 7, "first": "2026-09-04", "last": "2026-09-10"}
+    assert todo.completion_summary(archive, "2026-09-01", "2026-09-10")["mean_per_day"] == .2
+
+
+def test_completion_summary_infers_missing_bounds_and_handles_empty_ranges():
+    archive = [{"completed": "2026-09-04T10:00:00"}, {"completed": "2026-09-10T10:00:00"}]
+    assert todo.completion_summary(archive)["days"] == 7
+    assert todo.completion_summary([], "2026-09-04", "2026-09-10")["mean_per_day"] == 0
+    assert todo.completion_summary([])["mean_per_day"] is None
+    assert todo.completion_summary(archive, "2026-09-11", "2026-09-01")["days"] == 0
+
+
 def test_completed_late_count():
     arch = [_arch("late", "2026-06-16T10:00:00", due="2026-06-15T10:00:00"),
             _arch("ontime", "2026-06-15T08:00:00", due="2026-06-15T10:00:00"),

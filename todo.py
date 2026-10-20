@@ -31,10 +31,10 @@ DEFAULT_TAG_COLOR = "#8a8f99"
 _HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 # Allowlist for tag names (after they've been stripped + lowercased). Only
-# lowercase letters, digits, spaces, periods, underscores and hyphens are allowed. This
+# Unicode letters/numbers, ASCII spaces, periods, underscores and hyphens are allowed. This
 # makes the "tag names can never carry HTML/JS/CSS" invariant explicit instead
 # of relying solely on Jinja auto-escaping downstream.
-_TAG_NAME_RE = re.compile(r"^[a-z0-9 ._-]+$")
+_TAG_NAME_RE = re.compile(r"[\w .-]+")
 _TASK_ID_RE = re.compile(
     r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{4}-[0-9a-f]{12})$", re.IGNORECASE)
@@ -68,6 +68,18 @@ def set_difficulty(data, task_id, difficulty):
                     t.pop("difficulty", None)
                 return data
     return data
+
+
+def task_ref_index(data, task_ids):
+    """Current state of linked tasks, including removed and archived tasks."""
+    result = {task_id: {"done": False, "status": "missing", "title": ""}
+              for task_id in task_ids}
+    for bucket, status in (("active", "active"), ("archive", "done"), ("expired", "expired")):
+        for task in data.get(bucket, []):
+            if task.get("id") in result:
+                result[task["id"]] = {"done": status == "done", "status": status,
+                                      "title": task.get("title", "")}
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -217,7 +229,8 @@ def set_tag_color(data, name, color):
 
     The tag name is normalized for consistency: stripped of surrounding
     whitespace and lowercased (so "Work", "work " and "WORK" are one tag). It
-    must then match the allowlist `^[a-z0-9 ._-]+$` -- this rejects HTML/JS/CSS
+    must then fully match Unicode letters/numbers plus ASCII space, dot,
+    underscore and hyphen -- this rejects HTML/JS/CSS
     metacharacters (<, >, ;, {, quotes, &, ...) so a tag name can never carry
     an injection payload, independent of template escaping.
     `color` must be a valid hex string -- #rgb or #rrggbb. Raises ValueError
@@ -226,7 +239,7 @@ def set_tag_color(data, name, color):
     name = (name or "").strip().lower()
     if not name:
         raise ValueError("Tag name must not be empty")
-    if not _TAG_NAME_RE.match(name):
+    if not _TAG_NAME_RE.fullmatch(name):
         raise ValueError(f"Invalid tag name: {name!r}")
     if not isinstance(color, str) or not _HEX_COLOR_RE.match(color):
         raise ValueError(f"Invalid hex color: {color!r}")
@@ -385,6 +398,8 @@ def time_remaining(due, now=None):
     Examples: "", "3 day(s) left", "5 hour(s) left", "due soon",
     "overdue by 2 day(s)", "overdue by 5 hour(s)", "overdue".
 
+    Future deadlines use hours below two days, then "due soon" below an hour.
+
     Note: the instant a task passes its due time (delta == 0) it is treated
     as overdue. Within the first hour past due we just say "overdue" -- we
     never print "overdue by 0 hour(s)".
@@ -397,8 +412,7 @@ def time_remaining(due, now=None):
     seconds = delta.total_seconds()
 
     if seconds <= 0:
-        # Overdue: report how far past we are. Mirrors the forward-looking
-        # tiers below (days, then hours, then a sub-hour catch-all).
+        # Overdue: retain the existing days/hours/sub-hour tiers.
         past = -seconds
         if past >= 86400:
             return f"overdue by {int(past // 86400)} day(s)"
@@ -408,7 +422,7 @@ def time_remaining(due, now=None):
         # "overdue" -- never "overdue by 0 hour(s)".
         return "overdue"
 
-    if seconds >= 86400:
+    if seconds >= 2 * 86400:
         return f"{int(seconds // 86400)} day(s) left"
     if seconds >= 3600:
         return f"{int(seconds // 3600)} hour(s) left"
@@ -687,6 +701,43 @@ def mobile_task_view(data, task_id):
     return result
 
 
+_MOBILE_TASK_FIELDS = (
+    "title", "due", "recurrence", "tags", "notes", "subtasks", "difficulty", "done", "status")
+
+
+class TaskConflictError(ValueError):
+    def __init__(self, current):
+        super().__init__("Task changed on the Mac. Review both versions before syncing.")
+        self.current = current
+
+
+def validate_mobile_task_base(data, task_id, base, changes=None):
+    """Guard only edited fields; deletion guards the complete editable snapshot.
+
+    HTTP adapters call this only when a client supplies ``base``. Older clients
+    retain their existing contract. Matching the requested value is also safe:
+    another device may already have made exactly the same change.
+    """
+    if not isinstance(base, dict) or set(base) - set(_MOBILE_TASK_FIELDS):
+        raise ValueError("Invalid task baseline")
+    fields = set(_MOBILE_TASK_FIELDS) if changes is None else (
+        set(changes).intersection(_MOBILE_TASK_FIELDS) | {"status"})
+    if not fields.issubset(base):
+        raise ValueError("Task baseline is missing edited fields")
+    current = mobile_task_view(data, task_id)
+    if current is None:
+        raise TaskConflictError(None)
+    for field in fields:
+        value = current.get(field)
+        if value == base[field]:
+            continue
+        if changes is not None and field in changes and value == changes[field]:
+            continue
+        if field == "status" and changes is not None and "done" in changes and current["done"] == changes["done"]:
+            continue
+        raise TaskConflictError(current)
+
+
 def mobile_tasks(data):
     """All task buckets in a stable API representation."""
     result = []
@@ -694,6 +745,20 @@ def mobile_tasks(data):
         for task in data.get(bucket, []):
             result.append(mobile_task_view(data, task.get("id")))
     return result
+
+
+def reopen_task(data, task_id):
+    """Move a completed task back to active, preserving its content."""
+    for index, task in enumerate(data.get("archive", [])):
+        if task.get("id") != task_id:
+            continue
+        reopened = data["archive"].pop(index)
+        reopened.pop("completed", None)
+        reopened.pop("difficulty", None)
+        data["active"].append(reopened)
+        sort_active(data["active"])
+        break
+    return data
 
 
 def delete_task(data, task_id):
@@ -834,6 +899,25 @@ def completion_throughput(archive, start=None, end=None):
         if _in_range(d, start, end):
             out[d] = out.get(d, 0) + 1
     return out
+
+
+def completion_summary(archive, start=None, end=None):
+    """Completion totals and mean per calendar day, including quiet days."""
+    counts = completion_throughput(archive, start, end)
+    dates = sorted(counts)
+    first = start or (dates[0] if dates else None)
+    last = end or (dates[-1] if dates else None)
+    days = 0
+    if first and last:
+        try:
+            days = max(0, (datetime.fromisoformat(last).date()
+                           - datetime.fromisoformat(first).date()).days + 1)
+        except (TypeError, ValueError):
+            pass
+    total = sum(counts.values())
+    return {"total": total, "best_day": max(counts.values(), default=0),
+            "days": days, "mean_per_day": total / days if days else None,
+            "first": first, "last": last}
 
 
 def completed_late_count(archive, start=None, end=None):
