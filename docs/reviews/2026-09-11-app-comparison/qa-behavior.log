@@ -1,0 +1,12 @@
+✔ saving added tags shows selected chips and keeps only permanent choices on other days (739.444875ms)
+✔ tag save replies preserve newer typing and failed saves keep the chosen kind (283.047417ms)
+✔ making a temporary tag permanent updates the existing chip without duplicating it (208.780875ms)
+✔ native journal task links use cached state and open the native task after saving (179.080541ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1597.343083

@@ -1,0 +1,230 @@
+[
+  {
+    "width": 393,
+    "mode": "reading",
+    "title": "Datapom journal",
+    "body": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "paragraph": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "27.2px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "button": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "12px",
+      "lineHeight": "16.2px",
+      "color": "rgb(224, 169, 85)"
+    },
+    "record": {
+      "x": 343,
+      "y": 289.609375,
+      "width": 26,
+      "height": 26
+    },
+    "recordDot": {
+      "x": 352,
+      "y": 298.609375,
+      "width": 8,
+      "height": 8
+    },
+    "topGap": 6,
+    "rightGap": 6,
+    "tagLabels": [
+      "people"
+    ],
+    "numericLabels": [
+      "energy",
+      "energy · score"
+    ],
+    "tagInput": {
+      "x": 18,
+      "y": 519.28125,
+      "width": 162.6875,
+      "height": 34.375
+    },
+    "kindToggle": {
+      "x": 188.6875,
+      "y": 519.28125,
+      "width": 186.3125,
+      "height": 36.0625
+    },
+    "pageOverflow": false
+  },
+  {
+    "width": 393,
+    "mode": "editing",
+    "title": "Datapom journal",
+    "body": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "paragraph": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "button": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "12px",
+      "lineHeight": "16.2px",
+      "color": "rgb(224, 169, 85)"
+    },
+    "record": {
+      "x": 343,
+      "y": 289.609375,
+      "width": 26,
+      "height": 26
+    },
+    "recordDot": {
+      "x": 352,
+      "y": 298.609375,
+      "width": 8,
+      "height": 8
+    },
+    "topGap": 6,
+    "rightGap": 6,
+    "tagLabels": [
+      "people"
+    ],
+    "numericLabels": [
+      "energy",
+      "energy · score"
+    ],
+    "tagInput": {
+      "x": 18,
+      "y": 524.0625,
+      "width": 162.6875,
+      "height": 34.375
+    },
+    "kindToggle": {
+      "x": 188.6875,
+      "y": 524.0625,
+      "width": 186.3125,
+      "height": 36.0625
+    },
+    "pageOverflow": false
+  },
+  {
+    "width": 360,
+    "mode": "reading",
+    "title": "Datapom journal",
+    "body": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "paragraph": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "27.2px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "button": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "12px",
+      "lineHeight": "16.2px",
+      "color": "rgb(224, 169, 85)"
+    },
+    "record": {
+      "x": 310,
+      "y": 289.609375,
+      "width": 26,
+      "height": 26
+    },
+    "recordDot": {
+      "x": 319,
+      "y": 298.609375,
+      "width": 8,
+      "height": 8
+    },
+    "topGap": 6,
+    "rightGap": 6,
+    "tagLabels": [
+      "people"
+    ],
+    "numericLabels": [
+      "energy",
+      "energy · score"
+    ],
+    "tagInput": {
+      "x": 18,
+      "y": 519.28125,
+      "width": 129.6875,
+      "height": 34.375
+    },
+    "kindToggle": {
+      "x": 155.6875,
+      "y": 519.28125,
+      "width": 186.3125,
+      "height": 36.0625
+    },
+    "pageOverflow": false
+  },
+  {
+    "width": 360,
+    "mode": "editing",
+    "title": "Datapom journal",
+    "body": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "paragraph": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "16px",
+      "lineHeight": "24px",
+      "color": "rgb(230, 230, 230)"
+    },
+    "button": {
+      "font": "\"Courier New\", ui-monospace, \"SF Mono\", Menlo, monospace",
+      "size": "12px",
+      "lineHeight": "16.2px",
+      "color": "rgb(224, 169, 85)"
+    },
+    "record": {
+      "x": 310,
+      "y": 289.609375,
+      "width": 26,
+      "height": 26
+    },
+    "recordDot": {
+      "x": 319,
+      "y": 298.609375,
+      "width": 8,
+      "height": 8
+    },
+    "topGap": 6,
+    "rightGap": 6,
+    "tagLabels": [
+      "people"
+    ],
+    "numericLabels": [
+      "energy",
+      "energy · score"
+    ],
+    "tagInput": {
+      "x": 18,
+      "y": 524.0625,
+      "width": 129.6875,
+      "height": 34.375
+    },
+    "kindToggle": {
+      "x": 155.6875,
+      "y": 524.0625,
+      "width": 186.3125,
+      "height": 36.0625
+    },
+    "pageOverflow": false
+  }
+]
