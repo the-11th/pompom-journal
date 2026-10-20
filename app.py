@@ -87,12 +87,12 @@ def _serialize_store_transactions():
                             'spotify_analytics', 'rescuetime_detail'}:
         return
     _mobile_lock.acquire()
-    g.todopup_store_locked = True
+    g.datapom_store_locked = True
 
 
 @app.teardown_request
 def _release_store_transaction(error=None):
-    if g.pop('todopup_store_locked', False):
+    if g.pop('datapom_store_locked', False):
         _mobile_lock.release()
 
 
@@ -1084,7 +1084,7 @@ def _recent_dates(days, now=None):
 def _run_provider_sync(provider, fetch, **kwargs):
     # Sync routes fetch outside the shared store lock. Legacy OAuth callbacks
     # already hold that lock, so they must not acquire locks in reverse order.
-    provider_lock = nullcontext() if g.get('todopup_store_locked', False) else _provider_sync_locks[provider]
+    provider_lock = nullcontext() if g.get('datapom_store_locked', False) else _provider_sync_locks[provider]
     with provider_lock:
         with _mobile_lock:
             initial_integrations = integrations.load(integrations_file())
@@ -1160,8 +1160,8 @@ def _integrations_context():
     )
 
 
-# Always-latest debug APK, published by .github/workflows/android.yml as a
-# GitHub Release asset named phone-usage.apk. Reachable from the phone anywhere.
+# Always-latest Datapom APK. Keep the legacy download alias so this also works
+# with releases published before the workflow introduced datapom.apk.
 PHONE_APK_URL = (
     "https://github.com/the-11th/pompom-journal/releases/latest/download/phone-usage.apk"
 )

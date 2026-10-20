@@ -82,3 +82,11 @@ launchctl bootout gui/$UID/com.todopup.usb-sync
 
 The LaunchAgent is `~/Library/LaunchAgents/com.todopup.usb-sync.plist`. Disabling
 it does not delete Mac or phone data; manual USB sync continues to work.
+The service identifier is retained for compatibility with existing installations.
+
+## Configuration
+
+The persistent server accepts `DATAPOM_LISTEN` (default `127.0.0.1:5001`).
+The USB helper accepts `DATAPOM_USB_TOKEN_FILE`, `DATAPOM_SKIP_SERVER_CHECK`,
+and `DATAPOM_USAGE_SYNC_WAIT_SECONDS`. Their former `TODOPUP_*` names still work;
+the Datapom names take precedence when both are provided.

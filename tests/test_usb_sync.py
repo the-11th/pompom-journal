@@ -55,7 +55,8 @@ def _python_adapter(tmp_path, root):
     return wrapper
 
 
-def test_usb_sync_creates_reverse_tunnel_and_triggers_full_sync(tmp_path):
+@pytest.mark.parametrize('env_prefix', ['DATAPOM', 'TODOPUP'])
+def test_usb_sync_creates_reverse_tunnel_and_triggers_full_sync(tmp_path, env_prefix):
     root = Path(__file__).parents[1]
     calls = tmp_path / "adb-calls"
     adb = tmp_path / "adb"
@@ -75,6 +76,12 @@ def test_usb_sync_creates_reverse_tunnel_and_triggers_full_sync(tmp_path):
         "TODOPUP_SKIP_SERVER_CHECK": "1",
         "TODOPUP_USAGE_SYNC_WAIT_SECONDS": "0",
     })
+    if env_prefix == 'DATAPOM':
+        for key in ('USB_TOKEN_FILE', 'SKIP_SERVER_CHECK', 'USAGE_SYNC_WAIT_SECONDS'):
+            env[f'DATAPOM_{key}'] = env[f'TODOPUP_{key}']
+        # The new name wins when both are set; never write the old token path.
+        env['TODOPUP_USB_TOKEN_FILE'] = str(tmp_path / 'unused-token')
+        env['TODOPUP_USAGE_SYNC_WAIT_SECONDS'] = '30'
 
     result = subprocess.run(
         ["/bin/bash", str(root / "scripts" / "sync_android_usb.sh")],
@@ -91,6 +98,7 @@ def test_usb_sync_creates_reverse_tunnel_and_triggers_full_sync(tmp_path):
     assert any("todopup://usage" in command for command in commands)
     assert any("todopup://sync" in command for command in commands)
     assert "secret-device-token" not in result.stdout
+    assert not (tmp_path / 'unused-token').exists()
 
 
 @pytest.mark.parametrize('valid', [True, False])

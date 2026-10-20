@@ -6,7 +6,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ADB="${ADB:-${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb}"
 PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
-TOKEN_FILE="${TODOPUP_USB_TOKEN_FILE:-$ROOT/data/usb-sync-token}"
+# Older launchers may still supply the former environment variable names.
+TOKEN_FILE="${DATAPOM_USB_TOKEN_FILE:-${TODOPUP_USB_TOKEN_FILE:-$ROOT/data/usb-sync-token}}"
 BASE_URL="http://127.0.0.1:5001"
 
 if [ ! -x "$ADB" ]; then
@@ -24,7 +25,7 @@ fi
 
 mkdir -p "$ROOT/data"
 server_ready() { curl -fsS --connect-timeout 2 --max-time 2 "$BASE_URL/" >/dev/null 2>&1; }
-if [ "${TODOPUP_SKIP_SERVER_CHECK:-}" != "1" ]; then
+if [ "${DATAPOM_SKIP_SERVER_CHECK:-${TODOPUP_SKIP_SERVER_CHECK:-}}" != "1" ]; then
   if ! server_ready; then
     nohup "$PYTHON" "$ROOT/phone_server.py" >> "$ROOT/data/server.log" 2>&1 &
     ready=0
@@ -80,6 +81,7 @@ if token != cached_token:
         if os.path.exists(temporary):
             os.unlink(temporary)
 os.chmod(token_path, 0o600)
+# Keep the legacy scheme so the helper also works before the phone is updated.
 for url, value in ((base_url, token), (base_url + "/integrations/phone/ingest", usage_token)):
     print("todopup://config?" + urllib.parse.urlencode({"url": url, "token": value}))
 ' "$BASE_URL" "$TOKEN_FILE")"
@@ -105,7 +107,7 @@ sleep 1
 start_activity "$USAGE_PAIR_URI"
 sleep 1
 start_activity todopup://usage
-sleep "${TODOPUP_USAGE_SYNC_WAIT_SECONDS:-5}"
+sleep "${DATAPOM_USAGE_SYNC_WAIT_SECONDS:-${TODOPUP_USAGE_SYNC_WAIT_SECONDS:-5}}"
 start_activity todopup://sync
 
 echo "Datapom USB sync started for entries, tasks, tags, and phone usage."

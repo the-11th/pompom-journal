@@ -3,7 +3,7 @@
 // library loaded as the global `qrcode`; no CDN, no server dependency.
 //
 // Two QRs are drawn: the public APK download URL, and (only in the once-only
-// token-reveal path) a todopup://config deep link carrying endpoint + token.
+// token-reveal path) a Datapom configuration link carrying endpoint + token.
 // We draw to a <canvas> with a white quiet-zone box + near-black modules for
 // reliable scanning, framed by the themed border on the container via CSS.
 (function () {

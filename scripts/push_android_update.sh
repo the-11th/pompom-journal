@@ -25,7 +25,7 @@ if ! "$ADB" shell pm path "$PACKAGE" 2>/dev/null | grep -q '^package:'; then
   exit 0
 fi
 
-BACKUP_DIR="$(mktemp -d -t todopup-phone-data.XXXXXX)"
+BACKUP_DIR="$(mktemp -d -t datapom-phone-data.XXXXXX)"
 BACKUP="$BACKUP_DIR/phone-data.tar"
 RESTORE_DIR="$BACKUP_DIR/restore"
 trap 'rm -rf "$BACKUP_DIR"' EXIT
@@ -51,7 +51,7 @@ if [ ! -s "$BACKUP" ] || ! tar -tf "$BACKUP" >/dev/null 2>&1; then
   exit 3
 fi
 
-PERSISTENT_BACKUP="$ROOT/data/phone-backups/todopup-phone-data-$(date +%Y%m%d-%H%M%S).tar"
+PERSISTENT_BACKUP="$ROOT/data/phone-backups/datapom-phone-data-$(date +%Y%m%d-%H%M%S).tar"
 mkdir -p "$(dirname "$PERSISTENT_BACKUP")"
 cp "$BACKUP" "$PERSISTENT_BACKUP"
 mkdir -p "$RESTORE_DIR"
@@ -73,7 +73,7 @@ echo "Recovery backup saved to $PERSISTENT_BACKUP"
 for name in todopup_journal_outbox.xml todopup_mobile_ui.xml todopup_task_outbox.xml todopup_usage.xml todopup_tracking.xml; do
   file="$RESTORE_DIR/shared_prefs/$name"
   [ -f "$file" ] || continue
-  remote="/data/local/tmp/todopup-recover-$name"
+  remote="/data/local/tmp/datapom-recover-$name"
   verified="$BACKUP_DIR/verified-$name"
   "$ADB" push "$file" "$remote" >/dev/null
   "$ADB" shell chmod 644 "$remote"
@@ -86,7 +86,7 @@ done
 if [ -d "$RESTORE_DIR/files" ] || [ -d "$RESTORE_DIR/app_webview" ]; then
   while IFS= read -r -d '' file; do
     relative="${file#"$RESTORE_DIR/"}"
-    remote="/data/local/tmp/todopup-recover-file"
+    remote="/data/local/tmp/datapom-recover-file"
     "$ADB" shell run-as "$PACKAGE" mkdir -p "'$(dirname "$relative")'"
     "$ADB" push "$file" "$remote" >/dev/null
     "$ADB" shell chmod 644 "$remote"

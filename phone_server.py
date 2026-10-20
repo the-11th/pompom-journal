@@ -19,7 +19,7 @@ from app import app  # noqa: E402
 if __name__ == "__main__":
     serve(
         app,
-        listen=os.environ.get("TODOPUP_LISTEN", "127.0.0.1:5001"),
+        listen=os.environ.get("DATAPOM_LISTEN", os.environ.get("TODOPUP_LISTEN", "127.0.0.1:5001")),
         threads=4,
         clear_untrusted_proxy_headers=True,
     )
