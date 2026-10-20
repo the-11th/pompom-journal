@@ -3,9 +3,7 @@
   <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
        width="56" height="56" alt="pompompurin">
 {% endblock %}
-{% block brand_title %}
-  <span class="site-title">journal</span>
-{% endblock %}
+{% block brand_title %}{% endblock %}
 {% block nav %}
   <a href="{{ url_for('journal_today') }}">New entry</a>
   <a href="{{ url_for('journal_analytics') }}">Analytics</a>
@@ -40,4 +38,10 @@
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='analytics.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='offline-map.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='location-day.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-ui.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='location-day-view.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='location-analytics.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-settings.js') }}" defer></script>
 {% endblock %}

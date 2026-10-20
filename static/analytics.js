@@ -12,12 +12,13 @@
   // ----- state -----
   var ENDPOINT = root.dataset.endpoint;
   var _data = { sections: [], entries: [], date_range: { min: null, max: null } };
-  var _from = null, _to = null;
+  var _from = null, _to = null, _customRange = false;
   var _activeTab = "overview";
   var _category = "overview";   // active primary category (see CATEGORIES)
   var _lastFetch = 0;
+  var _fetchVersion = 0;
   var _tagQuery = "";       // current tag in the Tag detail tab
-  var _tagCache = {};       // {name: payload} cache for /tag/<name>/overview
+  var _tagCache = Object.create(null);       // {name: payload} cache for /tag/<name>/overview
   // Collapsed chart boxes by chart id. In-memory for this page visit only, so
   // collapse survives tab/category switches + re-renders but resets on reload.
   var _collapsed = {};
@@ -33,6 +34,8 @@
   // categories by CATEGORIES below.
   var PANELS = [
     { id: "overview", label: "Overview" },
+    { id: "photos", label: "Photos" },
+    { id: "places", label: "Places" },
     { id: "mood", label: "Mood", needs: hasMood },
     { id: "sleep", label: "Sleep", needs: hasSleep },
     { id: "numeric", label: "Numeric", needs: hasNumeric },
@@ -56,6 +59,7 @@
   // has a single sub-tab (itself) so it never shows a secondary row.
   var CATEGORIES = [
     { id: "overview", label: "Overview", tabs: ["overview"] },
+    { id: "memories", label: "Memories", tabs: ["photos", "places"] },
     { id: "health", label: "Health", tabs: ["mood", "sleep"] },
     { id: "data", label: "Data", tabs: ["numeric", "tags"] },
     { id: "digital", label: "Digital", tabs: ["productivity", "music", "usage"] },
@@ -87,7 +91,7 @@
   }
 
   function hasRescueTime() {
-    return _data.entries.some(function (e) { return rescueTimeOf(e); });
+    return _data.rescuetime_connected || _data.entries.some(function (e) { return rescueTimeOf(e); });
   }
 
   function hasMusic() {
@@ -138,6 +142,45 @@
     return out;
   }
 
+  // Mirrors todo.completion_summary; quiet calendar days count in the mean.
+  function completionSummary(counts, start, end) {
+    var dates = Object.keys(counts).sort();
+    var first = start || dates[0] || null, last = end || dates[dates.length - 1] || null;
+    var days = first && last ? Math.max(0,
+      (Date.parse(last + "T00:00:00Z") - Date.parse(first + "T00:00:00Z")) / 86400000 + 1) : 0;
+    if (!Number.isFinite(days)) days = 0;
+    var values = dates.map(function (date) { return counts[date]; });
+    var total = values.reduce(function (sum, value) { return sum + value; }, 0);
+    return {total: total, best_day: values.length ? Math.max.apply(null, values) : 0,
+      days: days, mean_per_day: days ? total / days : null, first: first, last: last};
+  }
+
+  function renderCompletionBars(container, byDay, c) {
+    var days = Object.keys(byDay).sort();
+    if (!days.length) { U.empty(container, "No completed tasks in this range."); return; }
+    var w = U.chartWidth(), h = 160, pad = 28;
+    var svg = U.svg(w, h);
+    var summary = completionSummary(byDay, _from, _to);
+    var plotW = w - pad - 10, plotH = h - pad - 10;
+    var bw = plotW / summary.days, inset = Math.min(1, bw / 4);
+    var first = Date.parse(summary.first + "T00:00:00Z");
+    U.drawGrid(svg, pad, 10, plotW, plotH, 3, c);
+    days.forEach(function (d) {
+      var offset = (Date.parse(d + "T00:00:00Z") - first) / 86400000;
+      var bh = plotH * (byDay[d] / summary.best_day);
+      U.drawBar(svg, pad + offset * bw + inset, h - pad - bh, bw - inset * 2, bh, c.accent);
+      var title = U.svgEl("title", {}); title.textContent = d + ": " + byDay[d];
+      svg.lastElementChild.appendChild(title);
+    });
+    U.drawAxis(svg, pad, 10, plotW, plotH,
+      summary.first === summary.last ? [summary.first] : [summary.first, summary.last], c);
+    U.text(svg, 0, 14, summary.best_day, c.muted, {size: 10});
+    U.text(svg, 0, h - pad + 2, "0", c.muted, {size: 10});
+    container.appendChild(svg);
+    U.statsRow(container, [["total", summary.total], ["best day", summary.best_day],
+                         ["mean/day", U.fmt(summary.mean_per_day)]]);
+  }
+
   // ----- color resolution (live, from CSS vars) -----
   function colors() {
     var cs = getComputedStyle(document.documentElement);
@@ -153,6 +196,28 @@
   var SVGNS = "http://www.w3.org/2000/svg";
 
   var U = {
+    chartWidth: function (preferred) {
+      var panel = root.querySelector(".analytics-panel");
+      if (!panel) return preferred || 600;
+      var style = getComputedStyle(panel);
+      var available = panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      return Math.min(preferred || 600, Math.max(1, Math.floor(available)));
+    },
+    dateX: function (series, index, left, width) {
+      function time(point) { return Date.parse(typeof point === "string" ? point : point.date); }
+      var first = time(series[0]), last = time(series[series.length - 1]);
+      return first === last ? left + width / 2 : left + width * (time(series[index]) - first) / (last - first);
+    },
+    dateLabels: function (series) {
+      function date(point) { return typeof point === "string" ? point : point.date; }
+      var first = date(series[0]), last = date(series[series.length - 1]);
+      return first === last ? [first] : [first, last];
+    },
+    dateBands: function (series, left, width) {
+      var first = series[0].date, last = series[series.length - 1].date;
+      var step = width / (dayDiff(first, last) + 1);
+      return {width: step, x: function (index) { return left + step * dayDiff(first, series[index].date); }};
+    },
     svgEl: function (tag, attrs) {
       var el = document.createElementNS(SVGNS, tag);
       for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
@@ -169,18 +234,53 @@
       return s;
     },
 
-    // Like svg(), but renders at its natural pixel size (small) and only
-    // shrinks if it would overflow the panel. Use for grid/heatmap charts so
-    // a few columns stay small instead of being stretched to full width.
-    svgFixed: function (width, height) {
-      var s = U.svgEl("svg", {
-        viewBox: "0 0 " + width + " " + height,
-        width: width, height: height,
-        class: "chart-svg-fixed",
-        preserveAspectRatio: "xMinYMin meet",
+    scrollTable: function (container, table, name) {
+      var region = document.createElement("div");
+      region.className = "chart-matrix";
+      region.tabIndex = 0;
+      region.setAttribute("role", "region");
+      region.setAttribute("aria-label", name + "; scroll for more columns");
+      table.querySelectorAll("tr:first-child th:not(:first-child)").forEach(function (th) { th.scope = "col"; });
+      table.querySelectorAll("tr:not(:first-child) th:first-child").forEach(function (th) { th.scope = "row"; });
+      region.appendChild(table);
+      container.appendChild(region);
+    },
+
+    activityMatrix: function (container, dates, rows, c, name) {
+      var matrix = document.createElement("div");
+      matrix.className = "chart-matrix";
+      matrix.tabIndex = 0;
+      matrix.setAttribute("role", "region");
+      matrix.setAttribute("aria-label", name + "; scroll for more dates");
+      var cell = 14, step = 17, width = Math.max(cell, dates.length * step - 3);
+      function addRow(labelText, height) {
+        var row = document.createElement("div"), label = document.createElement("span");
+        row.className = "chart-matrix-row";
+        label.className = "chart-matrix-label"; label.textContent = labelText;
+        var svg = U.svgEl("svg", {width: width, height: height,
+          viewBox: "0 0 " + width + " " + height, class: "chart-matrix-cells"});
+        row.appendChild(label); row.appendChild(svg); matrix.appendChild(row);
+        return svg;
+      }
+      var header = addRow("", 20);
+      header.setAttribute("aria-hidden", "true");
+      dates.forEach(function (date, index) {
+        if (index % 7 === 0 && (dates.length === 1 || index < dates.length - 2)) {
+          U.text(header, index * step, 13, date.slice(5), c.muted, {size: 10});
+        }
       });
-      s.dataset.w = width; s.dataset.h = height;
-      return s;
+      rows.forEach(function (row) {
+        var svg = addRow(row.label, cell);
+        dates.forEach(function (date, index) {
+          var on = !!row.active[index];
+          var rect = U.svgEl("rect", {x: index * step, y: 0, width: cell, height: cell,
+            rx: 2, class: "heat-cell", fill: on ? row.color : U.colorMix(c.muted, 16)});
+          var title = U.svgEl("title", {});
+          title.textContent = date + " · " + row.label + " · " + (on ? "logged" : "not logged");
+          rect.appendChild(title); svg.appendChild(rect);
+        });
+      });
+      container.appendChild(matrix);
     },
 
     text: function (svg, x, y, str, fill, opts) {
@@ -206,7 +306,7 @@
       }
     },
 
-    drawAxis: function (svg, x, y, w, h, labels, c, xlabel) {
+    drawAxis: function (svg, x, y, w, h, labels, c, xlabel, bands) {
       // X-axis baseline + evenly spaced tick labels below it. Optional `xlabel`
       // draws a centered axis title beneath the ticks.
       svg.appendChild(U.svgEl("line", {
@@ -215,9 +315,11 @@
       }));
       var n = labels.length;
       for (var i = 0; i < n; i++) {
-        var cx = n === 1 ? x + w / 2 : x + (w * i) / (n - 1);
+        var cx = bands ? x + w * (i + .5) / n
+          : n === 1 ? x + w / 2 : x + (w * i) / (n - 1);
+        var anchor = bands || n === 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle";
         U.text(svg, cx, y + h + 12, labels[i], c.muted,
-               { anchor: "middle", size: 9 });
+               { anchor: anchor, size: 10 });
       }
       if (xlabel) {
         U.text(svg, x + w / 2, y + h + 26, xlabel, c.muted,
@@ -225,11 +327,42 @@
       }
     },
 
-    drawBar: function (svg, x, y, w, h, color) {
-      svg.appendChild(U.svgEl("rect", {
+    drawBarAxis: function (svg, x, y, w, h, labels, c, xlabel) {
+      U.drawAxis(svg, x, y, w, h, labels, c, xlabel, true);
+    },
+
+    drawScatterAxis: function (svg, x, y, w, h, min, max, c) {
+      U.drawAxis(svg, x, y, w, h, min === max ? [U.fmt(min)] : [U.fmt(min), U.fmt(max)], c);
+    },
+
+    drawBar: function (svg, x, y, w, h, color, label) {
+      var bar = U.svgEl("rect", {
         x: x, y: y, width: Math.max(w, 0), height: Math.max(h, 0),
         fill: color, rx: 2,
-      }));
+      });
+      if (label) { var title = U.svgEl("title", {}); title.textContent = label; bar.appendChild(title); }
+      svg.appendChild(bar);
+    },
+
+    rankBars: function (container, rows, maximum) {
+      var max = maximum || Math.max.apply(null, rows.map(function (row) { return row.value; })) || 1;
+      var list = document.createElement("div");
+      list.className = "chart-ranks";
+      rows.forEach(function (row) {
+        var item = document.createElement("div"), head = document.createElement("div");
+        item.className = "chart-rank"; head.className = "chart-rank-head";
+        var label = document.createElement("span"), value = document.createElement("span");
+        label.className = "chart-rank-label"; label.textContent = row.label;
+        value.className = "chart-rank-value"; value.textContent = row.note == null ? row.value : row.note;
+        head.appendChild(label); head.appendChild(value);
+        var track = U.svgEl("svg", {viewBox: "0 0 100 6", preserveAspectRatio: "none",
+          class: "chart-rank-track", "aria-hidden": "true"});
+        var fill = U.svgEl("rect", {x: 0, y: 0, height: 6, rx: 1, class: "chart-rank-fill",
+          width: Math.max(0, Math.min(100, row.value / max * 100))});
+        if (row.color) fill.style.setProperty("--rank-color", row.color);
+        track.appendChild(fill); item.appendChild(head); item.appendChild(track); list.appendChild(item);
+      });
+      container.appendChild(list);
     },
 
     drawLine: function (svg, points, color, width) {
@@ -242,8 +375,10 @@
       }));
     },
 
-    drawDot: function (svg, cx, cy, r, color) {
-      svg.appendChild(U.svgEl("circle", { cx: cx, cy: cy, r: r, fill: color }));
+    drawDot: function (svg, cx, cy, r, color, label) {
+      var dot = U.svgEl("circle", { cx: cx, cy: cy, r: r, fill: color });
+      if (label) { var title = U.svgEl("title", {}); title.textContent = label; dot.appendChild(title); }
+      svg.appendChild(dot);
     },
 
     // mean/median/mode/stdev/min/max/count; matches journal.describe (sample stdev).
@@ -378,7 +513,7 @@
     var min = 1, max = 7, span = max - min;
     var pts = series.map(function (s, i) {
       return {
-        x: (w * i) / (series.length - 1),
+        x: U.dateX(series, i, 0, w),
         y: 3 + (h - 6) * (1 - (s.mood - min) / span),
       };
     });
@@ -543,13 +678,13 @@
     var moods = moodSeries(entries).map(function (m) { return m.mood; });
     if (!moods.length) return [];
     var baseline = moods.reduce(function (a, b) { return a + b; }, 0) / moods.length;
-    var byTag = {};   // "name|sid" -> [moods]
+    var byTag = Object.create(null);   // "name|sid" -> [moods]
     entries.forEach(function (e) {
       var m = moodOf(e);
       if (m == null) return;
       var tags = e.tags || {};
       Object.keys(tags).forEach(function (sid) {
-        var seen = {};
+        var seen = Object.create(null);
         (tags[sid] || []).forEach(function (raw) {
           var n = String(raw).trim().toLowerCase();
           if (!n || seen[n]) return;
@@ -647,6 +782,7 @@
       bits.push(hasEntry ? "entry" : "no entry");
       if (nTasks) bits.push(nTasks + " task" + (nTasks === 1 ? "" : "s") + " done");
       cell.title = bits.join(" · ");
+      cell.setAttribute("role", "img"); cell.setAttribute("aria-label", cell.title);
       var num = document.createElement("span");
       num.className = "cal-day-num";
       num.textContent = String(day);
@@ -677,7 +813,7 @@
     panel: "overview",
     title: "Overview",
     render: function (container, entries, sections, c) {
-      if (!entries.length) { U.empty(container, "No entries in this range."); return; }
+      if (!entries.length && !hasTasks()) { U.empty(container, "No activity in this range."); return; }
       var dates = uniqueDates(entries);
       var st = streaks(dates);
       var moods = moodSeries(entries);
@@ -690,11 +826,11 @@
       grid.className = "stat-cards";
 
       var entriesCard = statCard(grid, entries.length, "entries this period",
-               "last: " + dates[dates.length - 1]);
+               dates.length ? "last: " + dates[dates.length - 1] : "no entries yet");
       if (prevEntries) annotateDelta(entriesCard, entries.length,
                uniqueDates(prevEntries).length, { fmt: function (n) { return n + ""; } });
 
-      statCard(grid, st.current + "d", "current streak", "longest " + st.longest + "d");
+      statCard(grid, st.current + "d", "latest streak", "longest " + st.longest + "d");
 
       var moodCard = statCard(grid, md.count ? U.fmt(md.mean) : null,
                               "avg mood",
@@ -775,11 +911,12 @@
   // each day tinted by mood (ramp) and marked for entry + task completions.
   function renderActivityHeatmap(container, entries, c) {
     var dates = uniqueDates(entries);
-    if (!dates.length) return;
+    var taskBy = taskThroughput();   // {YYYY-MM-DD: completed count} in range
+    var activityDates = dates.concat(Object.keys(taskBy)).sort();
+    if (!activityDates.length) return;
     var moodBy = moodByDate(entries);
     var entryDays = {};
     dates.forEach(function (d) { entryDays[d] = true; });
-    var taskBy = taskThroughput();   // {YYYY-MM-DD: completed count} in range
     var now = new Date();
     var todayIso = calIso(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -792,8 +929,8 @@
 
     var wrap = document.createElement("div");
     wrap.className = "analytics-cal";
-    var first = new Date(dates[0] + "T00:00:00");
-    var last = new Date(dates[dates.length - 1] + "T00:00:00");
+    var first = new Date(activityDates[0] + "T00:00:00");
+    var last = new Date(activityDates[activityDates.length - 1] + "T00:00:00");
     var y = first.getFullYear(), m = first.getMonth();
     while (y < last.getFullYear() || (y === last.getFullYear() && m <= last.getMonth())) {
       wrap.appendChild(buildActivityMonthGrid(y, m, moodBy, entryDays, taskBy, todayIso, c));
@@ -943,6 +1080,9 @@
       var iso = calIso(year, month, day);
       var cell = document.createElement("div");
       cell.className = "cal-day";
+      cell.title = iso + " · " + (present[iso] ? "entry" : "no entry");
+      if (marked && marked[iso]) cell.title += " · " + marked[iso] + " task" + (marked[iso] === 1 ? "" : "s") + " done";
+      cell.setAttribute("role", "img"); cell.setAttribute("aria-label", cell.title);
       if (iso === todayIso) cell.classList.add("is-today");
       var num = document.createElement("span");
       num.className = "cal-day-num";
@@ -1005,12 +1145,13 @@
       var iso = calIso(year, month, day);
       var cell = document.createElement("div");
       cell.className = "cal-day";
+      cell.title = iso + " · " + (byDate[iso] != null ? U.fmt(byDate[iso]) : "not recorded");
+      cell.setAttribute("role", "img"); cell.setAttribute("aria-label", cell.title);
       if (iso === todayIso) cell.classList.add("is-today");
       if (byDate[iso] != null) {
         var frac = (byDate[iso] - min) / span;  // 0..1
         // Map to 15..100% so even the lowest value is faintly visible.
         cell.style.background = U.colorMix(color, Math.round(15 + frac * 85));
-        cell.title = iso + ": " + U.fmt(byDate[iso]);
       }
       var num = document.createElement("span");
       num.className = "cal-day-num";
@@ -1059,20 +1200,19 @@
         return { date: e.date, count: (e.body || "").split(/\s+/).filter(Boolean).length };
       }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       if (!series.length) { U.empty(container, "No entries in this range."); return; }
-      var w = 600, h = 180, pad = 30;
+      var w = U.chartWidth(), h = 180, pad = 30;
       var svg = U.svg(w, h);
       var max = Math.max.apply(null, series.map(function (s) { return s.count; })) || 1;
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       var pts = series.map(function (s, i) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - s.count / max);
         return { x: x, y: y };
       });
       U.drawLine(svg, pts, c.accent, 1.5);
-      pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
+      pts.forEach(function (p, i) { U.drawDot(svg, p.x, p.y, 2, c.accent, series[i].date + " · " + series[i].count + (series[i].count === 1 ? " word" : " words")); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
+                 U.dateLabels(series), c);
       container.appendChild(svg);
       var wd = U.describe(series.map(function (s) { return s.count; }));
       U.statsRow(container, [["mean", U.fmt(wd.mean)], ["median", U.fmt(wd.median)]]);
@@ -1092,15 +1232,16 @@
       var hist = {};
       gaps.forEach(function (g) { hist[g] = (hist[g] || 0) + 1; });
       var keys = Object.keys(hist).map(Number).sort(function (a, b) { return a - b; });
-      var w = 600, h = 180, pad = 30;
+      var w = U.chartWidth(), h = 180, pad = 30;
       var svg = U.svg(w, h);
       var max = Math.max.apply(null, keys.map(function (k) { return hist[k]; }));
       var bw = (w - pad - 10) / keys.length;
       keys.forEach(function (k, i) {
         var bh = (h - pad - 10) * (hist[k] / max);
-        U.drawBar(svg, pad + i * bw + 2, 10 + (h - pad - 10) - bh, bw - 4, bh, c.accent);
+        U.drawBar(svg, pad + i * bw + 2, 10 + (h - pad - 10) - bh, bw - 4, bh, c.accent,
+          k + (k === 1 ? " day" : " days") + " · " + hist[k] + (hist[k] === 1 ? " gap" : " gaps"));
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
                  keys.map(function (k) { return k + "d"; }), c);
       container.appendChild(svg);
       var gd = U.describe(gaps);
@@ -1119,19 +1260,22 @@
       var any = false;
       entries.forEach(function (e) {
         if (!e.created) return;
-        var hr = new Date(e.created).getHours();
-        if (!isNaN(hr)) { hours[hr]++; any = true; }
+        var match = /[T ](\d{2}):\d{2}/.exec(e.created);
+        var hr = match ? Number(match[1]) : NaN;
+        if (hr >= 0 && hr < 24 && Number.isFinite(Date.parse(e.created))) { hours[hr]++; any = true; }
       });
       if (!any) { U.empty(container, "No creation timestamps in this range."); return; }
-      var w = 600, h = 180, pad = 30;
+      var w = U.chartWidth(), h = 180, pad = 30;
       var svg = U.svg(w, h);
       var max = Math.max.apply(null, Object.keys(hours).map(function (k) { return hours[k]; })) || 1;
       var bw = (w - pad - 10) / 24;
       for (var hgt = 0; hgt < 24; hgt++) {
         var bh = (h - pad - 10) * (hours[hgt] / max);
-        U.drawBar(svg, pad + hgt * bw + 1, 10 + (h - pad - 10) - bh, bw - 2, bh, c.accent);
+        U.drawBar(svg, pad + hgt * bw + 1, 10 + (h - pad - 10) - bh, bw - 2, bh, c.accent,
+          String(hgt).padStart(2, "0") + ":00 · " + hours[hgt] + (hours[hgt] === 1 ? " entry" : " entries"));
       }
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, ["0", "6", "12", "18", "23"], c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
+        Array.from({length: 24}, function (_, hour) { return [0, 6, 12, 18, 23].indexOf(hour) >= 0 ? String(hour) : ""; }), c);
       container.appendChild(svg);
       // Mode hour as "usually journals at Xam/pm".
       var counts = Object.keys(hours).map(function (k) { return [Number(k), hours[k]]; });
@@ -1149,7 +1293,7 @@
     return ((e.tags || {})[sid]) || [];
   }
   function sectionTagFreq(entries, sid) {
-    var freq = {};
+    var freq = Object.create(null);
     entries.forEach(function (e) {
       tagsForSectionEntry(e, sid).forEach(function (t) { freq[t] = (freq[t] || 0) + 1; });
     });
@@ -1174,17 +1318,9 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name;
         block.appendChild(h4);
-        var rowH = 18, w = 600, pad = 90;
-        var svg = U.svg(w, keys.length * rowH + 6);
-        var max = Math.max.apply(null, keys.map(function (k) { return freq[k]; }));
-        keys.forEach(function (k, i) {
-          var y = i * rowH + 2;
-          U.text(svg, pad - 6, y + 12, k, c.text, { anchor: "end", size: 10 });
-          var bw = (w - pad - 30) * (freq[k] / max);
-          U.drawBar(svg, pad, y + 3, bw, 11, s.color);
-          U.text(svg, pad + bw + 4, y + 12, freq[k], c.muted, { size: 9 });
-        });
-        block.appendChild(svg);
+        U.rankBars(block, keys.map(function (k) {
+          return {label: k, value: freq[k], color: s.color};
+        }));
         // mode (most-used tag) + mean uses/tag.
         var d = U.describe(keys.map(function (k) { return freq[k]; }));
         U.statsRow(block, [["most-used", keys[0]],
@@ -1223,7 +1359,7 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + " — “" + tag + "”";
         block.appendChild(h4);
-        var w = 600, h = 160, pad = 30;
+        var w = U.chartWidth(), h = 160, pad = 30;
         var svg = U.svg(w, h);
         var max = Math.max.apply(null, wk.map(function (k) { return weeks[k]; }));
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 3, c);
@@ -1276,23 +1412,11 @@
         // rows = tags, cols = dates; cell filled (section color) if tag present that day.
         var byDate = {};
         entries.forEach(function (e) { byDate[e.date] = tagsForSectionEntry(e, s.id); });
-        var cell = 14, gap = 3, labelW = 90;
-        var w = labelW + dates.length * (cell + gap);
-        var h = tags.length * (cell + gap);
-        var svg = U.svgFixed(w, h);
-        tags.forEach(function (t, r) {
-          U.text(svg, labelW - 6, r * (cell + gap) + cell - 2, t, c.text,
-                 { anchor: "end", size: 10 });
-          dates.forEach(function (d, col) {
-            var on = (byDate[d] || []).indexOf(t) !== -1;
-            svg.appendChild(U.svgEl("rect", {
-              x: labelW + col * (cell + gap), y: r * (cell + gap),
-              width: cell, height: cell, rx: 2, class: "heat-cell",
-              fill: on ? s.color : U.colorMix(c.muted, 16),
-            }));
-          });
-        });
-        block.appendChild(svg);
+        U.activityMatrix(block, dates, tags.map(function (tag) {
+          return {label: tag, color: s.color, active: dates.map(function (date) {
+            return (byDate[date] || []).indexOf(tag) !== -1;
+          })};
+        }), c, s.name + " tag activity");
         container.appendChild(block);
       });
       if (!rendered) U.empty(container, "No tags recorded in this range.");
@@ -1308,15 +1432,15 @@
       var rendered = false;
       tagSecs.forEach(function (s) {
         // Build co-occurrence within this section.
-        var co = {};
-        var tagSet = {};
+        var co = Object.create(null);
+        var tagSet = Object.create(null);
         entries.forEach(function (e) {
           var tags = Array.from(new Set(tagsForSectionEntry(e, s.id))).sort();
           tags.forEach(function (a) {
             tagSet[a] = true;
             tags.forEach(function (b) {
               if (a === b) return;
-              co[a] = co[a] || {};
+              co[a] = co[a] || Object.create(null);
               co[a][b] = (co[a][b] || 0) + 1;
             });
           });
@@ -1352,7 +1476,7 @@
           });
           table.appendChild(tr);
         });
-        block.appendChild(table);
+        U.scrollTable(block, table, s.name + " co-occurrence");
         container.appendChild(block);
       });
       if (!rendered) U.empty(container, "Need a section with 2+ co-occurring tags.");
@@ -1451,15 +1575,14 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
         block.appendChild(h4);
-        var w = 600, h = 180, pad = 34;
+        var w = U.chartWidth(), h = 180, pad = 34;
         var svg = U.svg(w, h);
         var vals = series.map(function (p) { return p.value; });
         var max = Math.max.apply(null, vals), min = Math.min.apply(null, vals);
         var span = max - min || 1;
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
         function ptAt(i, v) {
-          var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                      : pad + ((w - pad - 10) * i) / (series.length - 1);
+          var x = U.dateX(series, i, pad, w - pad - 10);
           var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
           return { x: x, y: y };
         }
@@ -1484,9 +1607,9 @@
         U.drawLine(svg, pts, s.color, 1.5);
         pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, s.color); });
         U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                   [series[0].date, series[series.length - 1].date], c);
-        U.text(svg, 0, 14, U.fmt(max), c.muted, { size: 9 });
-        U.text(svg, 0, h - pad + 2, U.fmt(min), c.muted, { size: 9 });
+                   U.dateLabels(series), c);
+        U.text(svg, 0, 14, U.fmt(max), c.muted, { size: 10 });
+        U.text(svg, 0, h - pad + 2, U.fmt(min), c.muted, { size: 10 });
         block.appendChild(svg);
         var d = U.describe(vals);
         var trendLabel = null;
@@ -1528,22 +1651,21 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
         block.appendChild(h4);
-        var w = 600, h = 180, pad = 40;
+        var w = U.chartWidth(), h = 180, pad = 40;
         var svg = U.svg(w, h);
         var max = Math.max.apply(null, cum), min = Math.min.apply(null, cum.concat(0));
         var span = max - min || 1;
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
         var pts = cum.map(function (v, i) {
-          var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                      : pad + ((w - pad - 10) * i) / (series.length - 1);
+          var x = U.dateX(series, i, pad, w - pad - 10);
           var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
           return { x: x, y: y };
         });
         U.drawLine(svg, pts, s.color, 1.5);
         U.drawDot(svg, pts[pts.length - 1].x, pts[pts.length - 1].y, 2.5, s.color);
         U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                   [series[0].date, series[series.length - 1].date], c);
-        U.text(svg, 0, 14, U.fmt(max), c.muted, { size: 9 });
+                   U.dateLabels(series), c);
+        U.text(svg, 0, 14, U.fmt(max), c.muted, { size: 10 });
         block.appendChild(svg);
         U.statsRow(block, [["total", U.fmt(total) + (s.unit ? " " + s.unit : "")]]);
         container.appendChild(block);
@@ -1636,7 +1758,7 @@
             buckets[idx].count++;
           });
         }
-        var w = 600, h = 196, pad = 30, chartH = 140;
+        var w = U.chartWidth(), h = 196, pad = 30, chartH = 140;
         var svg = U.svg(w, h);
         var cmax = Math.max.apply(null, buckets.map(function (bk) { return bk.count; })) || 1;
         var bw = (w - pad - 10) / buckets.length;
@@ -1645,7 +1767,7 @@
           U.drawBar(svg, pad + i * bw + 2, 10 + chartH - bh, bw - 4, bh, s.color);
           if (bk.count) {
             U.text(svg, pad + i * bw + bw / 2, 10 + chartH - bh - 3,
-                   String(bk.count), c.muted, { anchor: "middle", size: 9 });
+                   String(bk.count), c.muted, { anchor: "middle", size: 10 });
           }
         });
         U.drawAxis(svg, pad, 10, w - pad - 10, chartH,
@@ -1695,15 +1817,15 @@
         }
         block.appendChild(wrap);
         // Legend: low -> high gradient.
-        var legend = U.svg(600, 24);
-        U.text(legend, 0, 14, "low", c.muted, { size: 9 });
+        var legend = U.svg(U.chartWidth(), 24);
+        U.text(legend, 0, 14, "low", c.muted, { size: 10 });
         [0.15, 0.4, 0.65, 0.9].forEach(function (frac, i) {
           legend.appendChild(U.svgEl("rect", {
             x: 28 + i * 18, y: 5, width: 16, height: 14, rx: 2,
             fill: U.colorMix(s.color, Math.round(15 + frac * 85)),
           }));
         });
-        U.text(legend, 28 + 4 * 18 + 4, 14, "high", c.muted, { size: 9 });
+        U.text(legend, 28 + 4 * 18 + 4, 14, "high", c.muted, { size: 10 });
         block.appendChild(legend);
         container.appendChild(block);
       });
@@ -1737,7 +1859,7 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
         block.appendChild(h4);
-        var w = 600, h = 180, pad = 30;
+        var w = U.chartWidth(), h = 180, pad = 30;
         var svg = U.svg(w, h);
         var present = avgs.filter(function (a) { return a != null; });
         var max = Math.max.apply(null, present), min = Math.min.apply(null, present.concat(0));
@@ -1747,7 +1869,7 @@
           var bh = (h - pad - 10) * ((a - Math.min(0, min)) / ((max - Math.min(0, min)) || 1));
           U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, s.color);
         });
-        U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, names, c);
+        U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, names, c);
         block.appendChild(svg);
         // highest / lowest day.
         var ranked = names
@@ -1778,13 +1900,14 @@
         return { x: Number(e.numbers[sx.id]), y: Number(e.numbers[sy.id]) };
       });
       if (!pairs.length) { U.empty(container, "No days with both values recorded."); return; }
-      var w = 600, h = 240, pad = 36;
+      var w = U.chartWidth(), h = 240, pad = 36;
       var svg = U.svg(w, h);
       var xs = pairs.map(function (p) { return p.x; }), ys = pairs.map(function (p) { return p.y; });
       var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
       var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
       var xSpan = xMax - xMin || 1, ySpan = yMax - yMin || 1;
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+      U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
       pairs.forEach(function (p) {
         var x = (xMax - xMin) === 0
           ? pad + (w - pad - 10) / 2
@@ -1795,7 +1918,7 @@
         U.drawDot(svg, x, y, 3, U.colorMix(sx.color, 80));
       });
       U.text(svg, w / 2, h - 2, sx.name + " (x)  vs  " + sy.name + " (y)", c.muted,
-             { anchor: "middle", size: 9 });
+             { anchor: "middle", size: 10 });
       container.appendChild(svg);
       U.statsRow(container, [["points", pairs.length]]);
     },
@@ -1814,9 +1937,9 @@
         return;
       }
       // r[a.id][b.id] over same-day overlapping pairs (n>=2).
-      var R = {};
+      var R = Object.create(null);
       nums.forEach(function (a) {
-        R[a.id] = {};
+        R[a.id] = Object.create(null);
         nums.forEach(function (b) {
           if (a.id === b.id) { R[a.id][b.id] = 1; return; }
           var xs = [], ys = [];
@@ -1862,7 +1985,7 @@
         });
         table.appendChild(tr);
       });
-      container.appendChild(table);
+      U.scrollTable(container, table, "Numeric correlations");
       U.statsRow(container, [["+ = move together", ""], ["− = move opposite", ""]]);
     },
   });
@@ -1934,18 +2057,10 @@
         return { name: s.name, color: s.color, logged: logged,
                  pct: total ? (logged / total) * 100 : 0 };
       });
-      var w = 600, rowH = 22, pad = 100;
-      var svg = U.svg(w, rows.length * rowH + 6);
-      rows.forEach(function (r, i) {
-        var y = i * rowH + 2;
-        U.text(svg, pad - 6, y + 14, r.name, c.text, { anchor: "end", size: 10 });
-        U.drawBar(svg, pad, y + 4, (w - pad - 60), 13, U.colorMix(c.muted, 16));
-        U.drawBar(svg, pad, y + 4, (w - pad - 60) * (r.pct / 100), 13, r.color);
-        U.text(svg, pad + (w - pad - 60) + 4, y + 14,
-               Math.round(r.pct) + "% (" + r.logged + "/" + total + ")",
-               c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, rows.map(function (r) {
+        return {label: r.name, value: r.pct, color: r.color,
+          note: Math.round(r.pct) + "% (" + r.logged + "/" + total + ")"};
+      }), 100);
     },
   });
 
@@ -1956,24 +2071,14 @@
     render: function (container, entries, sections, c) {
       if (!entries.length) { U.empty(container, "No entries in this range."); return; }
       var sorted = entries.slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-      var cell = 14, gap = 3, labelW = 90;
-      var w = labelW + sorted.length * (cell + gap);
-      var h = sections.length * (cell + gap);
-      var svg = U.svgFixed(w, h);
       var coveredCounts = [];
-      sections.forEach(function (s, r) {
-        U.text(svg, labelW - 6, r * (cell + gap) + cell - 2, s.name, c.text,
-               { anchor: "end", size: 10 });
-        sorted.forEach(function (e, col) {
-          var t = (e.tags || {})[s.id];
-          var on = (t && t.length) || (e.numbers || {})[s.id] != null;
-          svg.appendChild(U.svgEl("rect", {
-            x: labelW + col * (cell + gap), y: r * (cell + gap),
-            width: cell, height: cell, rx: 2, class: "heat-cell",
-            fill: on ? s.color : U.colorMix(c.muted, 16),
-          }));
-        });
-      });
+      U.activityMatrix(container, sorted.map(function (e) { return e.date; }),
+        sections.map(function (section) {
+          return {label: section.name, color: section.color, active: sorted.map(function (entry) {
+            var tags = (entry.tags || {})[section.id];
+            return (tags && tags.length) || (entry.numbers || {})[section.id] != null;
+          })};
+        }), c, "Section coverage");
       sorted.forEach(function (e) {
         var n = 0;
         sections.forEach(function (s) {
@@ -1982,7 +2087,6 @@
         });
         coveredCounts.push(n);
       });
-      container.appendChild(svg);
       var pct = sections.length
         ? U.describe(coveredCounts.map(function (n) { return (n / sections.length) * 100; })).mean
         : null;
@@ -1997,21 +2101,7 @@
     id: "task-throughput", panel: "throughput", title: "Tasks completed per day",
     render: function (container, entries, sections, c) {
       var byDay = taskThroughput();
-      var days = Object.keys(byDay).sort();
-      if (!days.length) { U.empty(container, "No completed tasks in this range."); return; }
-      var w = 600, h = 160, pad = 28;
-      var svg = U.svg(w, h);
-      var max = Math.max.apply(null, days.map(function (d) { return byDay[d]; }));
-      var bw = (w - pad) / days.length;
-      days.forEach(function (d, i) {
-        var bh = (h - pad) * (byDay[d] / max);
-        U.drawBar(svg, pad + i * bw, h - pad - bh, Math.max(bw - 2, 1), bh, c.accent);
-      });
-      container.appendChild(svg);
-      var vals = days.map(function (d) { return byDay[d]; });
-      var stat = U.describe(vals);
-      U.statsRow(container, [["total", vals.reduce(function (a, b) { return a + b; }, 0)],
-                             ["best day", stat.max], ["mean/day", U.fmt(stat.mean)]]);
+      renderCompletionBars(container, byDay, c);
     },
   });
 
@@ -2033,7 +2123,7 @@
       if (!(late + ontime + expired)) { U.empty(container, "No due/expired tasks in this range."); return; }
       U.statsRow(container, [["on time", ontime], ["late", late], ["expired", expired]]);
       // simple stacked bar
-      var w = 600, h = 40, total = late + ontime + expired, x = 0;
+      var w = U.chartWidth(), h = 40, total = late + ontime + expired, x = 0;
       var svg = U.svg(w, h);
       [["on time", ontime, c.accent], ["late", late, c.danger],
        ["expired", expired, c.muted]].forEach(function (seg) {
@@ -2058,7 +2148,7 @@
       if (!total) { U.empty(container, "No recurring occurrences in this range."); return; }
       var rate = Math.round((done / total) * 100);
       U.statsRow(container, [["completed", done], ["missed", missed], ["hit rate", rate + "%"]]);
-      var w = 600, svg = U.svg(w, 40);
+      var w = U.chartWidth(), svg = U.svg(w, 40);
       U.drawBar(svg, 0, 8, w * (done / total), 20, c.accent);
       U.drawBar(svg, w * (done / total), 8, w * (missed / total), 20, c.danger);
       container.appendChild(svg);
@@ -2079,15 +2169,9 @@
       var order = ["easy", "medium", "hard", "unrated"];
       var max = Math.max.apply(null, order.map(function (k) { return counts[k]; }));
       if (!max) { U.empty(container, "No completed tasks in this range."); return; }
-      var w = 600, rowH = 22, svg = U.svg(w, order.length * rowH + 4);
-      order.forEach(function (k, i) {
-        var y = i * rowH + 2;
-        U.text(svg, 70 - 6, y + 14, k, c.text, { anchor: "end", size: 10 });
-        var bw = (w - 110) * (counts[k] / max);
-        U.drawBar(svg, 70, y + 4, bw, 13, k === "hard" ? c.danger : c.accent);
-        U.text(svg, 70 + bw + 4, y + 14, counts[k], c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, order.map(function (k) {
+        return {label: k, value: counts[k], color: k === "hard" ? c.danger : c.accent};
+      }));
     },
   });
 
@@ -2099,24 +2183,16 @@
     render: function (container, entries, sections, c) {
       var t = _data.tasks || { archive: [], active: [], expired: [], tags: {} };
       function inR(d) { return !d || ((!_from || d >= _from) && (!_to || d <= _to)); }
-      var freq = {};
+      var freq = Object.create(null);
       t.archive.forEach(function (x) {
         if (!inR((x.completed || "").slice(0, 10))) return;
         (x.tags || []).forEach(function (tag) { freq[tag] = (freq[tag] || 0) + 1; });
       });
       var keys = Object.keys(freq).sort(function (a, b) { return freq[b] - freq[a]; });
       if (!keys.length) { U.empty(container, "No task tags in this range."); return; }
-      var w = 600, rowH = 18, pad = 90, svg = U.svg(w, keys.length * rowH + 6);
-      var max = Math.max.apply(null, keys.map(function (k) { return freq[k]; }));
-      keys.forEach(function (k, i) {
-        var y = i * rowH + 2;
-        var col = (t.tags && t.tags[k]) || c.accent;
-        U.text(svg, pad - 6, y + 12, k, c.text, { anchor: "end", size: 10 });
-        var bw = (w - pad - 30) * (freq[k] / max);
-        U.drawBar(svg, pad, y + 3, bw, 11, col);
-        U.text(svg, pad + bw + 4, y + 12, freq[k], c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, keys.map(function (k) {
+        return {label: k, value: freq[k], color: (t.tags && t.tags[k]) || c.accent};
+      }));
     },
   });
 
@@ -2146,7 +2222,7 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
         block.appendChild(h4);
-        var w = 600, h = 240, pad = 36;
+        var w = U.chartWidth(), h = 240, pad = 36;
         var svg = U.svg(w, h);
         var xs = pairs.map(function (p) { return p.x; });
         var ys = pairs.map(function (p) { return p.y; });
@@ -2154,6 +2230,7 @@
         var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
         var xSpan = xMax - xMin || 1, ySpan = yMax - yMin || 1;
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
+        U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
         pairs.forEach(function (p) {
           var x = (xMax - xMin) === 0
             ? pad + (w - pad - 10) / 2
@@ -2164,7 +2241,7 @@
           U.drawDot(svg, x, y, 3, U.colorMix(s.color, 80));
         });
         U.text(svg, w / 2, h - 2, "tasks completed (x)  vs  " + s.name + " (y)",
-               c.muted, { anchor: "middle", size: 9 });
+               c.muted, { anchor: "middle", size: 10 });
         block.appendChild(svg);
         U.statsRow(block, [["points", pairs.length]]);
         container.appendChild(block);
@@ -2206,12 +2283,13 @@
         if (m > 11) { m = 0; y++; }
       }
       container.appendChild(wrap);
-      // Legend: which dot means what.
-      var legend = U.svg(600, 22);
-      U.drawDot(legend, 8, 11, 4, c.accent);
-      U.text(legend, 18, 14, "journal entry", c.muted, { size: 9 });
-      U.drawDot(legend, 120, 11, 4, c.accentDim);
-      U.text(legend, 130, 14, "task completed", c.muted, { size: 9 });
+      var legend = document.createElement("div");
+      legend.className = "heat-legend";
+      [["cal-dot", "journal entry"], ["cal-dot cal-dot-alt", "task completed"]].forEach(function (item) {
+        var mark = document.createElement("span"), dot = document.createElement("span");
+        mark.className = "heat-legend-mark"; dot.className = item[0];
+        mark.appendChild(dot); mark.appendChild(document.createTextNode(" " + item[1])); legend.appendChild(mark);
+      });
       container.appendChild(legend);
       U.statsRow(container, [["entry days", entryDates.length],
                              ["completion days", doneDates.length]]);
@@ -2246,14 +2324,13 @@
     render: function (container, entries, sections, c) {
       var series = moodSeries(entries);
       if (!series.length) { U.empty(container, "No mood recorded in this range."); return; }
-      var w = 600, h = 180, pad = 30;
+      var w = U.chartWidth(), h = 180, pad = 30;
       var svg = U.svg(w, h);
       // Fixed 1..7 scale so the chart reads as an absolute mood, not relative.
       var min = 1, max = 7, span = max - min;
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
         return { x: x, y: y };
       }
@@ -2264,9 +2341,9 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
-      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -2293,7 +2370,7 @@
       if (avgs.every(function (a) { return a == null; })) {
         U.empty(container, "No mood recorded in this range."); return;
       }
-      var w = 600, h = 180, pad = 30;
+      var w = U.chartWidth(), h = 180, pad = 30;
       var svg = U.svg(w, h);
       // Bars scaled on the fixed 1..7 mood scale.
       var min = 1, max = 7;
@@ -2304,7 +2381,7 @@
         var bh = (h - pad - 10) * ((a - min) / (max - min));
         U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
       container.appendChild(svg);
       var ranked = DOW_NAMES
         .map(function (n, i) { return [n, avgs[i]]; })
@@ -2328,7 +2405,7 @@
         if (m != null && m >= 1 && m <= 7) { dist[m]++; any = true; }
       });
       if (!any) { U.empty(container, "No mood recorded in this range."); return; }
-      var w = 600, h = 196, pad = 30, chartH = 140;
+      var w = U.chartWidth(), h = 196, pad = 30, chartH = 140;
       var svg = U.svg(w, h);
       var keys = [1, 2, 3, 4, 5, 6, 7];
       var max = Math.max.apply(null, keys.map(function (k) { return dist[k]; })) || 1;
@@ -2337,9 +2414,9 @@
         var bh = chartH * (dist[k] / max);
         U.drawBar(svg, pad + i * bw + 3, 10 + chartH - bh, bw - 6, bh, c.accent);
         U.text(svg, pad + i * bw + bw / 2, 10 + chartH - bh - 3,
-               dist[k] || "", c.muted, { anchor: "middle", size: 9 });
+               dist[k] || "", c.muted, { anchor: "middle", size: 10 });
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, chartH,
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, chartH,
                  keys.map(String), c, "mood (1–7)");
       container.appendChild(svg);
       // Describe the underlying values (one per recorded mood) for mode etc.
@@ -2372,13 +2449,14 @@
         var h4 = document.createElement("h4");
         h4.textContent = s.name + (s.unit ? " (" + s.unit + ")" : "");
         block.appendChild(h4);
-        var w = 600, h = 240, pad = 36;
+        var w = U.chartWidth(), h = 240, pad = 36;
         var svg = U.svg(w, h);
         var xs = pairs.map(function (p) { return p.x; });
         var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
         var xSpan = xMax - xMin || 1;
         var yMin = 1, yMax = 7, ySpan = yMax - yMin;
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+        U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
         pairs.forEach(function (p) {
           var x = (xMax - xMin) === 0
             ? pad + (w - pad - 10) / 2
@@ -2386,10 +2464,10 @@
           var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
           U.drawDot(svg, x, y, 3, U.colorMix(s.color, 80));
         });
-        U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+        U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
         U.text(svg, w / 2, h - 2, s.name + " (x)  vs  mood (y)", c.muted,
-               { anchor: "middle", size: 9 });
+               { anchor: "middle", size: 10 });
         block.appendChild(svg);
         var r = pearson(pairs.map(function (p) { return p.x; }),
                         pairs.map(function (p) { return p.y; }));
@@ -2500,12 +2578,11 @@
       if (!series.length) { U.empty(container, "No sleep data in this range."); return; }
       var vals = series.map(function (s) { return s.hours; });
       var max = Math.max.apply(null, vals), min = 0, span = max - min || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
         return { x: x, y: y };
       }
@@ -2515,10 +2592,10 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
+                 U.dateLabels(series), c);
       // Y-axis labels
-      U.text(svg, 0, 14, U.fmt(max) + "h", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0h", c.muted, { size: 9 });
+      U.text(svg, 0, 14, U.fmt(max) + "h", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0h", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -2539,13 +2616,12 @@
         .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       if (!series.length) { U.empty(container, "No quality data in this range."); return; }
       var vals = series.map(function (s) { return s.quality; });
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       var min = 0, max = 100, span = 100;
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
         return { x: x, y: y };
       }
@@ -2555,9 +2631,9 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
-      U.text(svg, 0, 14, "100%", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0%", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, "100%", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0%", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -2590,12 +2666,11 @@
                           .concat(series.map(function (s) { return s.wake_min; }));
       var minV = Math.min.apply(null, allMins), maxV = Math.max.apply(null, allMins);
       var span = maxV - minV || 1;
-      var w = 600, h = 200, pad = 42;
+      var w = U.chartWidth(), h = 200, pad = 42;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - minV) / span);
         return { x: x, y: y };
       }
@@ -2607,10 +2682,10 @@
       U.drawLine(svg, wakePts, c.accent, 1.5);
       wakePts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
+                 U.dateLabels(series), c);
       // Y-axis: top and bottom ticks formatted as HH:MM.
-      U.text(svg, 0, 14, minToClock(maxV), c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, minToClock(minV), c.muted, { size: 9 });
+      U.text(svg, 0, 14, minToClock(maxV), c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, minToClock(minV), c.muted, { size: 10 });
       container.appendChild(svg);
       // Legend.
       var legend = document.createElement("div");
@@ -2654,7 +2729,7 @@
       }
       var nonNull = avgs.filter(function (a) { return a != null; });
       var max = Math.max.apply(null, nonNull) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       var bw = (w - pad - 10) / 7;
@@ -2663,7 +2738,7 @@
         var bh = (h - pad - 10) * (a / max);
         U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
       container.appendChild(svg);
       var ranked = DOW_NAMES
         .map(function (n, i) { return [n, avgs[i]]; })
@@ -2703,7 +2778,7 @@
       }
       // Bar chart: one bar per stage, value in minutes.
       var maxV = Math.max.apply(null, avgs.filter(function (a) { return a != null; })) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       var STAGE_COLORS = [c.accent, U.colorMix(c.accent, 60),
@@ -2715,9 +2790,9 @@
         U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, STAGE_COLORS[i]);
         U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
                a != null ? Math.round(a) + "m" : "", c.muted,
-               { anchor: "middle", size: 9 });
+               { anchor: "middle", size: 10 });
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, STAGE_LABELS, c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, STAGE_LABELS, c);
       container.appendChild(svg);
       // Stage legend.
       var legend = document.createElement("div");
@@ -2753,9 +2828,10 @@
       var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
       var xSpan = xMax - xMin || 1;
       var yMin = 1, yMax = 7, ySpan = yMax - yMin;
-      var w = 600, h = 240, pad = 36;
+      var w = U.chartWidth(), h = 240, pad = 36;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
       pairs.forEach(function (p) {
         var x = (xMax - xMin) === 0
           ? pad + (w - pad - 10) / 2
@@ -2763,10 +2839,10 @@
         var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
         U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
       });
-      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
       U.text(svg, w / 2, h - 2, "sleep hours (x)  vs  mood (y)", c.muted,
-             { anchor: "middle", size: 9 });
+             { anchor: "middle", size: 10 });
       container.appendChild(svg);
       var r = pearson(xs, pairs.map(function (p) { return p.y; }));
       U.statsRow(container, [
@@ -2784,20 +2860,8 @@
       var total = entries.length;
       if (!total) { U.empty(container, "No entries in this range."); return; }
       var pct = Math.round(100 * nights / total);
-      var w = 600, h = 50, pad = 0;
-      var svg = U.svg(w, h);
-      // Background track.
-      svg.appendChild(U.svgEl("rect", {
-        x: 0, y: 18, width: w, height: 14, fill: U.colorMix(c.muted, 18), rx: 3,
-      }));
-      // Fill.
-      svg.appendChild(U.svgEl("rect", {
-        x: 0, y: 18, width: Math.round(w * nights / total), height: 14,
-        fill: c.accent, rx: 3,
-      }));
-      U.text(svg, w / 2, 30, pct + "% (" + nights + " of " + total + " nights)",
-             c.text, { anchor: "middle", size: 10 });
-      container.appendChild(svg);
+      U.rankBars(container, [{label: "Nights tracked", value: pct, color: c.accent,
+        note: pct + "% (" + nights + "/" + total + ")"}], 100);
     },
   });
 
@@ -2815,6 +2879,7 @@
 
   // Format productive minutes as "Xh Ym" for display.
   function fmtProdTime(min) {
+    if (min > 0 && min < 1) return Math.max(1, Math.round(min * 60)) + "s";
     var m = Math.round(min);
     var h = Math.floor(m / 60), rem = m % 60;
     if (h === 0) return rem + "m";
@@ -2824,7 +2889,7 @@
   // Aggregate per-activity (website/app) minutes across entries. Mirrors
   // journal.rescuetime_top_activities (category/productivity from first seen).
   function aggRtActivities(entries) {
-    var totals = {}, meta = {};
+    var totals = Object.create(null), meta = Object.create(null);
     entries.forEach(function (e) {
       var r = rescueTimeOf(e);
       if (!r) return;
@@ -2845,7 +2910,7 @@
   // Bar color by RescueTime productivity score: productive (>0) accent,
   // distracting (<0) danger, neutral/unknown muted.
   function rtProdColor(prod, c) {
-    if (prod == null) return c.accent;
+    if (prod == null) return U.colorMix(c.text, 85);
     if (prod > 0) return c.accent;
     if (prod < 0) return c.danger;
     return U.colorMix(c.muted, 55);
@@ -2879,6 +2944,156 @@
     },
   });
 
+  // One independently selected day; page details never inflate aggregate time.
+  var _rtDay = {date: null, result: null};
+  function rtElement(tag, className, text) {
+    var element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text != null) element.textContent = text;
+    return element;
+  }
+
+  // Mirrors journal.rescuetime_hourly_totals.
+  function rtHourlyTotals(rows) {
+    var hours = Array.from({length: 24}, function (_, hour) {
+      return {hour: hour, productive_min: 0, neutral_min: 0, distracting_min: 0, unrated_min: 0, total_min: 0};
+    });
+    rows.forEach(function (row) {
+      if (!Number.isInteger(row.hour) || row.hour < 0 || row.hour > 23 || !Number.isFinite(row.min) || row.min <= 0) return;
+      var score = row.productivity;
+      var key = !Number.isFinite(score) || ![-2, -1, 0, 1, 2].includes(score) ? "unrated_min"
+        : score > 0 ? "productive_min" : score < 0 ? "distracting_min" : "neutral_min";
+      hours[row.hour][key] += row.min; hours[row.hour].total_min += row.min;
+    });
+    return hours;
+  }
+
+  function rtHourlyChart(host, rows, c) {
+    if (!rows.length) { U.empty(host, "No hourly activity returned for this day."); return; }
+    var bins = rtHourlyTotals(rows), max = Math.max(1, ...bins.map(function (bin) { return bin.total_min; }));
+    var keys = ["productive_min", "distracting_min", "neutral_min", "unrated_min"];
+    var labels = ["Productive", "Distracting", "Neutral", "Unrated"];
+    var palette = [c.accent, c.danger, U.colorMix(c.muted, 65), U.colorMix(c.text, 85)];
+    var w = U.chartWidth(), h = 155, pad = 32, plot = h - pad - 10, bw = (w - pad - 10) / 24;
+    var svg = U.svg(w, h); svg.setAttribute("aria-label", "Hourly activity in RescueTime account time");
+    U.drawGrid(svg, pad, 10, w - pad - 10, plot, 3, c);
+    bins.forEach(function (bin) {
+      var y = h - pad;
+      keys.forEach(function (key, index) {
+        if (!bin[key]) return;
+        var height = plot * bin[key] / max; y -= height;
+        U.drawBar(svg, pad + bin.hour * bw + 1, y, bw - 2, height, palette[index],
+          String(bin.hour).padStart(2, "0") + ":00 · " + fmtProdTime(bin.total_min) + " total · " + labels[index] + " " + fmtProdTime(bin[key]));
+      });
+      if (bin.hour % 6 === 0) U.text(svg, pad + bin.hour * bw, h - 8, String(bin.hour).padStart(2, "0") + ":00", c.muted, {size: 10});
+    });
+    U.text(svg, 0, 13, fmtProdTime(max), c.muted, {size: 10});
+    host.appendChild(svg);
+    var legend = rtElement("div", "sleep-stage-legend");
+    labels.forEach(function (label, i) {
+      var item = rtElement("span", "sleep-legend-item", label); item.style.setProperty("--sl-color", palette[i]); legend.appendChild(item);
+    });
+    host.appendChild(legend);
+  }
+
+  function rtDetailList(host, rows, documents) {
+    if (!rows.length) {
+      U.empty(host, documents ? "No page or document details returned. Availability depends on your RescueTime plan and tracking settings." : "No activities returned for this day.");
+      return;
+    }
+    var search = rtElement("input", "rt-detail-search"); search.type = "search";
+    search.placeholder = documents ? "Filter titles, URLs or apps…" : "Filter day activities…";
+    search.setAttribute("aria-label", documents ? "Filter pages and documents" : "Filter day activities");
+    var list = rtElement("div", "rt-detail-list"), count = rtElement("p", "chart-muted"), more = rtElement("button", "", "Show more");
+    more.type = "button"; var limit = 30;
+    function draw() {
+      var query = search.value.trim().toLowerCase();
+      var found = rows.filter(function (row) { return [row.name, row.title, row.category].join(" ").toLowerCase().includes(query); });
+      list.replaceChildren();
+      found.slice(0, limit).forEach(function (row) {
+        var line = rtElement("div", "rt-detail-row"), description = rtElement("div", "rt-detail-name");
+        description.appendChild(rtElement("span", "", documents ? row.title : row.name));
+        description.appendChild(rtElement("small", "muted", (documents ? row.name + " · " : "") + (row.category || "Uncategorized")));
+        line.append(description, rtElement("span", "rt-detail-duration", fmtProdTime(row.min))); list.appendChild(line);
+      });
+      count.textContent = Math.min(limit, found.length) + " of " + found.length + " results";
+      more.hidden = found.length <= limit;
+    }
+    search.addEventListener("input", function () { limit = 30; draw(); });
+    more.addEventListener("click", function () { limit += 30; draw(); });
+    host.append(search, count, list, more); draw();
+  }
+
+  CHARTS.push({
+    id: "productivity-day-detail", panel: "productivity", title: "Explore a day",
+    render: function (container, entries, sections, c) {
+      var now = new Date();
+      if (!_rtDay.date) _rtDay.date = _to || calIso(now.getFullYear(), now.getMonth(), now.getDate());
+      var toolbar = rtElement("div", "rt-detail-toolbar"), wrap = rtElement("div", "cs-date");
+      var input = rtElement("input"); input.type = "hidden"; input.id = "rt-detail-date"; input.value = _rtDay.date;
+      input.setAttribute("aria-label", "Activity date");
+      var trigger = rtElement("button", "cs-trigger"); trigger.type = "button"; trigger.dataset.datepicker = input.id;
+      trigger.setAttribute("aria-label", "Activity date"); trigger.setAttribute("aria-expanded", "false"); trigger.setAttribute("aria-haspopup", "dialog");
+      trigger.append(rtElement("span", "cs-value", _rtDay.date), rtElement("span", "cal-caret", "▾"));
+      wrap.append(trigger, input);
+      var load = rtElement("button", "", "Load day"), refresh = rtElement("button", "", "Refresh day");
+      load.type = refresh.type = "button"; refresh.hidden = !_rtDay.result;
+      toolbar.append(wrap, load, refresh);
+      var status = rtElement("p", "chart-muted"); status.setAttribute("role", "status");
+      var result = rtElement("div", "rt-day-reports");
+      container.append(toolbar, rtElement("p", "chart-muted", "Choose any day, independently of the range above. Hours use your RescueTime account’s time zone. Reports show tracked foreground time, not video playback."), status, result);
+      var controller = null, revision = 0;
+      container._mediaCleanup = function () { revision++; if (controller) controller.abort(); if (_openCal && _openCal._owner === trigger) closeCal(); };
+      trigger.addEventListener("click", function (event) {
+        event.stopPropagation(); var opened = _openCal && _openCal._owner === trigger; closeCal();
+        if (!opened) openCalFor(trigger, input);
+      });
+      input.addEventListener("change", function () {
+        revision++; if (controller) controller.abort(); _rtDay = {date: input.value, result: null};
+        load.disabled = false; refresh.hidden = true; status.textContent = ""; result.replaceChildren(); syncDateLabels();
+      });
+      function show(data) {
+        result.replaceChildren();
+        if (!data.connected) {
+          result.appendChild(rtElement("p", "chart-muted", "Connect RescueTime in Manage to explore your activity."));
+          var link = rtElement("a", "btn", "Open Manage"); link.href = "/journal/sections#sec-integrations"; result.appendChild(link); return;
+        }
+        var reports = data.reports || {};
+        [["hourly", "Activity by hour"], ["activities", "All apps and websites"], ["documents", "Pages and documents"]].forEach(function (pair) {
+          var report = reports[pair[0]] || {}, area = rtElement("section", "rt-report");
+          area.setAttribute("aria-label", pair[1]); area.appendChild(rtElement("h4", "", pair[1]));
+          if (report.status !== "ok") area.appendChild(rtElement("p", "chart-muted", report.message || "This report is unavailable."));
+          if (report.fetched) area.appendChild(rtElement("p", "chart-muted", (report.status === "ok" ? "Updated " : "Showing saved data from ") + report.fetched.replace("T", " ")));
+          var rows = Array.isArray(report.rows) ? report.rows : [];
+          if (report.status === "ok" || rows.length) {
+            if (pair[0] === "hourly") rtHourlyChart(area, rows, c);
+            else rtDetailList(area, rows, pair[0] === "documents");
+          }
+          if (pair[0] === "documents") area.appendChild(rtElement("p", "chart-muted", "Titles and URLs are shown as supplied by RescueTime. Page time is already included in app and website totals."));
+          result.appendChild(area);
+        });
+      }
+      function fetchDay(force) {
+        if (controller) controller.abort(); controller = new AbortController();
+        var own = ++revision, date = input.value;
+        load.disabled = refresh.disabled = true; status.textContent = "Loading activity…";
+        fetch("/integrations/rescuetime/detail?date=" + encodeURIComponent(date) + (force ? "&force=1" : ""), {method: "POST", signal: controller.signal})
+          .then(function (response) { if (!response.ok) throw new Error("Report failed"); return response.json(); })
+          .then(function (data) {
+            if (own !== revision || !container.isConnected) return;
+            if (!data || data.ok === false) throw new Error("Report failed");
+            _rtDay = {date: date, result: data}; refresh.hidden = !data.connected;
+            status.textContent = ""; show(data);
+          }).catch(function (error) {
+            if (own === revision && container.isConnected && error.name !== "AbortError") status.textContent = "Could not load this day. Try again.";
+          }).finally(function () { if (own === revision) load.disabled = refresh.disabled = false; });
+      }
+      load.addEventListener("click", function () { fetchDay(false); });
+      refresh.addEventListener("click", function () { fetchDay(true); });
+      if (_rtDay.result) show(_rtDay.result);
+    },
+  });
+
   // Pulse over time with 7-day rolling average. Fixed 0–100 y-axis.
   // Mirrors sleep-duration chart.
   CHARTS.push({
@@ -2891,12 +3106,11 @@
       if (!series.length) { U.empty(container, "No pulse data in this range."); return; }
       var vals = series.map(function (s) { return s.pulse; });
       var min = 0, max = 100, span = 100;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
         return { x: x, y: y };
       }
@@ -2906,9 +3120,9 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
-      U.text(svg, 0, 14, "100", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, "100", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -2923,7 +3137,7 @@
   // Reuses the sleep-stages stacked bar pattern.
   CHARTS.push({
     id: "productivity-time-breakdown", panel: "productivity",
-    title: "Productive vs distracting vs neutral time",
+    title: "Time by productivity",
     render: function (container, entries, sections, c) {
       var series = entries
         .filter(function (e) { return rescueTimeOf(e); })
@@ -2934,23 +3148,24 @@
             productive_min: r.productive_min || 0,
             distracting_min: r.distracting_min || 0,
             neutral_min: r.neutral_min || 0,
+            unrated_min: r.unrated_min || 0,
           };
         })
         .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       if (!series.length) { U.empty(container, "No time breakdown data in this range."); return; }
 
-      var CAT_KEYS = ["productive_min", "distracting_min", "neutral_min"];
-      var CAT_LABELS = ["Productive", "Distracting", "Neutral"];
-      var CAT_COLORS = [c.accent, c.danger, U.colorMix(c.muted, 60)];
+      var CAT_KEYS = ["productive_min", "distracting_min", "neutral_min", "unrated_min"];
+      var CAT_LABELS = ["Productive", "Distracting", "Neutral", "Unrated"];
+      var CAT_COLORS = [c.accent, c.danger, U.colorMix(c.muted, 60), U.colorMix(c.text, 85)];
 
       // Stacked bar: one bar per day, stack the three categories.
       var maxTotal = Math.max.apply(null, series.map(function (s) {
-        return s.productive_min + s.distracting_min + s.neutral_min;
+        return s.productive_min + s.distracting_min + s.neutral_min + s.unrated_min;
       })) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
-      var bw = (w - pad - 10) / series.length;
+      var bands = U.dateBands(series, pad, w - pad - 10), bw = bands.width, inset = Math.min(1, bw / 4);
       series.forEach(function (s, i) {
         var stackBottom = h - pad - 10 + 10;  // bottom of chart area (y=10 is top)
         var remaining = stackBottom;
@@ -2959,11 +3174,12 @@
           if (!v) return;
           var bh = (h - pad - 10) * (v / maxTotal);
           remaining -= bh;
-          U.drawBar(svg, pad + i * bw + 1, remaining, bw - 2, bh, CAT_COLORS[ki]);
+          U.drawBar(svg, bands.x(i) + inset, remaining, bw - inset * 2, bh, CAT_COLORS[ki],
+            s.date + " · " + CAT_LABELS[ki] + " · " + fmtProdTime(v));
         });
       });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 series.length > 1 ? [series[0].date, series[series.length - 1].date] : [series[0].date], c);
+                 U.dateLabels(series), c);
       container.appendChild(svg);
 
       // Legend.
@@ -2993,7 +3209,7 @@
   CHARTS.push({
     id: "productivity-categories", panel: "productivity", title: "Time by category",
     render: function (container, entries, sections, c) {
-      var totals = {};
+      var totals = Object.create(null);
       entries.forEach(function (e) {
         var r = rescueTimeOf(e);
         if (!r) return;
@@ -3006,54 +3222,42 @@
       rows = rows.slice(0, 8);
       if (!rows.length) { U.empty(container, "No category data in this range."); return; }
 
-      var maxV = rows[0].min || 1;
-      var w = 600, h = Math.max(120, rows.length * 28 + 20), pad = 0;
-      var svg = U.svg(w, h);
-      var barW = w - 160;
-      rows.forEach(function (row, i) {
-        var y = i * 28 + 10;
-        var bw = barW * (row.min / maxV);
-        U.drawBar(svg, 150, y, bw, 18, c.accent);
-        U.text(svg, 144, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, 150 + bw + 4, y + 13, fmtProdTime(row.min), c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, rows.map(function (row) {
+        return {label: row.name, value: row.min, note: fmtProdTime(row.min), color: c.accent};
+      }));
     },
   });
 
-  // Top activities (websites/apps) by time. Mirrors rescuetime_top_activities;
-  // bar color conveys productivity (accent = productive, danger = distracting).
+  var _rtActivityQuery = "";
   CHARTS.push({
-    id: "productivity-top-activities", panel: "productivity",
-    title: "Top activities by time",
+    id: "productivity-top-activities", panel: "productivity", title: "Apps and websites",
     render: function (container, entries, sections, c) {
-      var rows = aggRtActivities(entries);
-      rows.sort(function (a, b) { return b.min - a.min; });
-      rows = rows.slice(0, 8);
-      if (!rows.length) {
-        U.empty(container, "No activity breakdown in this range. Re-sync RescueTime to fetch the per-website/app detail.");
-        return;
+      var rows = aggRtActivities(entries).sort(function (a, b) { return b.min - a.min; });
+      if (!rows.length) { U.empty(container, "No activity breakdown yet. Sync RescueTime from Manage."); return; }
+      var search = document.createElement("input"); search.type = "search";
+      search.className = "rt-detail-search"; search.placeholder = "Search apps and websites…";
+      search.setAttribute("aria-label", "Search apps and websites"); search.value = _rtActivityQuery;
+      var list = document.createElement("div"), note = document.createElement("p"), more = document.createElement("button");
+      note.className = "chart-muted"; more.type = "button"; more.textContent = "Show more";
+      var limit = 8;
+      function draw() {
+        _rtActivityQuery = search.value;
+        var query = search.value.trim().toLowerCase();
+        var found = rows.filter(function (row) { return (row.name + " " + (row.category || "")).toLowerCase().includes(query); });
+        list.replaceChildren();
+        if (!found.length) U.empty(list, "No matching activities.");
+        else U.rankBars(list, found.slice(0, limit).map(function (row) {
+          return {label: row.name, value: row.min, note: fmtProdTime(row.min) + (row.category ? " · " + row.category : ""), color: rtProdColor(row.productivity, c)};
+        }));
+        note.textContent = Math.min(limit, found.length) + " of " + found.length + " activities";
+        if (entries.some(function (e) { var r = rescueTimeOf(e); return r && r.activity_version !== 2; })) {
+          note.textContent += " · Earlier imports may be partial. Load a day below for more detail.";
+        }
+        more.hidden = found.length <= limit;
       }
-      var notes = rows.map(function (row) {
-        return fmtProdTime(row.min) + (row.category ? "  ·  " + row.category : "");
-      });
-      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
-      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.name || "").length); }, 0);
-      var maxV = rows[0].min || 1;
-      var w = 600, h = Math.max(120, rows.length * 28 + 20);
-      var svg = U.svg(w, h);
-      // Left gutter sized to the longest activity name (capped), right gutter
-      // to the widest note. ≈6 units/char at these sizes.
-      var leftPad = Math.min(210, Math.ceil(maxName * 6) + 14);
-      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
-      rows.forEach(function (row, i) {
-        var y = i * 28 + 10;
-        var bw = barW * (row.min / maxV);
-        U.drawBar(svg, leftPad, y, bw, 18, rtProdColor(row.productivity, c));
-        U.text(svg, leftPad - 6, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      search.addEventListener("input", function () { limit = 8; draw(); });
+      more.addEventListener("click", function () { limit += 30; draw(); });
+      container.append(search, note, list, more); draw();
     },
   });
 
@@ -3068,7 +3272,7 @@
       ranked.sort(function (a, b) { return b.min - a.min; });
       var acts = ranked.slice(0, TOP_N);
       if (!acts.length) { U.empty(container, "No activity breakdown in this range."); return; }
-      var keep = {};
+      var keep = Object.create(null);
       acts.forEach(function (a) { keep[a.name] = true; });
 
       var byDate = {};
@@ -3097,12 +3301,11 @@
         });
       });
 
-      var w = 600, h = 200, pad = 34;
+      var w = U.chartWidth(), h = 200, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = dates.length === 1 ? pad + (w - pad - 10) / 2
-                                   : pad + ((w - pad - 10) * i) / (dates.length - 1);
+        var x = U.dateX(dates, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - v / maxV);
         return { x: x, y: y };
       }
@@ -3112,9 +3315,9 @@
         U.drawLine(svg, pts, color, 1.5);
       });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [dates[0], dates[dates.length - 1]], c);
-      U.text(svg, 0, 14, fmtProdTime(maxV), c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+                 U.dateLabels(dates), c);
+      U.text(svg, 0, 14, fmtProdTime(maxV), c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 10 });
       container.appendChild(svg);
 
       // Legend: colored chip per activity.
@@ -3151,7 +3354,7 @@
       }
       var nonNull = avgs.filter(function (a) { return a != null; });
       var max = Math.max.apply(null, nonNull) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       var bw = (w - pad - 10) / 7;
@@ -3160,7 +3363,7 @@
         var bh = (h - pad - 10) * (a / max);
         U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
       container.appendChild(svg);
       var ranked = DOW_NAMES
         .map(function (n, i) { return [n, avgs[i]]; })
@@ -3191,9 +3394,10 @@
       var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
       var xSpan = xMax - xMin || 1;
       var yMin = 1, yMax = 7, ySpan = yMax - yMin;
-      var w = 600, h = 240, pad = 36;
+      var w = U.chartWidth(), h = 240, pad = 36;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
       pairs.forEach(function (p) {
         var x = (xMax - xMin) === 0
           ? pad + (w - pad - 10) / 2
@@ -3201,10 +3405,10 @@
         var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
         U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
       });
-      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
       U.text(svg, w / 2, h - 2, "pulse (x)  vs  mood (y)", c.muted,
-             { anchor: "middle", size: 9 });
+             { anchor: "middle", size: 10 });
       container.appendChild(svg);
       var r = pearson(xs, pairs.map(function (p) { return p.y; }));
       U.statsRow(container, [
@@ -3220,11 +3424,30 @@
 
   // Cache for the /integrations/spotify/taste endpoint.
   var _tasteCache = null;
+  var _tastePending = null;
+  var _tasteVersion = 0;
+
+  function loadTaste() {
+    if (_tasteCache !== null) return Promise.resolve(_tasteCache);
+    if (_tastePending) return _tastePending;
+    var version = _tasteVersion;
+    var pending = fetch("/integrations/spotify/taste").then(function (resp) {
+      if (!resp.ok) throw new Error("Taste unavailable");
+      return resp.json();
+    }).then(function (data) {
+      if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("Invalid taste data");
+      if (version === _tasteVersion) _tasteCache = data;
+      return data;
+    }).finally(function () { if (_tastePending === pending) _tastePending = null; });
+    _tastePending = pending;
+    return pending;
+  }
 
   function asArray(v) {
     return Array.isArray(v) ? v : [];
   }
   function finiteNum(v) {
+    if (v == null || typeof v === "boolean" || typeof v === "object" || v === "") return null;
     var n = Number(v);
     return Number.isFinite(n) ? n : null;
   }
@@ -3243,34 +3466,41 @@
     return m + "m";
   }
 
-  // Return the music dict if it has usable listening data, else null.
-  // Mirrors journal._entry_music for existing entries, with tolerance for
-  // richer/backfilled payloads where tracks may be an array instead of a count.
+  function musicPlays(m) {
+    var keys = ["plays", "imported_plays", "history", "streaming_history"];
+    for (var i = 0; i < keys.length; i++) {
+      var value = m[keys[i]];
+      if (Array.isArray(value)) return value;
+      if (value && typeof value === "object") return Object.values(value);
+    }
+    return asArray(m.tracks);
+  }
+
+  // Read canonical counts or older play records without changing the payload.
   function musicOf(e) {
     var m = e && e.music;
     if (!m || typeof m !== "object") return null;
-    var tracks = firstNum(m, ["tracks", "track_count", "plays", "play_count"]);
-    if (tracks == null && Array.isArray(m.tracks)) tracks = m.tracks.length;
-    if (tracks == null && Array.isArray(m.plays)) tracks = m.plays.length;
-    var minutes = firstNum(m, ["minutes", "listened_minutes", "duration_min", "duration_minutes"]);
-    var hasLists = ["top_artists", "top_tracks", "top_albums", "contexts", "top_contexts"].some(function (k) {
-      return Array.isArray(m[k]) && m[k].length;
+    var hasLists = ["top_artists", "top_tracks", "top_albums", "contexts", "top_contexts", "artists", "albums"].some(function (k) {
+      return m[k] && typeof m[k] === "object" && Object.keys(m[k]).length;
     });
-    if (tracks || minutes || hasLists) {
-      if (tracks != null && typeof m.tracks !== "number") m._track_count = tracks;
-      if (minutes != null && m.minutes == null) m._minutes = minutes;
-      return m;
-    }
-    return null;
+    return musicTracks(m) || musicMinutes(m) || musicDistinct(m) || hasLists || musicPlays(m).length ? m : null;
   }
   function musicTracks(m) {
-    return firstNum(m, ["tracks", "track_count", "plays", "play_count", "_track_count"]) || 0;
+    return firstNum(m, ["tracks", "track_count", "play_count"]) || musicPlays(m).length;
   }
   function musicMinutes(m) {
-    return firstNum(m, ["minutes", "listened_minutes", "duration_min", "duration_minutes", "_minutes"]) || 0;
+    return firstNum(m, ["minutes", "listened_minutes", "duration_min", "duration_minutes"]) || Math.round(musicPlays(m).reduce(function (total, play) {
+      return total + (firstNum(play, ["duration_ms", "ms_played"]) || 0);
+    }, 0) / 60000);
   }
   function musicDistinct(m) {
-    return firstNum(m, ["distinct", "distinct_tracks", "distinct_track_count", "unique_tracks"]);
+    var count = firstNum(m, ["distinct", "distinct_tracks", "distinct_track_count", "unique_tracks"]);
+    if (count) return count;
+    var plays = musicPlays(m);
+    if (!plays.length) return count;
+    return new Set(plays.map(function (play) {
+      return play && (play.track_id || play.id || play.spotify_track_uri || play.name || play.master_metadata_track_name);
+    }).filter(Boolean)).size;
   }
   function itemName(item) {
     if (typeof item === "string") return item;
@@ -3281,9 +3511,9 @@
     if (!item || typeof item !== "object") return 1;
     return firstNum(item, ["count", "plays", "play_count", "tracks", "minutes"]) || 1;
   }
-  function addNamedTotals(totals, items) {
+  function addNamedTotals(totals, items, displayName) {
     asArray(items).forEach(function (item) {
-      var name = itemName(item);
+      var name = (displayName || itemName)(item);
       if (!name) return;
       totals[name] = (totals[name] || 0) + itemCount(item);
     });
@@ -3302,52 +3532,47 @@
       .slice(0, limit || 10);
   }
   function renderHorizontalBars(container, rows, c) {
-    var maxV = rows[0].count || 1;
-    var w = 600, h = Math.max(120, rows.length * 28 + 20);
-    var svg = U.svg(w, h);
-    var barW = w - 180;
-    rows.forEach(function (row, i) {
-      var y = i * 28 + 10;
-      var bw = barW * (row.count / maxV);
-      U.drawBar(svg, 170, y, bw, 18, c.accent);
-      U.text(svg, 164, y + 13, row.name, c.muted, { anchor: "end", size: 10 });
-      U.text(svg, 170 + bw + 4, y + 13, String(row.count), c.muted, { size: 9 });
-    });
-    container.appendChild(svg);
+    U.rankBars(container, rows.map(function (row) {
+      return {label: row.name, value: row.count, color: c.accent};
+    }));
   }
-  function aggregateMusicNames(entries, keys, derive) {
-    var totals = {};
+  function aggregateMusicNames(entries, keys, derive, displayName) {
+    var totals = Object.create(null);
     entries.forEach(function (e) {
       var m = musicOf(e);
       if (!m) return;
-      keys.forEach(function (k) { addNamedTotals(totals, m[k]); });
-      if (derive) derive(m, totals);
+      var key = keys.find(function (k) { return Array.isArray(m[k]) && m[k].length; });
+      if (key) addNamedTotals(totals, m[key], displayName);
+      else if (derive) derive(m, totals);
     });
     return rowsFromTotals(totals, 10);
   }
   function trackDisplayName(item) {
     if (typeof item === "string") return item;
     if (!item || typeof item !== "object") return null;
-    var name = item.name || item.title;
-    var artists = asArray(item.artists).filter(Boolean).join(", ");
+    var name = item.name || item.track || item.title || item.master_metadata_track_name;
+    var artists = musicArtistName(item);
     return name && artists ? name + " · " + artists : name;
   }
   function albumDisplayName(item) {
     if (typeof item === "string") return item;
     if (!item || typeof item !== "object") return null;
-    var name = item.album || item.album_name || item.name;
-    var artists = asArray(item.artists).filter(Boolean).join(", ");
+    var name = item.album || item.album_name || item.master_metadata_album_album_name || item.name;
+    var artists = musicArtistName(item);
     return name && artists ? name + " · " + artists : name;
   }
+  function musicArtistName(item) {
+    return asArray(item.artists).filter(Boolean).join(", ") || item.artist || item.album_artist || item.master_metadata_album_artist_name;
+  }
   function addDerivedTrackTotals(m, totals) {
-    asArray(m.tracks).concat(asArray(m.plays)).forEach(function (item) {
+    musicPlays(m).forEach(function (item) {
       var name = trackDisplayName(item);
       if (!name) return;
       totals[name] = (totals[name] || 0) + itemCount(item);
     });
   }
   function addDerivedAlbumTotals(m, totals) {
-    asArray(m.tracks).concat(asArray(m.plays)).forEach(function (item) {
+    musicPlays(m).forEach(function (item) {
       var name = albumDisplayName(item);
       if (!name) return;
       totals[name] = (totals[name] || 0) + itemCount(item);
@@ -3356,12 +3581,13 @@
   function sourceOf(m) {
     var sources = asArray(m.sources).filter(Boolean);
     if (sources.length) return sources.join(" + ");
-    return m.source || m.import_source || m.imported_from || m.provider || null;
+    return m.source || m.import_source || m.imported_from || m.provider || (hasImportMarker(m) ? "imported" : "unknown");
   }
   function hasImportMarker(m) {
-    var sources = asArray(m.sources).join(" ");
+    var sources = asArray(m.sources).join(" ").toLowerCase();
     return !!(m.imported || m.import_id || m.imported_at || m.import_source ||
-              m.imported_from || sources.indexOf("history_import") !== -1);
+              m.imported_from || String(m.source || "").toLowerCase().indexOf("import") !== -1 || sources.indexOf("import") !== -1 ||
+              ["imported_plays", "history", "streaming_history"].some(function (key) { return m[key] && Object.keys(m[key]).length; }));
   }
   function normalizeTaste(taste) {
     var terms = ["short_term", "medium_term", "long_term"];
@@ -3392,7 +3618,7 @@
         return acc + musicTracks(musicOf(e));
       }, 0);
       var distinctTotal = 0, hasDistinct = false;
-      var sources = {}, imported = 0;
+      var sources = Object.create(null), imported = 0;
       musicEntries.forEach(function (e) {
         var m = musicOf(e);
         var d = musicDistinct(m);
@@ -3413,6 +3639,11 @@
       statCard(grid, totalTracks, "track plays", hasDistinct ? distinctTotal + " distinct" : null);
       statCard(grid, musicEntries.length, "days tracked", daySub.join(" · "));
       container.appendChild(grid);
+      if (sources.history_import) {
+        var note = document.createElement("p"); note.className = "chart-muted";
+        note.textContent = "Imported days use history totals. Live sync stays saved separately.";
+        container.appendChild(note);
+      }
     },
   });
 
@@ -3428,12 +3659,11 @@
       if (!series.length) { U.empty(container, "No music data in this range."); return; }
       var vals = series.map(function (s) { return s.minutes; });
       var max = Math.max.apply(null, vals) || 1, min = 0, span = max - min || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
         return { x: x, y: y };
       }
@@ -3443,9 +3673,9 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
-      U.text(svg, 0, 14, Math.round(max) + "m", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0m", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, Math.round(max) + "m", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0m", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -3471,9 +3701,10 @@
     var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
     var xSpan = xMax - xMin || 1;
     var yMin = 1, yMax = 7, ySpan = yMax - yMin;
-    var w = 600, h = 240, pad = 36;
+    var w = U.chartWidth(), h = 240, pad = 36;
     var svg = U.svg(w, h);
     U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+    U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
     pairs.forEach(function (p) {
       var x = (xMax - xMin) === 0
         ? pad + (w - pad - 10) / 2
@@ -3481,10 +3712,10 @@
       var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
       U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
     });
-    U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-    U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+    U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+    U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
     U.text(svg, w / 2, h - 2, label + (unit ? " (" + unit + ")" : "") + " (x)  vs  mood (y)", c.muted,
-           { anchor: "middle", size: 9 });
+           { anchor: "middle", size: 10 });
     container.appendChild(svg);
     var r = pearson(xs, pairs.map(function (p) { return p.y; }));
     U.statsRow(container, [
@@ -3521,7 +3752,7 @@
   CHARTS.push({
     id: "music-top-tracks", panel: "music", title: "Top tracks",
     render: function (container, entries, sections, c) {
-      var rows = aggregateMusicNames(entries, ["top_tracks", "tracks_list", "played_tracks"], addDerivedTrackTotals);
+      var rows = aggregateMusicNames(entries, ["top_tracks", "tracks_list", "played_tracks"], addDerivedTrackTotals, trackDisplayName);
       if (!rows.length) { U.empty(container, "No track detail in this range."); return; }
       renderHorizontalBars(container, rows, c);
     },
@@ -3530,7 +3761,7 @@
   CHARTS.push({
     id: "music-top-albums", panel: "music", title: "Top albums",
     render: function (container, entries, sections, c) {
-      var rows = aggregateMusicNames(entries, ["top_albums", "albums"], addDerivedAlbumTotals);
+      var rows = aggregateMusicNames(entries, ["top_albums", "albums"], addDerivedAlbumTotals, albumDisplayName);
       if (!rows.length) { U.empty(container, "No album detail in this range."); return; }
       renderHorizontalBars(container, rows, c);
     },
@@ -3539,7 +3770,7 @@
   CHARTS.push({
     id: "music-source-mix", panel: "music", title: "Source mix & import coverage",
     render: function (container, entries, sections, c) {
-      var totals = {}, imported = 0, withSource = 0, tracked = 0;
+      var totals = Object.create(null), imported = 0, withSource = 0, tracked = 0;
       entries.forEach(function (e) {
         var m = musicOf(e);
         if (!m) return;
@@ -3586,10 +3817,12 @@
       var placeholder = document.createElement("p");
       placeholder.className = "chart-muted";
       placeholder.textContent = "Loading taste data…";
-      container.appendChild(placeholder);
+      var feedback = document.createElement("div"), rendered = false, requestVersion = 0;
+      feedback.appendChild(placeholder); container.appendChild(feedback);
 
       function renderTaste(taste) {
-        container.removeChild(placeholder);
+        rendered = true;
+        container.replaceChildren();
         var terms = ["short_term", "medium_term", "long_term"];
         var termLabels = { short_term: "Last 4 weeks", medium_term: "Last 6 months", long_term: "All time" };
         var normalized = normalizeTaste(taste || {});
@@ -3602,7 +3835,7 @@
         if (!hasAny) {
           var none = document.createElement("p");
           none.className = "chart-muted";
-          none.textContent = "No taste data yet — connect Spotify and sync to see your listening profile.";
+          none.textContent = "No taste data yet. Connect Spotify and sync.";
           container.appendChild(none);
           return;
         }
@@ -3648,20 +3881,27 @@
         });
       }
 
-      if (_tasteCache !== null) {
-        renderTaste(_tasteCache);
-        return;
-      }
-      fetch("/integrations/spotify/taste")
-        .then(function (resp) { return resp.ok ? resp.json() : null; })
-        .then(function (data) {
-          _tasteCache = data || {};
-          renderTaste(_tasteCache);
-        })
-        .catch(function () {
-          _tasteCache = {};
-          renderTaste(_tasteCache);
+      function requestTaste() {
+        var version = ++requestVersion, retryFocused = feedback.contains(document.activeElement);
+        placeholder.textContent = "Loading taste data…";
+        feedback.replaceChildren(placeholder);
+        if (!rendered) container.replaceChildren(feedback); else container.appendChild(feedback);
+        if (retryFocused) { container.tabIndex = -1; container.focus({preventScroll: true}); }
+        loadTaste().then(function (taste) {
+          if (version === requestVersion && container.isConnected) renderTaste(taste);
+        }).catch(function () {
+          if (version !== requestVersion || !container.isConnected) return;
+          feedback.replaceChildren();
+          var error = document.createElement("p"); error.className = "chart-muted";
+          error.setAttribute("role", "status"); error.textContent = "Could not load your Spotify taste.";
+          var retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry";
+          retry.addEventListener("click", requestTaste);
+          feedback.appendChild(error); feedback.appendChild(retry);
         });
+      }
+      container._refreshTaste = requestTaste;
+      if (_tasteCache !== null) { renderTaste(_tasteCache); return; }
+      requestTaste();
     },
   });
 
@@ -3672,7 +3912,7 @@
     id: "music-audio-features", panel: "music", title: "Audio features",
     render: function (container, entries, sections, c) {
       var hasFeatures = entries.some(function (e) {
-        return musicOf(e) && musicOf(e).valence != null;
+        return musicOf(e) && ["valence", "energy", "danceability", "tempo"].some(function (key) { return musicOf(e)[key] != null; });
       });
 
       if (!hasFeatures) {
@@ -3702,20 +3942,21 @@
         var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
         var xSpan = xMax - xMin || 1;
         var yMin = 1, yMax = 7, ySpan = yMax - yMin;
-        var w = 600, h = 240, pad = 36;
+        var w = U.chartWidth(), h = 240, pad = 36;
         var svg = U.svg(w, h);
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+        U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
         pairs.forEach(function (p) {
-          var x = xSpan === 0
+          var x = xMax === xMin
             ? pad + (w - pad - 10) / 2
             : pad + (w - pad - 10) * ((p.x - xMin) / xSpan);
           var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
           U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
         });
-        U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+        U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
         U.text(svg, w / 2, h - 2, "valence (x)  vs  mood (y)", c.muted,
-               { anchor: "middle", size: 9 });
+               { anchor: "middle", size: 10 });
         container.appendChild(svg);
         var r = pearson(xs, pairs.map(function (p) { return p.y; }));
         U.statsRow(container, [
@@ -3742,7 +3983,8 @@
         return b.length ? b.reduce(function (a, x) { return a + x; }, 0) / b.length : null;
       });
 
-      // Normalize tempo to 0–1 for display (typical BPM range 60–200).
+      var rawAvgs = avgs.slice();
+      // Normalize the tempo track while retaining its actual BPM label.
       var tempoIdx = 3;
       if (avgs[tempoIdx] != null) {
         avgs[tempoIdx] = Math.min(1, Math.max(0, (avgs[tempoIdx] - 60) / 140));
@@ -3756,32 +3998,18 @@
       avgTitle.textContent = "Average audio features";
       container.appendChild(avgTitle);
 
-      var maxV = 1;
-      var w2 = 600, h2 = 180, pad2 = 34;
-      var svg2 = U.svg(w2, h2);
-      U.drawGrid(svg2, pad2, 10, w2 - pad2 - 10, h2 - pad2 - 10, 4, c);
       var FEAT_COLORS = [c.accent, U.colorMix(c.accent, 70),
                          U.colorMix(c.accent, 50), U.colorMix(c.muted, 70)];
-      var bw2 = (w2 - pad2 - 10) / FEAT_KEYS.length;
-      avgs.forEach(function (a, i) {
-        if (a == null) return;
-        var bh = (h2 - pad2 - 10) * (a / maxV);
-        U.drawBar(svg2, pad2 + i * bw2 + 3, 10 + (h2 - pad2 - 10) - bh, bw2 - 6, bh, FEAT_COLORS[i]);
-        U.text(svg2, pad2 + i * bw2 + bw2 / 2, 10 + (h2 - pad2 - 10) - bh - 3,
-               U.fmt(a), c.muted, { anchor: "middle", size: 9 });
-      });
-      U.drawAxis(svg2, pad2, 10, w2 - pad2 - 10, h2 - pad2 - 10, FEAT_LABELS, c);
-      container.appendChild(svg2);
-
-      // Stats row shows the RAW averages (tempo in BPM), so label tempo "(bpm)"
-      // not "(norm.)" — only the bar chart above plots the normalized tempo.
-      var STAT_LABELS = ["valence", "energy", "danceability", "tempo (bpm)"];
-      U.statsRow(container, FEAT_KEYS.map(function (k, i) {
-        var raw = buckets[k].length
-          ? buckets[k].reduce(function (a, x) { return a + x; }, 0) / buckets[k].length
-          : null;
-        return [STAT_LABELS[i], raw != null ? U.fmt(raw) : null];
-      }));
+      U.rankBars(container, avgs.map(function (value, i) {
+        return value == null ? null : {label: i === tempoIdx ? "Tempo" : FEAT_LABELS[i], value: value,
+          note: U.fmt(rawAvgs[i]) + (i === tempoIdx ? " bpm" : ""), color: FEAT_COLORS[i]};
+      }).filter(Boolean), 1);
+      if (rawAvgs[tempoIdx] != null) {
+        var tempoScale = document.createElement("p");
+        tempoScale.className = "chart-muted";
+        tempoScale.textContent = "Tempo scale: 60–200 bpm.";
+        container.appendChild(tempoScale);
+      }
     },
   });
 
@@ -3814,14 +4042,15 @@
         U.empty(container, "No phone-usage data in this range."); return;
       }
       var screen = uEntries.map(function (e) { return usageOf(e).screen_min || 0; });
-      var unlocks = uEntries.map(function (e) { return usageOf(e).unlocks || 0; });
+      var unlocks = uEntries.filter(function (e) { return usageOf(e).details_available !== false; })
+        .map(function (e) { return usageOf(e).unlocks || 0; });
       var avgScreen = screen.reduce(function (a, b) { return a + b; }, 0) / screen.length;
       var avgUnlocks = unlocks.reduce(function (a, b) { return a + b; }, 0) / unlocks.length;
 
       var grid = document.createElement("div");
       grid.className = "stat-cards";
       statCard(grid, fmtScreen(avgScreen), "avg screen time/day", null);
-      statCard(grid, Math.round(avgUnlocks), "avg unlocks/day", null);
+      statCard(grid, unlocks.length ? Math.round(avgUnlocks) : "—", "avg unlocks/day", null);
       statCard(grid, uEntries.length, "days tracked", null);
       container.appendChild(grid);
     },
@@ -3838,12 +4067,11 @@
       if (!series.length) { U.empty(container, "No screen-time data in this range."); return; }
       var vals = series.map(function (s) { return s.screen_min; });
       var max = Math.max.apply(null, vals) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                    : pad + ((w - pad - 10) * i) / (series.length - 1);
+        var x = U.dateX(series, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - v / max);
         return { x: x, y: y };
       }
@@ -3853,9 +4081,9 @@
       U.drawLine(svg, pts, c.accent, 1.5);
       pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [series[0].date, series[series.length - 1].date], c);
-      U.text(svg, 0, 14, fmtScreen(max), c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, fmtScreen(max), c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -3869,7 +4097,7 @@
   // Aggregate per-app minutes AND opens over the range.  JS mirror of
   // usage.usage_top_apps: rows are {name(pkg), label, min, opens}, min-desc.
   function aggUsageApps(entries) {
-    var totals = {}, opens = {}, labels = {};
+    var totals = Object.create(null), opens = Object.create(null), labels = Object.create(null);
     entries.forEach(function (e) {
       var u = usageOf(e);
       if (!u) return;
@@ -3898,23 +4126,9 @@
       var notes = rows.map(function (row) {
         return fmtScreen(row.min) + (row.opens ? "  ·  " + row.opens + " opens" : "");
       });
-      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
-      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.label || "").length); }, 0);
-      var maxV = rows[0].min || 1;
-      var w = 600, h = Math.max(120, rows.length * 28 + 20);
-      var svg = U.svg(w, h);
-      // Left gutter sized to the longest app name (not a fixed slab); right
-      // gutter to the widest value label. ≈6 units/char at these sizes.
-      var leftPad = Math.ceil(maxName * 6) + 14;
-      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
-      rows.forEach(function (row, i) {
-        var y = i * 28 + 10;
-        var bw = barW * (row.min / maxV);
-        U.drawBar(svg, leftPad, y, bw, 18, c.accent);
-        U.text(svg, leftPad - 6, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, rows.map(function (row, i) {
+        return {label: row.label, value: row.min, note: notes[i], color: c.accent};
+      }));
     },
   });
 
@@ -3930,21 +4144,9 @@
         U.empty(container, "No app-open data in this range."); return;
       }
       var notes = rows.map(function (row) { return row.opens + " opens"; });
-      var maxNote = notes.reduce(function (m, s) { return Math.max(m, s.length); }, 0);
-      var maxName = rows.reduce(function (m, r) { return Math.max(m, (r.label || "").length); }, 0);
-      var maxV = rows[0].opens || 1;
-      var w = 600, h = Math.max(120, rows.length * 28 + 20);
-      var svg = U.svg(w, h);
-      var leftPad = Math.ceil(maxName * 6) + 14;
-      var barW = Math.max(60, w - leftPad - maxNote * 6 - 12);
-      rows.forEach(function (row, i) {
-        var y = i * 28 + 10;
-        var bw = barW * (row.opens / maxV);
-        U.drawBar(svg, leftPad, y, bw, 18, c.accent);
-        U.text(svg, leftPad - 6, y + 13, row.label, c.muted, { anchor: "end", size: 10 });
-        U.text(svg, leftPad + bw + 4, y + 13, notes[i], c.muted, { size: 9 });
-      });
-      container.appendChild(svg);
+      U.rankBars(container, rows.map(function (row, i) {
+        return {label: row.label, value: row.opens, note: notes[i], color: c.accent};
+      }));
       var totalOpens = rows.reduce(function (a, r) { return a + r.opens; }, 0);
       U.statsRow(container, [
         ["apps", rows.length],
@@ -3965,7 +4167,7 @@
       ranked.sort(function (a, b) { return b.min - a.min; });
       var apps = ranked.slice(0, TOP_N);
       if (!apps.length) { U.empty(container, "No app data in this range."); return; }
-      var keep = {};
+      var keep = Object.create(null);
       apps.forEach(function (a) { keep[a.name] = true; });
 
       var byDate = {};
@@ -3994,12 +4196,11 @@
         });
       });
 
-      var w = 600, h = 200, pad = 34;
+      var w = U.chartWidth(), h = 200, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       function ptAt(i, v) {
-        var x = dates.length === 1 ? pad + (w - pad - 10) / 2
-                                   : pad + ((w - pad - 10) * i) / (dates.length - 1);
+        var x = U.dateX(dates, i, pad, w - pad - 10);
         var y = 10 + (h - pad - 10) * (1 - v / maxV);
         return { x: x, y: y };
       }
@@ -4009,9 +4210,9 @@
         U.drawLine(svg, pts, color, 1.5);
       });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 [dates[0], dates[dates.length - 1]], c);
-      U.text(svg, 0, 14, fmtScreen(maxV), c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+                 U.dateLabels(dates), c);
+      U.text(svg, 0, 14, fmtScreen(maxV), c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 10 });
       container.appendChild(svg);
 
       // Legend: colored chip per app.
@@ -4033,24 +4234,25 @@
     id: "usage-unlocks", panel: "usage", title: "Unlocks over time",
     render: function (container, entries, sections, c) {
       var series = entries
-        .filter(function (e) { return usageOf(e); })
+        .filter(function (e) { return usageOf(e) && usageOf(e).details_available !== false; })
         .map(function (e) { return { date: e.date, unlocks: usageOf(e).unlocks || 0 }; })
         .sort(function (a, b) { return a.date < b.date ? -1 : 1; });
       if (!series.length) { U.empty(container, "No unlock data in this range."); return; }
       var vals = series.map(function (s) { return s.unlocks; });
       var max = Math.max.apply(null, vals) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
-      var bw = (w - pad - 10) / series.length;
+      var bands = U.dateBands(series, pad, w - pad - 10), bw = bands.width, inset = Math.min(1, bw / 4);
       series.forEach(function (s, i) {
         var bh = (h - pad - 10) * (s.unlocks / max);
-        U.drawBar(svg, pad + i * bw + 1, 10 + (h - pad - 10) - bh, Math.max(1, bw - 2), bh, c.accent);
+        U.drawBar(svg, bands.x(i) + inset, 10 + (h - pad - 10) - bh, bw - inset * 2, bh, c.accent,
+          s.date + " · " + s.unlocks + (s.unlocks === 1 ? " unlock" : " unlocks"));
       });
       U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-                 series.length > 1 ? [series[0].date, series[series.length - 1].date] : [series[0].date], c);
-      U.text(svg, 0, 14, String(max), c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 9 });
+                 U.dateLabels(series), c);
+      U.text(svg, 0, 14, String(max), c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "0", c.muted, { size: 10 });
       container.appendChild(svg);
       var d = U.describe(vals);
       U.statsRow(container, [
@@ -4079,7 +4281,7 @@
       }
       var nonNull = avgs.filter(function (a) { return a != null; });
       var max = Math.max.apply(null, nonNull) || 1;
-      var w = 600, h = 180, pad = 34;
+      var w = U.chartWidth(), h = 180, pad = 34;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 4, c);
       var bw = (w - pad - 10) / 7;
@@ -4088,7 +4290,7 @@
         var bh = (h - pad - 10) * (a / max);
         U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh, c.accent);
       });
-      U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
+      U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, DOW_NAMES, c);
       container.appendChild(svg);
       var ranked = DOW_NAMES
         .map(function (n, i) { return [n, avgs[i]]; })
@@ -4117,9 +4319,10 @@
       var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
       var xSpan = xMax - xMin || 1;
       var yMin = 1, yMax = 7, ySpan = yMax - yMin;
-      var w = 600, h = 240, pad = 36;
+      var w = U.chartWidth(), h = 240, pad = 36;
       var svg = U.svg(w, h);
       U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+      U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
       pairs.forEach(function (p) {
         var x = (xMax - xMin) === 0
           ? pad + (w - pad - 10) / 2
@@ -4127,10 +4330,10 @@
         var y = 10 + (h - pad - 10) * (1 - (p.y - yMin) / ySpan);
         U.drawDot(svg, x, y, 3, U.colorMix(c.accent, 80));
       });
-      U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+      U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+      U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
       U.text(svg, w / 2, h - 2, "screen min (x)  vs  mood (y)", c.muted,
-             { anchor: "middle", size: 9 });
+             { anchor: "middle", size: 10 });
       container.appendChild(svg);
       var r = pearson(xs, pairs.map(function (p) { return p.y; }));
       U.statsRow(container, [
@@ -4218,14 +4421,14 @@
     var baseVals = Object.keys(target).map(function (d) { return target[d]; });
     if (!baseVals.length) return [];
     var baseline = baseVals.reduce(function (a, b) { return a + b; }, 0) / baseVals.length;
-    var byTag = {};   // "name|sid" -> [after-values]
+    var byTag = Object.create(null);   // "name|sid" -> [after-values]
     entries.forEach(function (e) {
       if (!e.date) return;
       var after = target[isoShift(e.date, lag)];
       if (after == null) return;
       var tags = e.tags || {};
       Object.keys(tags).forEach(function (sid) {
-        var seen = {};
+        var seen = Object.create(null);
         (tags[sid] || []).forEach(function (raw) {
           var n = String(raw).trim().toLowerCase();
           if (!n || seen[n]) return;
@@ -4288,7 +4491,7 @@
   // value in range. Numeric predictors derived from section ids in `numbers`.
   function availableContinuousPredictors(entries) {
     var out = [];
-    var seen = {};
+    var seen = Object.create(null);
     entries.forEach(function (e) {
       var nums = e.numbers || {};
       Object.keys(nums).forEach(function (sid) { if (nums[sid] != null) seen[sid] = true; });
@@ -4369,10 +4572,11 @@
   // The row's phrased effect + r/uplift + n text.
   function leadEffectText(row) {
     var sign = row.direction === "+" ? "+" : "";
+    var when = "mood " + _lead.lag + (_lead.lag === 1 ? " day" : " days") + " later";
     if (row.r != null && row.uplift == null) {
-      return "next-day mood r=" + sign + U.fmt(row.r) + " (n=" + row.n + ")";
+      return when + " r=" + sign + U.fmt(row.r) + " (n=" + row.n + ")";
     }
-    return "next-day mood " + sign + U.fmt(row.uplift) + " (n=" + row.n + ")";
+    return when + " " + sign + U.fmt(row.uplift) + " (n=" + row.n + ")";
   }
 
   function renderLeadTab(host, c) {
@@ -4404,6 +4608,7 @@
         _lead.lag = lag;
         _lead.selected = null;   // re-rank; selection may no longer qualify
         renderActivePanel();
+        host.querySelector('input[name="lead-lag"][value="' + lag + '"]').focus({preventScroll: true});
       });
       opt.appendChild(input);
       opt.appendChild(document.createTextNode(String(lag)));
@@ -4440,10 +4645,11 @@
     boardPanel.appendChild(bh);
     var list = document.createElement("div");
     list.className = "drivers-list";
-    rows.forEach(function (r) {
+    rows.forEach(function (r, index) {
       var row = document.createElement("div");
       row.className = "driver-row lead-row" +
         (r === sel ? " lead-selected" : "");
+      row.dataset.leadIndex = index;
       var nm = document.createElement("span");
       nm.className = "driver-name";
       nm.appendChild(leadOriginMark(r));
@@ -4452,7 +4658,12 @@
       tx.className = "driver-effect";
       tx.textContent = leadEffectText(r);
       row.appendChild(nm); row.appendChild(tx);
-      makeClickable(row, function () { _lead.selected = r; renderActivePanel(); });
+      makeClickable(row, function () {
+        _lead.selected = r;
+        renderActivePanel();
+        host.querySelector('[data-lead-index="' + index + '"]').focus({preventScroll: true});
+      });
+      row.setAttribute("aria-pressed", String(r === sel));
       list.appendChild(row);
     });
     boardPanel.appendChild(list);
@@ -4483,13 +4694,14 @@
       var res = laggedCorrelation(entries, row.predictor, target, _lead.lag);
       var pairs = res.pairs;
       if (pairs.length >= 2) {
-        var w = 600, h = 240, pad = 36;
+        var w = U.chartWidth(), h = 240, pad = 36;
         var svg = U.svg(w, h);
         var xs = pairs.map(function (p) { return p[0]; });
         var xMin = Math.min.apply(null, xs), xMax = Math.max.apply(null, xs);
         var xSpan = (xMax - xMin) || 1;
         var yMin = 1, yMax = 7, ySpan = yMax - yMin;
         U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
+        U.drawScatterAxis(svg, pad, 10, w - pad - 10, h - pad - 10, xMin, xMax, c);
         var color = row.kind === "numeric" ? (sectionColorOf(row.key) || c.accent) : c.accent;
         function px(x) {
           return (xMax - xMin) === 0 ? pad + (w - pad - 10) / 2
@@ -4507,11 +4719,11 @@
             { x: px(xMax), y: py(lr.slope * xMax + lr.intercept) },
           ], c.accent, 1.5);
         }
-        U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+        U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+        U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
         U.text(svg, w / 2, h - 2,
-               row.label + " (day D)  vs  mood (day D+" + _lead.lag + ")",
-               c.muted, { anchor: "middle", size: 9 });
+               "Indicator (day D) · mood (D+" + _lead.lag + ")",
+               c.muted, { anchor: "middle", size: 10 });
         panel.appendChild(svg);
         U.statsRow(panel, [["points", res.n],
                            ["correlation r", res.r == null ? null : U.fmt(res.r)]]);
@@ -4545,7 +4757,7 @@
       sub.textContent = row.predictor ? "Correlation by lag (peak highlighted)"
                                       : "Uplift by lag (peak highlighted)";
       panel.appendChild(sub);
-      var pw = 320, ph = 150, ppad = 28;
+      var pw = U.chartWidth(), ph = 150, ppad = 28;
       var psvg = U.svg(pw, ph);
       var vals = withVal.map(function (p) { return p.r; });
       var absMax = Math.max.apply(null, vals.map(Math.abs)) || 1;
@@ -4647,13 +4859,12 @@
       U.empty(panel, "Not enough mood data for this tag.");
       return;
     }
-    var w = 600, h = 180, pad = 30;
+    var w = U.chartWidth(), h = 180, pad = 30;
     var svg = U.svg(w, h);
     var min = 1, max = 7, span = max - min;
     U.drawGrid(svg, pad, 10, w - pad - 10, h - pad - 10, 6, c);
     function ptAt(i, v) {
-      var x = series.length === 1 ? pad + (w - pad - 10) / 2
-                                  : pad + ((w - pad - 10) * i) / (series.length - 1);
+      var x = U.dateX(series, i, pad, w - pad - 10);
       var y = 10 + (h - pad - 10) * (1 - (v - min) / span);
       return { x: x, y: y };
     }
@@ -4664,9 +4875,9 @@
     U.drawLine(svg, pts, c.accent, 1.5);
     pts.forEach(function (p) { U.drawDot(svg, p.x, p.y, 2, c.accent); });
     U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10,
-               [series[0].date, series[series.length - 1].date], c);
-    U.text(svg, 0, 14, "7", c.muted, { size: 9 });
-    U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 9 });
+               U.dateLabels(series), c);
+    U.text(svg, 0, 14, "7", c.muted, { size: 10 });
+    U.text(svg, 0, h - pad + 2, "1", c.muted, { size: 10 });
     panel.appendChild(svg);
   }
 
@@ -4677,7 +4888,7 @@
     if (!dow.some(function (n) { return n > 0; })) {
       U.empty(panel, "No entries for this tag in range."); return;
     }
-    var w = 600, h = 170, pad = 30;
+    var w = U.chartWidth(), h = 170, pad = 30;
     var svg = U.svg(w, h);
     var bw = (w - pad - 10) / 7;
     dow.forEach(function (n, i) {
@@ -4685,9 +4896,9 @@
       U.drawBar(svg, pad + i * bw + 3, 10 + (h - pad - 10) - bh, bw - 6, bh,
                 color || c.accent);
       if (n) U.text(svg, pad + i * bw + bw / 2, 10 + (h - pad - 10) - bh - 3,
-                    String(n), c.muted, { anchor: "middle", size: 9 });
+                    String(n), c.muted, { anchor: "middle", size: 10 });
     });
-    U.drawAxis(svg, pad, 10, w - pad - 10, h - pad - 10, names, c);
+    U.drawBarAxis(svg, pad, 10, w - pad - 10, h - pad - 10, names, c);
     panel.appendChild(svg);
   }
 
@@ -4864,20 +5075,7 @@
         byDay[d] = (byDay[d] || 0) + 1;
       }
     });
-    var days = Object.keys(byDay).sort();
-    if (days.length) {
-      var w = 600, h = 160, pad = 28, svg = U.svg(w, h);
-      var max = Math.max.apply(null, days.map(function (d) { return byDay[d]; }));
-      var bw = (w - pad) / days.length;
-      days.forEach(function (d, i) {
-        var bh = (h - pad) * (byDay[d] / max);
-        U.drawBar(svg, pad + i * bw, h - pad - bh, Math.max(bw - 2, 1), bh, c.accent);
-      });
-      thr.appendChild(svg);
-      U.statsRow(thr, [["completions", days.reduce(function (a, d) { return a + byDay[d]; }, 0)]]);
-    } else {
-      U.empty(thr, "No completed tasks for this tag in range.");
-    }
+    renderCompletionBars(thr, byDay, c);
 
     // Task co-occurrence.
     var coocRows = (task.cooccurring || []).map(function (x) {
@@ -4903,9 +5101,16 @@
     input.className = "tag-search"; input.id = "tag-search-input";
     input.type = "text"; input.placeholder = "search a tag…";
     input.setAttribute("autocomplete", "off");
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-controls", "tag-search-options");
+    input.setAttribute("aria-expanded", "false");
     input.value = _tagQuery;
     var preview = document.createElement("ul");
     preview.className = "tag-search-preview";
+    preview.id = "tag-search-options";
+    preview.setAttribute("role", "listbox");
+    preview.setAttribute("aria-label", "Tags");
     preview.hidden = true;
     field.appendChild(input); field.appendChild(preview);
     row.appendChild(label); row.appendChild(field);
@@ -4919,7 +5124,7 @@
     // option. Lists BOTH journal (section) tags and task-registry tags, each
     // origin-marked (● journal / ☑ task; a tag can be both).
     var info = (function () {
-      var idx = {};
+      var idx = Object.create(null);
       (_data.sections || []).forEach(function (s) {
         (s.tags || []).forEach(function (t) {
           if (!idx[t]) idx[t] = { task: false, color: null };
@@ -4941,22 +5146,37 @@
       return names.filter(function (n) { return n.indexOf(q) !== -1; });
     }
 
-    function hidePreview() { preview.hidden = true; preview.innerHTML = ""; _hi = -1; }
+    function hidePreview() {
+      preview.hidden = true; preview.innerHTML = ""; _hi = -1;
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+    }
 
     function setHi(i) {
       var opts = preview.querySelectorAll(".tag-search-opt");
-      if (_hi >= 0 && opts[_hi]) opts[_hi].classList.remove("active");
+      if (_hi >= 0 && opts[_hi]) {
+        opts[_hi].classList.remove("active");
+        opts[_hi].setAttribute("aria-selected", "false");
+      }
       _hi = i;
-      if (_hi >= 0 && opts[_hi]) opts[_hi].classList.add("active");
+      if (_hi >= 0 && opts[_hi]) {
+        opts[_hi].classList.add("active");
+        opts[_hi].setAttribute("aria-selected", "true");
+        input.setAttribute("aria-activedescendant", opts[_hi].id);
+        opts[_hi].scrollIntoView({block: "nearest"});
+      }
     }
 
     function showPreview(q) {
       var ms = matches(q).slice(0, 10);
-      preview.innerHTML = ""; _hi = -1;
-      if (!ms.length) { preview.hidden = true; return; }
+      hidePreview();
+      if (!ms.length) return;
       ms.forEach(function (n, i) {
         var li = document.createElement("li");
         li.className = "tag-search-opt"; li.dataset.name = n;
+        li.id = "tag-search-option-" + i;
+        li.setAttribute("role", "option");
+        li.setAttribute("aria-selected", "false");
         var nf = info[n] || {};
         if (nf.task) li.appendChild(originTaskMark());
         if (nf.color != null) li.appendChild(originDot(nf.color));
@@ -4969,6 +5189,7 @@
         preview.appendChild(li);
       });
       preview.hidden = false;
+      input.setAttribute("aria-expanded", "true");
     }
 
     function commit(name) { input.value = name; hidePreview(); run(name); }
@@ -4987,17 +5208,19 @@
       if (!charts.length) { U.empty(resultsHost, "No tag charts available."); return; }
       charts.forEach(function (ch) {
         var p = buildChartPanel(ch);
+        resultsHost.appendChild(p.panel);
         try {
           ch.render(p.body, entries, sectionsForChart(sectionsArg, ch.id), c);
         } catch (err) {
           U.empty(p.body, "Could not render this chart.");
           if (window.console) console.error(ch.id, err);
         }
-        resultsHost.appendChild(p.panel);
       });
     }
 
+    var requestVersion = 0;
     function run(name) {
+      var version = ++requestVersion;
       _tagQuery = (name || "").trim().toLowerCase();
       updateHash();
       resultsHost.innerHTML = "";
@@ -5007,7 +5230,7 @@
       }
       U.empty(resultsHost, "Loading…");
       fetchTagOverview(_tagQuery).then(function (payload) {
-        if (_tagQuery !== ((name || "").trim().toLowerCase())) return;  // stale
+        if (version !== requestVersion || !resultsHost.isConnected) return;
         resultsHost.innerHTML = "";
         var cc = colors();
         // Render BOTH halves for the searched tag: journal detail then task
@@ -5015,8 +5238,14 @@
         renderTagJournal(resultsHost, payload.journal || {}, cc);
         renderTagTask(resultsHost, payload.task || {}, cc);
       }).catch(function () {
+        if (version !== requestVersion || !resultsHost.isConnected) return;
         resultsHost.innerHTML = "";
         U.empty(resultsHost, "Could not load this tag.");
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", function () { run(name); });
+        resultsHost.appendChild(retry);
       });
     }
 
@@ -5024,11 +5253,12 @@
     input.addEventListener("focus", function () { showPreview(input.value); });
     input.addEventListener("blur", function () { setTimeout(hidePreview, 150); });
     input.addEventListener("keydown", function (e) {
+      if (e.isComposing || e.keyCode === 229) return;
       var opts = preview.hidden ? [] : preview.querySelectorAll(".tag-search-opt");
       if (e.key === "ArrowDown" && opts.length) {
         e.preventDefault(); setHi((_hi + 1) % opts.length);
       } else if (e.key === "ArrowUp" && opts.length) {
-        e.preventDefault(); setHi((_hi - 1 + opts.length) % opts.length);
+        e.preventDefault(); setHi(_hi < 0 ? opts.length - 1 : (_hi - 1 + opts.length) % opts.length);
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (_hi >= 0 && opts[_hi]) commit(opts[_hi].dataset.name);
@@ -5051,9 +5281,17 @@
     if (_tagCache[key]) return Promise.resolve(_tagCache[key]);
     var url = "/tag/" + encodeURIComponent(name) + "/overview" +
               (qs.length ? "?" + qs.join("&") : "");
-    return fetch(url, { headers: { "Accept": "application/json" } })
-      .then(function (r) { return r.json(); })
-      .then(function (payload) { _tagCache[key] = payload; return payload; });
+    var cache = _tagCache;
+    var pending = fetch(url, { headers: { "Accept": "application/json" } })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Tag request failed");
+        return r.json();
+      }).catch(function (error) {
+        if (cache[key] === pending) delete cache[key];
+        throw error;
+      });
+    cache[key] = pending;
+    return pending;
   }
 
   // ----- date filtering -----
@@ -5117,6 +5355,22 @@
   }
 
   // Primary category row.
+  function wireTabKeys(bar) {
+    bar.onkeydown = function (event) {
+      var tabs = Array.from(bar.querySelectorAll('[role="tab"]'));
+      var index = tabs.indexOf(event.target), next = index;
+      if (index < 0) return;
+      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+      else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      tabs[next].click();
+      bar.querySelector('[aria-selected="true"]').focus();
+    };
+  }
+
   function buildCategories() {
     var bar = root.querySelector(".analytics-cats");
     if (!bar) return;
@@ -5128,9 +5382,18 @@
       btn.className = "analytics-cat" + (cat.id === _category ? " active" : "");
       btn.textContent = cat.label;
       btn.dataset.cat = cat.id;
-      btn.addEventListener("click", function () { switchCategory(cat.id); });
+      btn.id = "analytics-category-" + cat.id;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(cat.id === _category));
+      btn.setAttribute("aria-controls", "analytics-panel-content");
+      btn.tabIndex = cat.id === _category ? 0 : -1;
+      btn.addEventListener("click", function () {
+        switchCategory(cat.id);
+        document.getElementById("analytics-category-" + cat.id).focus();
+      });
       bar.appendChild(btn);
     });
+    wireTabKeys(bar);
   }
 
   // Secondary sub-tab row for the active category. Hidden when the category has
@@ -5150,9 +5413,15 @@
       btn.className = "analytics-subtab" + (id === _activeTab ? " active" : "");
       btn.textContent = p.label;
       btn.dataset.panel = id;
+      btn.id = "analytics-tab-" + id;
+      btn.setAttribute("role", "tab");
+      btn.setAttribute("aria-selected", String(id === _activeTab));
+      btn.setAttribute("aria-controls", "analytics-panel-content");
+      btn.tabIndex = id === _activeTab ? 0 : -1;
       btn.addEventListener("click", function () { switchTab(id); });
       bar.appendChild(btn);
     });
+    wireTabKeys(bar);
   }
 
   // Activate a category: pick its first visible sub-tab (unless the current
@@ -5174,6 +5443,8 @@
     _activeTab = id;
     root.querySelectorAll(".analytics-subtab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.panel === id);
+      b.setAttribute("aria-selected", String(b.dataset.panel === id));
+      b.tabIndex = b.dataset.panel === id ? 0 : -1;
     });
     renderActivePanel();
     updateHash();
@@ -5249,7 +5520,15 @@
     allChip.type = "button";
     allChip.className = "section-filter-chip" + (_secSel[kind] === null ? " active" : "");
     allChip.textContent = "All";
-    allChip.addEventListener("click", function () { _secSel[kind] = null; onChange(); });
+    allChip.dataset.sectionFilter = "all";
+    allChip.setAttribute("aria-pressed", String(_secSel[kind] === null));
+    function refreshFilter(key) {
+      onChange();
+      var replacement = Array.from(host.querySelectorAll("[data-section-filter]"))
+        .find(function (el) { return el.dataset.sectionFilter === key; });
+      if (replacement) replacement.focus();
+    }
+    allChip.addEventListener("click", function () { _secSel[kind] = null; refreshFilter("all"); });
     bar.appendChild(allChip);
 
     all.forEach(function (s) {
@@ -5259,6 +5538,8 @@
       chip.className = "section-filter-chip" + (on ? " active" : "");
       chip.style.setProperty("--chip", s.color);
       chip.textContent = s.name;
+      chip.dataset.sectionFilter = s.id;
+      chip.setAttribute("aria-pressed", String(on));
       chip.addEventListener("click", function () {
         if (_secSel[kind] === null) {
           // From the default "all selected", the first pick focuses to just
@@ -5273,7 +5554,7 @@
           _secSel[kind] = (cur.length === 0 || cur.length === ids.length)
             ? null : cur;
         }
-        onChange();
+        refreshFilter(s.id);
       });
       bar.appendChild(chip);
     });
@@ -5302,13 +5583,17 @@
 
     var body = document.createElement("div");
     body.className = "analytics-panel-body";
+    body.id = "chart-body-" + ch.id;
+    toggle.setAttribute("aria-controls", body.id);
 
     // Restore this box's collapse state (persists across tab switches / re-renders
     // within the page visit).
     function reflect(collapsed) {
       panel.classList.toggle("collapsed", collapsed);
+      body.hidden = collapsed;
       toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
       toggle.title = collapsed ? "Expand" : "Collapse";
+      toggle.setAttribute("aria-label", toggle.title + " " + ch.title);
     }
     reflect(!!_collapsed[ch.id]);
     toggle.addEventListener("click", function () {
@@ -5323,9 +5608,18 @@
     return { panel: panel, body: body };
   }
 
+  document.addEventListener("analytics:charts-ready", function () { renderActivePanel(); });
+
   // ----- rendering -----
   function renderActivePanel() {
+    clearTimeout(_chartResizeTimer);
+    _chartLayoutWidth = root.getBoundingClientRect().width;
     var host = root.querySelector(".analytics-panels");
+    host.id = "analytics-panel-content";
+    host.setAttribute("role", "tabpanel");
+    host.setAttribute("aria-labelledby", document.getElementById("analytics-tab-" + _activeTab)
+      ? "analytics-tab-" + _activeTab : "analytics-category-" + _category);
+    host.querySelectorAll("*").forEach(function (el) { if (el._mediaCleanup) el._mediaCleanup(); });
     host.innerHTML = "";
     var entries = filterEntries();
     var c = colors();
@@ -5359,15 +5653,58 @@
     }
     charts.forEach(function (ch) {
       var p = buildChartPanel(ch);
+      host.appendChild(p.panel);
       try {
         ch.render(p.body, entries, sectionsForChart(sectionsArg, ch.id), c);
       } catch (err) {
         U.empty(p.body, "Could not render this chart.");
         if (window.console) console.error(ch.id, err);
       }
-      host.appendChild(p.panel);
     });
   }
+
+  // Width changes need fresh SVG coordinates; height-only changes (including
+  // an on-screen keyboard) should leave the current interaction untouched.
+  var _chartLayoutWidth = root.getBoundingClientRect().width;
+  var _chartResizeTimer;
+  function retainView() {
+    var focused = root.contains(document.activeElement) ? document.activeElement : null;
+    var keys = ["id", "data-section-filter", "data-lead-index", "aria-controls", "name", "value"];
+    var attributes = focused ? keys.filter(function (key) { return focused.hasAttribute(key); }).map(function (key) { return [key, focused.getAttribute(key)]; }) : [];
+    var selection = focused && typeof focused.selectionStart === "number" ? [focused.selectionStart, focused.selectionEnd] : null;
+    var search = root.querySelector("#tag-search-input"), draftQuery = search ? search.value : null;
+    var scrolls = Array.from(root.querySelectorAll(".chart-matrix")).map(function (el) { return {name: el.getAttribute("aria-label"), left: el.scrollLeft}; });
+    return function () {
+      var replacementSearch = root.querySelector("#tag-search-input");
+      if (draftQuery != null && replacementSearch) replacementSearch.value = draftQuery;
+      root.querySelectorAll(".chart-matrix").forEach(function (el) {
+        var saved = scrolls.find(function (scroll) { return scroll.name === el.getAttribute("aria-label"); });
+        if (saved) el.scrollLeft = saved.left;
+      });
+      if (!focused || focused.isConnected) return;
+      var replacement = attributes.length ? Array.from(root.querySelectorAll("button,input,select,textarea,[tabindex]")).find(function (el) {
+        return el.tagName === focused.tagName && attributes.every(function (pair) { return el.getAttribute(pair[0]) === pair[1]; });
+      }) : null;
+      if (replacement) {
+        replacement.focus({preventScroll: true});
+        if (selection && replacement.setSelectionRange) replacement.setSelectionRange(selection[0], selection[1]);
+      }
+    };
+  }
+  function reflowCharts() {
+    var width = root.getBoundingClientRect().width;
+    if (Math.abs(width - _chartLayoutWidth) < 1) return;
+    _chartLayoutWidth = width;
+    clearTimeout(_chartResizeTimer);
+    _chartResizeTimer = setTimeout(function () {
+      if (_firstLoad || _activeTab === "photos" || _activeTab === "places") return;
+      var restore = retainView();
+      renderActivePanel();
+      restore();
+    }, 120);
+  }
+  if (window.ResizeObserver) new ResizeObserver(reflowCharts).observe(root);
+  else window.addEventListener("resize", reflowCharts);
 
   // Read the URL hash on first load: "#tag=<name>" (external deep-link, e.g.
   // the tag popup's "Expand →") opens Data → Tags pre-searched; "#tab=<id>"
@@ -5389,15 +5726,31 @@
   }
 
   // ----- data load -----
-  var _firstLoad = true;
+  var _firstLoad = true, _lastPayload = null;
+  function refreshMediaPanel() {
+    var locations = root.querySelector("#chart-body-place-timeline");
+    if (locations?._refreshLocations) { locations._refreshLocations({from: _from, to: _to}); return true; }
+    var photos = root.querySelector("#chart-body-photo-gallery");
+    if (photos?._refreshPhotos) { photos._refreshPhotos(filterEntries()); return true; }
+    return false;
+  }
   function applyData(payload) {
+    var serialized = JSON.stringify(payload);
+    if (!_firstLoad && serialized === _lastPayload) {
+      document.getElementById("analytics-loading")?.remove();
+      root.querySelector("#chart-body-music-taste")?._refreshTaste?.();
+      if (!refreshMediaPanel() && (_activeTab === "places" || _activeTab === "photos")) renderActivePanel();
+      return;
+    }
+    var restore = retainView();
     _data = payload || _data;
+    _tagCache = Object.create(null);
     var loading = document.getElementById("analytics-loading");
     if (loading) loading.remove();
-    // Initialize date inputs to full range on first load only.
+    // Follow newly synced days until the user chooses a specific range.
     var fromEl = document.getElementById("date-from");
     var toEl = document.getElementById("date-to");
-    if (_from === null && _to === null) {
+    if (!_customRange) {
       _from = _data.date_range.min;
       _to = _data.date_range.max;
       fromEl.value = _from || "";
@@ -5408,36 +5761,81 @@
     reconcileNav();
     buildCategories();
     buildSubtabs();
-    renderActivePanel();
+    if (!refreshMediaPanel()) renderActivePanel();
+    _lastPayload = serialized;
+    restore();
   }
 
   function fetchData(force) {
     var now = Date.now();
     if (!force && now - _lastFetch < 10000) return;
     _lastFetch = now;
+    var version = ++_fetchVersion;
     fetch(ENDPOINT, { headers: { "Accept": "application/json" } })
-      .then(function (r) { return r.json(); })
-      .then(applyData)
+      .then(function (r) {
+        if (!r.ok) throw new Error("Analytics request failed");
+        return r.json();
+      })
+      .then(function (payload) {
+        if (version !== _fetchVersion) return;
+        if (!payload || !Array.isArray(payload.entries) || !Array.isArray(payload.sections) || !payload.date_range) {
+          throw new Error("Analytics data is incomplete");
+        }
+        if (!_firstLoad) { _tasteVersion++; _tasteCache = null; _tastePending = null; }
+        applyData(payload);
+      })
       .catch(function (err) {
+        if (version !== _fetchVersion) return;
+        var status = document.getElementById("analytics-loading");
+        if (!status) {
+          status = document.createElement("p");
+          status.id = "analytics-loading";
+          status.className = "analytics-empty";
+          root.appendChild(status);
+        }
+        status.setAttribute("role", "status");
+        status.textContent = _firstLoad ? "Could not load analytics. " : "Could not refresh analytics. Previous view kept. ";
+        var retry = document.createElement("button");
+        retry.type = "button";
+        retry.textContent = "Retry";
+        retry.addEventListener("click", function () {
+          retry.disabled = true;
+          status.textContent = "Loading…";
+          fetchData(true);
+        });
+        status.appendChild(retry);
         if (window.console) console.error("analytics fetch failed", err);
       });
   }
 
   // ----- wiring -----
   document.getElementById("date-from").addEventListener("change", function (e) {
+    _customRange = true;
     _from = e.target.value || null;
-    _tagCache = {};   // range changed -> the Tag tab must refetch
+    if (_from && _to && _from > _to) {
+      _to = _from;
+      document.getElementById("date-to").value = _to;
+    }
+    syncDateLabels();
+    _tagCache = Object.create(null);   // range changed -> the Tag tab must refetch
     renderActivePanel();
   });
   document.getElementById("date-to").addEventListener("change", function (e) {
+    _customRange = true;
     _to = e.target.value || null;
-    _tagCache = {};
+    if (_from && _to && _to < _from) {
+      _from = _to;
+      document.getElementById("date-from").value = _from;
+    }
+    syncDateLabels();
+    _tagCache = Object.create(null);
     renderActivePanel();
   });
   document.getElementById("date-reset").addEventListener("click", function () {
+    _customRange = false;
     _from = _data.date_range.min;
     _to = _data.date_range.max;
-    _tagCache = {};
+    _tagCache = Object.create(null);
     document.getElementById("date-from").value = _from || "";
     document.getElementById("date-to").value = _to || "";
     syncDateLabels();
@@ -5454,83 +5852,113 @@
   }
 
   var _openCal = null;
-  function closeCal() { if (_openCal) { _openCal.remove(); _openCal = null; } }
+  function closeCal(restoreFocus) {
+    if (!_openCal) return;
+    var trigger = _openCal._owner;
+    _openCal.remove(); _openCal = null;
+    trigger.setAttribute("aria-expanded", "false");
+    if (restoreFocus === true && trigger.isConnected) trigger.focus();
+  }
 
   function openCalFor(trigger, input) {
     var pop = document.createElement("div");
     pop.className = "cal-popover";
     pop._owner = trigger;
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", input.getAttribute("aria-label") || (input.id === "date-from" ? "From date" : "To date"));
     pop.addEventListener("click", function (e) { e.stopPropagation(); });
+    trigger.setAttribute("aria-expanded", "true");
 
     var base = input.value ? new Date(input.value + "T00:00:00") : new Date();
     var viewY = base.getFullYear(), viewM = base.getMonth();
-
+    var focusedDate = calIso(viewY, viewM, base.getDate());
+    function focusDay() {
+      var cell = pop.querySelector('[data-date="' + focusedDate + '"]');
+      if (cell) cell.focus();
+    }
+    function moveDay(day, delta, monthDelta) {
+      var next = new Date(day + "T00:00:00");
+      if (monthDelta) {
+        var number = next.getDate();
+        next.setDate(1); next.setMonth(next.getMonth() + monthDelta);
+        next.setDate(Math.min(number, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()));
+      } else next.setDate(next.getDate() + delta);
+      viewY = next.getFullYear(); viewM = next.getMonth();
+      focusedDate = calIso(viewY, viewM, next.getDate());
+      render(); focusDay();
+    }
+    function browseMonth(delta) {
+      moveDay(focusedDate, 0, delta);
+      pop.querySelector('[data-month-direction="' + delta + '"]').focus();
+    }
     function render() {
       pop.innerHTML = "";
       var head = document.createElement("div");
       head.className = "cal-head";
       var prev = document.createElement("button");
       prev.type = "button"; prev.className = "cal-nav"; prev.textContent = "‹";
-      prev.addEventListener("click", function () {
-        viewM--; if (viewM < 0) { viewM = 11; viewY--; } render();
-      });
+      prev.setAttribute("aria-label", "Previous month"); prev.dataset.monthDirection = "-1";
+      prev.addEventListener("click", function () { browseMonth(-1); });
       var title = document.createElement("span");
       title.className = "cal-month-title";
       title.textContent = CAL_MONTHS[viewM] + " " + viewY;
       var next = document.createElement("button");
       next.type = "button"; next.className = "cal-nav"; next.textContent = "›";
-      next.addEventListener("click", function () {
-        viewM++; if (viewM > 11) { viewM = 0; viewY++; } render();
-      });
+      next.setAttribute("aria-label", "Next month"); next.dataset.monthDirection = "1";
+      next.addEventListener("click", function () { browseMonth(1); });
       head.appendChild(prev); head.appendChild(title); head.appendChild(next);
       pop.appendChild(head);
 
-      var grid = document.createElement("div");
-      grid.className = "cal-grid";
+      var grid = document.createElement("div"); grid.className = "cal-grid";
       CAL_DAYS.forEach(function (d) {
-        var wh = document.createElement("div");
-        wh.className = "cal-weekday"; wh.textContent = d;
+        var wh = document.createElement("div"); wh.className = "cal-weekday"; wh.textContent = d;
         grid.appendChild(wh);
       });
       var firstDow = new Date(viewY, viewM, 1).getDay();
       for (var b = 0; b < firstDow; b++) {
-        var bl = document.createElement("div");
-        bl.className = "cal-day cal-day-blank";
-        grid.appendChild(bl);
+        var blank = document.createElement("div"); blank.className = "cal-day cal-day-blank";
+        grid.appendChild(blank);
       }
-      var now = new Date();
-      var todayIso = calIso(now.getFullYear(), now.getMonth(), now.getDate());
+      var now = new Date(), todayIso = calIso(now.getFullYear(), now.getMonth(), now.getDate());
       var dim = new Date(viewY, viewM + 1, 0).getDate();
       for (var day = 1; day <= dim; day++) {
         (function (day) {
-          var iso = calIso(viewY, viewM, day);
-          var cell = document.createElement("div");
-          cell.className = "cal-day";
-          if (iso === todayIso) cell.classList.add("is-today");
+          var iso = calIso(viewY, viewM, day), cell = document.createElement("button");
+          cell.type = "button"; cell.className = "cal-day"; cell.dataset.date = iso;
+          cell.setAttribute("aria-label", iso);
+          cell.setAttribute("aria-pressed", String(iso === input.value));
+          cell.tabIndex = iso === focusedDate ? 0 : -1;
+          if (iso === todayIso) { cell.classList.add("is-today"); cell.setAttribute("aria-current", "date"); }
           if (iso === input.value) cell.classList.add("is-selected");
-          var num = document.createElement("span");
-          num.className = "cal-day-num"; num.textContent = String(day);
+          var num = document.createElement("span"); num.className = "cal-day-num"; num.textContent = String(day);
           cell.appendChild(num);
           cell.addEventListener("click", function () {
-            input.value = iso;
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-            syncDateLabels();
-            closeCal();
+            input.value = iso; input.dispatchEvent(new Event("change", { bubbles: true }));
+            syncDateLabels(); closeCal(true);
+          });
+          cell.addEventListener("keydown", function (event) {
+            var delta = {ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7}[event.key];
+            var weekday = new Date(iso + "T00:00:00").getDay();
+            if (event.key === "Home") delta = -weekday;
+            if (event.key === "End") delta = 6 - weekday;
+            if (delta != null) { event.preventDefault(); moveDay(iso, delta, 0); }
+            else if (event.key === "PageUp" || event.key === "PageDown") {
+              event.preventDefault(); moveDay(iso, 0, event.key === "PageUp" ? -1 : 1);
+            }
           });
           grid.appendChild(cell);
         }(day));
       }
       pop.appendChild(grid);
     }
-
-    render();
-    trigger.parentNode.appendChild(pop);
-    _openCal = pop;
+    render(); trigger.parentNode.appendChild(pop); _openCal = pop; focusDay();
   }
 
   document.querySelectorAll("[data-datepicker]").forEach(function (trigger) {
     var input = document.getElementById(trigger.dataset.datepicker);
     if (!input) return;
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-label", input.id === "date-from" ? "From date" : "To date");
     trigger.addEventListener("click", function (e) {
       e.stopPropagation();
       var wasOpen = _openCal && _openCal._owner === trigger;
@@ -5538,8 +5966,10 @@
       if (!wasOpen) openCalFor(trigger, input);
     });
   });
-  document.addEventListener("click", closeCal);
-  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeCal(); });
+  document.addEventListener("click", function () { closeCal(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && _openCal) { e.preventDefault(); closeCal(true); }
+  });
   syncDateLabels();
 
   // Live refresh: re-fetch when the tab regains focus (debounced in fetchData).
