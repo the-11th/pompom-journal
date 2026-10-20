@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import java.security.KeyStore
+import java.time.Instant
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -16,6 +17,7 @@ object MobileConfig {
     private const val KEY_BASE_URL = "base_url"
     private const val KEY_DEVICE_NAME = "device_name"
     private const val KEY_TOKEN = "device_token_v1"
+    private const val KEY_VERIFIED_AT = "verified_at"
     private const val KEY_ALIAS = "todopup_mobile_token"
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -24,17 +26,26 @@ object MobileConfig {
     fun deviceName(context: Context) = prefs(context).getString(KEY_DEVICE_NAME, "Android phone") ?: "Android phone"
     fun token(context: Context): String = prefs(context).getString(KEY_TOKEN, null)?.let(::decrypt) ?: ""
     fun isConfigured(context: Context) = baseUrl(context).isNotBlank() && token(context).isNotBlank()
+    fun isVerified(context: Context) = isConfigured(context) &&
+        !prefs(context).getString(KEY_VERIFIED_AT, "").isNullOrBlank()
+    fun verifiedAt(context: Context) = prefs(context).getString(KEY_VERIFIED_AT, "") ?: ""
 
-    /** [baseUrl] is a private Tailscale Serve origin, e.g. https://mac.tailnet.ts.net. */
+    /** [baseUrl] is the ADB reverse loopback origin configured by the USB helper. */
     fun save(context: Context, baseUrl: String, token: String, deviceName: String = "Android phone") {
-        val normalized = baseUrl.trim().trimEnd('/')
-        require(normalized.startsWith("https://")) { "TodoPup mobile sync requires an HTTPS URL" }
-        prefs(context).edit()
+        val normalized = MobileEndpoint.requireAllowed(baseUrl)
+        val cleanToken = token.trim()
+        require(cleanToken.isNotBlank()) { "Device token is required" }
+        val unchanged = normalized == this.baseUrl(context) && cleanToken == this.token(context)
+        val editor = prefs(context).edit()
             .putString(KEY_BASE_URL, normalized)
             .putString(KEY_DEVICE_NAME, deviceName.trim().ifBlank { "Android phone" })
-            .putString(KEY_TOKEN, encrypt(token.trim()))
-            .apply()
+            .putString(KEY_TOKEN, encrypt(cleanToken))
+        if (!unchanged) editor.remove(KEY_VERIFIED_AT)
+        editor.apply()
     }
+
+    fun markVerified(context: Context, now: String = Instant.now().toString()) =
+        prefs(context).edit().putString(KEY_VERIFIED_AT, now).apply()
 
     fun clear(context: Context) = prefs(context).edit().clear().apply()
 
