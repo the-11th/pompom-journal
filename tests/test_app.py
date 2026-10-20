@@ -43,6 +43,92 @@ def test_get_index_shows_active_tasks(client):
     assert b"Visible task" in resp.data
 
 
+def test_index_includes_collapsed_completed_history_newest_first(client):
+    from datetime import datetime
+    data = todo._empty()
+    for title, day in [("Older completion", 1), ("Newer completion", 2)]:
+        todo.add_task(data, title, now=datetime(2026, 10, day))
+        task_id = data["active"][0]["id"]
+        todo.set_task_notes(data, task_id, "Saved completion notes")
+        todo.add_subtask(data, task_id, "Saved step")
+        todo.refresh(data, [task_id], now=datetime(2026, 10, day, 17))
+    todo.add_task(data, "Still active", now=datetime(2026, 10, 3))
+    todo.save(_data_path(client), data)
+    html = client.get("/").get_data(as_text=True)
+    assert '<details class="task-history" id="completed-tasks">' in html
+    history = html.split('id="completed-tasks">', 1)[1].split("</details>", 1)[0]
+    assert "Completed" in history and 'class="task-count">2<' in history
+    assert history.index("Newer completion") < history.index("Older completion")
+    assert "Still active" not in history
+    assert "Saved completion notes" in history and "Saved step" in history
+    assert "data-readonly" in history
+    assert todo.load(_data_path(client)) == data
+
+
+def test_completed_history_uses_the_same_tag_filter_as_active_tasks(client):
+    data = todo._empty()
+    todo.set_tag_color(data, "work", "#e0a955")
+    todo.set_tag_color(data, "home", "#e0524d")
+    for title, tag in [("Work completed", "work"), ("Home completed", "home")]:
+        todo.add_task(data, title, tags=[tag])
+    todo.refresh(data, [task["id"] for task in data["active"]])
+    todo.save(_data_path(client), data)
+    html = client.get("/?tags=work").get_data(as_text=True)
+    assert "Work completed" in html and "Home completed" not in html
+    assert 'class="task-count">1<' in html
+    assert "Home completed" in client.get("/?tags=unknown").get_data(as_text=True)
+    empty = client.get("/?tags=work,home").get_data(as_text=True)
+    assert "Work completed" in empty and "Home completed" in empty
+
+
+def test_empty_completed_history_is_still_available(client):
+    html = client.get("/").get_data(as_text=True)
+    assert 'id="completed-tasks"' in html
+    assert "No completed tasks yet." in html
+
+
+def test_difficulty_from_tasks_returns_to_filtered_open_history(client):
+    tid = _archive_one(client)
+    data = todo.load(_data_path(client))
+    todo.set_tag_color(data, "work", "#e0a955")
+    todo.save(_data_path(client), data)
+    response = client.post(f"/archive/{tid}/difficulty", data={
+        "difficulty": "hard", "tags": "work,missing", "return_to": "tasks",
+    })
+    assert response.location == "/?tags=work#completed-tasks"
+    assert todo.load(_data_path(client))["archive"][0]["difficulty"] == "hard"
+
+
+def test_reopen_from_completed_preserves_content_and_filter(client):
+    tid = _archive_one(client, "Bring back")
+    data = todo.load(_data_path(client))
+    todo.set_tag_color(data, "work", "#e0a955")
+    data["archive"][0].update(notes="Keep notes", subtasks=[{"text": "Keep step", "done": True}])
+    todo.save(_data_path(client), data)
+    response = client.post(f"/task/{tid}/reopen", data={"tags": "work"})
+    assert response.location == "/?tags=work"
+    saved = todo.load(_data_path(client))
+    assert not saved["archive"]
+    assert saved["active"][0]["notes"] == "Keep notes"
+    assert saved["active"][0]["subtasks"] == [{"text": "Keep step", "done": True}]
+    assert "completed" not in saved["active"][0]
+    client.post(f"/task/{tid}/reopen")
+    assert len(todo.load(_data_path(client))["active"]) == 1
+
+
+def test_active_countdown_keeps_due_timestamp_for_live_updates(client):
+    data = todo._empty()
+    todo.add_task(data, "Live countdown", due="2099-06-17T14:30:00")
+    todo.add_task(data, "No deadline")
+    todo.save(_data_path(client), data)
+
+    html = client.get("/").get_data(as_text=True)
+    assert 'data-task-due="2099-06-17T14:30:00"' in html
+    assert html.count('data-task-due=') == 1
+    assert 'task-countdown.js' in html
+    assert 'data-task-due=' not in client.get("/archive").get_data(as_text=True)
+
+
 def test_post_add_redirects_and_adds(client):
     resp = client.post("/add", data={"title": "New task"})
     assert resp.status_code == 302
@@ -688,6 +774,26 @@ def test_archive_difficulty_edit_clears_value(client):
     assert "difficulty" not in data["archive"][0]
 
 
+@pytest.mark.parametrize("filters,expected", [
+    ("work", "/archive?tags=work"),
+    ("work,health", "/archive?tags=work,health"),
+    (" WORK ,missing", "/archive?tags=work"),
+    ("missing", "/archive"),
+])
+def test_archive_difficulty_edit_preserves_known_filters(client, filters, expected):
+    tid = _archive_one(client)
+    data = todo.load(_data_path(client))
+    todo.set_tag_color(data, "work", "#e0a955")
+    todo.set_tag_color(data, "health", "#e0524d")
+    data["archive"][0]["tags"] = ["work"]
+    todo.save(_data_path(client), data)
+    html = client.get("/archive?tags=work").get_data(as_text=True)
+    assert 'name="tags" value="work"' in html
+    response = client.post(f"/archive/{tid}/difficulty", data={"difficulty": "hard", "tags": filters})
+    assert response.location == expected
+    assert todo.load(_data_path(client))["archive"][0]["difficulty"] == "hard"
+
+
 def test_archive_page_shows_difficulty_control(client):
     _archive_one(client)
     html = client.get("/archive").get_data(as_text=True)
@@ -711,6 +817,45 @@ def _add_active(client, title="task one"):
     client.post("/add", data={"title": title})
     data = todo.load(_data_path(client))
     return data["active"][0]["id"]
+
+
+@pytest.mark.parametrize('suffix', ['notes', 'subtasks', 'subtasks/0', 'subtasks/reorder'])
+@pytest.mark.parametrize('payload', [[1], 'text', 42, True, []])
+def test_task_detail_routes_reject_non_object_json_without_writing(client, suffix, payload):
+    from pathlib import Path
+    tid = _add_active(client)
+    client.post(f'/task/{tid}/notes', json={'text': 'Keep these notes'})
+    client.post(f'/task/{tid}/subtasks', json={'text': 'Keep this step'})
+    before = Path(_data_path(client)).read_bytes()
+    response = client.post(f'/task/{tid}/{suffix}', json=payload)
+    assert response.status_code == 400
+    assert response.is_json
+    assert Path(_data_path(client)).read_bytes() == before
+
+
+@pytest.mark.parametrize('suffix', ['notes', 'subtasks', 'subtasks/0'])
+@pytest.mark.parametrize('payload', [{}, {'text': None}, {'text': 4}, {'text': []}, {'text': True}])
+def test_task_detail_text_requires_a_string_without_clearing_saved_content(client, suffix, payload):
+    from pathlib import Path
+    tid = _add_active(client)
+    client.post(f'/task/{tid}/notes', json={'text': 'Keep these notes'})
+    client.post(f'/task/{tid}/subtasks', json={'text': 'Keep this step'})
+    before = Path(_data_path(client)).read_bytes()
+    response = client.post(f'/task/{tid}/{suffix}', json=payload)
+    assert response.status_code == 400
+    assert Path(_data_path(client)).read_bytes() == before
+
+
+@pytest.mark.parametrize('index', [False, True, 0.5, [], {}, None])
+def test_reordering_requires_whole_indices_without_coercing_other_json_types(client, index):
+    from pathlib import Path
+    tid = _add_active(client)
+    for text in ['One', 'Two']:
+        client.post(f'/task/{tid}/subtasks', json={'text': text})
+    before = Path(_data_path(client)).read_bytes()
+    response = client.post(f'/task/{tid}/subtasks/reorder', json={'from': index, 'to': 1})
+    assert response.status_code == 400
+    assert Path(_data_path(client)).read_bytes() == before
 
 
 def test_post_task_notes_persists_and_returns_json(client):

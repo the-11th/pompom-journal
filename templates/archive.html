@@ -1,7 +1,8 @@
-{% extends "base.html" %}
+{% extends "tasks_base.html" %}
 {% from "_macros.html" import toggle_url %}
 
-{% block content %}
+{% block task_content %}
+  <div class="page-title-row"><h2>Completed tasks</h2><a class="archive-link back-link" href="{{ url_for('index') }}">← Tasks</a></div>
   <!-- Filter chips: each known tag toggles in/out of the ?tags= filter for
        the ARCHIVE page. Same UI as the active page. -->
   {% if all_tags %}
@@ -19,76 +20,7 @@
   {% endif %}
 
   {% if tasks %}
-    <ul class="task-list">
-      {% for task in tasks %}
-        <li class="task">
-          {% set tags = task.tags or [] %}
-          {% set subtasks = task.subtasks or [] %}
-          {% set notes = task.notes or "" %}
-          {% set has_details = notes or subtasks %}
-          {% set done_count = subtasks | selectattr("done") | list | length %}
-          {% if tags %}
-            {# First tag drives the title highlight as a color cue; EVERY tag
-               (including the first) is also rendered as a named, clickable
-               .tag-pop-trigger chip that opens the unified tag popover. #}
-            {% set hl = tag_color(data, tags[0]) %}
-            <span class="title task-title-toggle" data-task-id="{{ task.id }}"
-                  role="button" tabindex="0"><span class="title-highlight"
-                  style="--tag-bg: {{ hl }};">{{ task.title }}</span>{% if has_details %}<span
-                  class="detail-hint">&hellip;</span>{% endif %}{% if subtasks %}<span
-                  class="subtask-progress">{{ done_count }}/{{ subtasks | length }}</span>{% endif %}</span>
-            {% for name in tags %}
-              {% set c = tag_color(data, name) %}
-              <span class="tag-chip tag-pop-trigger" data-tagpop="{{ name }}"
-                    role="button" tabindex="0"
-                    style="--tag-bg: {{ c }}; --tag-fg: {{ text_color_for(c) }};">{{ name }}</span>
-            {% endfor %}
-          {% else %}
-            <span class="title task-title-toggle" data-task-id="{{ task.id }}"
-                  role="button" tabindex="0">{{ task.title }}{% if has_details %}<span
-                  class="detail-hint">&hellip;</span>{% endif %}{% if subtasks %}<span
-                  class="subtask-progress">{{ done_count }}/{{ subtasks | length }}</span>{% endif %}</span>
-          {% endif %}
-          <span class="badge">completed {{ task.completed }}</span>
-          <form class="difficulty-form" method="post"
-                action="{{ url_for('set_task_difficulty', task_id=task.id) }}">
-            <select name="difficulty" class="difficulty-select"
-                    onchange="this.form.submit()">
-              <option value="" {% if not task.difficulty %}selected{% endif %}>— difficulty —</option>
-              {% for opt in ["easy", "medium", "hard"] %}
-                <option value="{{ opt }}" {% if task.difficulty == opt %}selected{% endif %}>{{ opt }}</option>
-              {% endfor %}
-            </select>
-          </form>
-          <button form="delete-{{ task.id }}" type="submit" class="delete">x</button>
-          {# Read-only details dropdown: same expand/collapse, but notes are
-             static text and subtask checkboxes are disabled. data-readonly
-             tells the shared JS to attach only the expand/collapse handler. #}
-          <div class="task-details" data-task-id="{{ task.id }}" data-readonly hidden>
-            {% if notes %}
-              <p class="task-notes-readonly">{{ notes }}</p>
-            {% endif %}
-            {% if subtasks %}
-              <ul class="subtask-list">
-                {% for sub in subtasks %}
-                  <li class="subtask-row">
-                    <input type="checkbox" class="subtask-check" disabled
-                           {% if sub.done %}checked{% endif %}>
-                    <span class="subtask-text-readonly">{{ sub.text }}</span>
-                  </li>
-                {% endfor %}
-              </ul>
-            {% endif %}
-          </div>
-        </li>
-      {% endfor %}
-    </ul>
-
-    <!-- Delete forms for archived tasks. -->
-    {% for task in tasks %}
-      <form id="delete-{{ task.id }}" method="post"
-            action="{{ url_for('delete', task_id=task.id) }}"></form>
-    {% endfor %}
+    {% include "_completed_tasks.html" %}
   {% elif selected_tags %}
     <p class="empty">No archived tasks match this filter.</p>
   {% else %}

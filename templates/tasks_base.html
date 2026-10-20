@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block brand_mascot %}
+  <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
+       width="56" height="56" alt="pompompurin">
+{% endblock %}
+{% block brand_title %}{% endblock %}
+{% block content %}
+  <div class="tasks-page">{% block task_content %}{% endblock %}</div>
+{% endblock %}

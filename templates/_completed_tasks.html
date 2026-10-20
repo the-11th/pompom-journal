@@ -1,0 +1,82 @@
+{# Shared read-only completed rows, used in Tasks and the full Archive. #}
+    {% set dated_tasks = tasks | selectattr('completed') | sort(attribute='completed', reverse=true) %}
+    {% set undated_tasks = tasks | rejectattr('completed') | list %}
+    <ul class="task-list">
+      {% for task in dated_tasks + undated_tasks %}
+        <li class="task">
+          {% set tags = task.tags or [] %}
+          {% set subtasks = task.subtasks or [] %}
+          {% set notes = task.notes or "" %}
+          {% set has_details = notes or subtasks %}
+          {% set done_count = subtasks | selectattr("done") | list | length %}
+          {% if tags %}
+            {# First tag drives the title highlight as a color cue; EVERY tag
+               (including the first) is also rendered as a named, clickable
+               .tag-pop-trigger chip that opens the unified tag popover. #}
+            {% set hl = tag_color(data, tags[0]) %}
+            <span class="title{% if has_details %} task-title-toggle{% endif %}" data-task-id="{{ task.id }}"
+                  {% if has_details %}role="button" tabindex="0"{% endif %}><span class="title-highlight"
+                  style="--tag-bg: {{ hl }};">{{ task.title }}</span>{% if has_details %}<span
+                  class="detail-hint">&hellip;</span>{% endif %}{% if subtasks %}<span
+                  class="subtask-progress">{{ done_count }}/{{ subtasks | length }}</span>{% endif %}</span>
+            {% for name in tags %}
+              {% set c = tag_color(data, name) %}
+              <span class="tag-chip tag-pop-trigger" data-tagpop="{{ name }}"
+                    role="button" tabindex="0"
+                    style="--tag-bg: {{ c }}; --tag-fg: {{ text_color_for(c) }};">{{ name }}</span>
+            {% endfor %}
+          {% else %}
+            <span class="title{% if has_details %} task-title-toggle{% endif %}" data-task-id="{{ task.id }}"
+                  {% if has_details %}role="button" tabindex="0"{% endif %}>{{ task.title }}{% if has_details %}<span
+                  class="detail-hint">&hellip;</span>{% endif %}{% if subtasks %}<span
+                  class="subtask-progress">{{ done_count }}/{{ subtasks | length }}</span>{% endif %}</span>
+          {% endif %}
+          <span class="badge">completed{% if task.completed %} <time datetime="{{ task.completed }}" title="{{ task.completed }}">{{ task.completed[:16] | replace('T', ' ') }}</time>{% endif %}</span>
+          <form class="task-reopen-form" method="post" action="{{ url_for('reopen_task', task_id=task.id) }}">
+            <input type="hidden" name="tags" value="{{ selected_tags | join(',') }}">
+            <button type="submit" class="task-reopen" aria-label="Reopen {{ task.title }}">Reopen</button>
+          </form>
+          <form class="difficulty-form" method="post"
+                action="{{ url_for('set_task_difficulty', task_id=task.id) }}">
+            <input type="hidden" name="tags" value="{{ selected_tags | join(',') }}">
+            {% if completed_return == "tasks" %}<input type="hidden" name="return_to" value="tasks">{% endif %}
+            <select name="difficulty" class="difficulty-select" aria-label="Difficulty of {{ task.title }}"
+                    onchange="this.form.submit()">
+              <option value="" {% if not task.difficulty %}selected{% endif %}>— difficulty —</option>
+              {% for opt in ["easy", "medium", "hard"] %}
+                <option value="{{ opt }}" {% if task.difficulty == opt %}selected{% endif %}>{{ opt }}</option>
+              {% endfor %}
+            </select>
+          </form>
+          <button form="delete-{{ task.id }}" type="submit" class="delete" aria-label="Delete {{ task.title }}"
+                  data-confirm="Delete this completed task, including its notes and subtasks?" data-confirm-label="Delete">×</button>
+          {# Read-only details dropdown: same expand/collapse, but notes are
+             static text and subtask checkboxes are disabled. data-readonly
+             tells the shared JS to attach only the expand/collapse handler. #}
+          {% if has_details %}
+          <div class="task-details" data-task-id="{{ task.id }}" data-readonly hidden>
+            {% if notes %}
+              <p class="task-notes-readonly">{{ notes }}</p>
+            {% endif %}
+            {% if subtasks %}
+              <ul class="subtask-list">
+                {% for sub in subtasks %}
+                  <li class="subtask-row">
+                    <input type="checkbox" class="subtask-check" disabled aria-label="{{ sub.text }}"
+                           {% if sub.done %}checked{% endif %}>
+                    <span class="subtask-text-readonly">{{ sub.text }}</span>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </div>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+
+    <!-- Delete forms for archived tasks. -->
+    {% for task in tasks %}
+      <form id="delete-{{ task.id }}" method="post"
+            action="{{ url_for('delete', task_id=task.id) }}"></form>
+    {% endfor %}

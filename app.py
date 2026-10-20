@@ -304,7 +304,7 @@ app.jinja_env.globals["is_registered_tag"] = journal.is_registered_tag
 @app.context_processor
 def inject_section_context():
     endpoint = request.endpoint or ""
-    return {"in_journal": endpoint.startswith("journal")}
+    return {"in_journal": endpoint.startswith("journal") or request.path.startswith("/journal/")}
 
 
 @app.route("/heartbeat")
@@ -359,6 +359,7 @@ def index():
     return render_template(
         "active.html",
         tasks=tasks,
+        completed=todo.filter_by_tags(data["archive"], selected),
         expired=data.get("expired", []),
         all_tags=data.get("tags", {}),
         selected_tags=selected,
@@ -421,7 +422,7 @@ def refresh():
     data = todo.load(data_file())
     todo.refresh(data, completed_ids, difficulties=difficulties)
     todo.save(data_file(), data)
-    return redirect(url_for("index"))
+    return _task_page_redirect(data)
 
 
 @app.route("/delete/<task_id>", methods=["POST"])
@@ -456,7 +457,26 @@ def set_task_difficulty(task_id):
     data = todo.load(data_file())
     todo.set_difficulty(data, task_id, request.form.get("difficulty", ""))
     todo.save(data_file(), data)
-    return redirect(url_for("archive"))
+    return _task_page_redirect(data, default="archive", history=True)
+
+
+def _task_page_redirect(data, default="index", history=False):
+    """Allowlisted task destination and known filter values after a form POST."""
+    endpoint = "index" if request.form.get("return_to") == "tasks" else default
+    selected = [name for name in _selected_tags(request.form.get("tags"))
+                if name in data.get("tags", {})]
+    values = {"tags": ",".join(selected)} if selected else {}
+    if history and endpoint == "index":
+        values["_anchor"] = "completed-tasks"
+    return redirect(url_for(endpoint, **values))
+
+
+@app.route("/task/<task_id>/reopen", methods=["POST"])
+def reopen_task(task_id):
+    data = todo.load(data_file())
+    todo.reopen_task(data, task_id)
+    todo.save(data_file(), data)
+    return _task_page_redirect(data)
 
 
 # --------------------------------------------------------------------------- #
@@ -474,7 +494,10 @@ def task_notes(task_id):
     data = todo.load(data_file())
     if _find_active(data, task_id) is None:
         return jsonify({"error": "unknown task"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     todo.set_task_notes(data, task_id, text)
     todo.save(data_file(), data)
     return jsonify({"notes": _find_active(data, task_id)["notes"]})
@@ -485,7 +508,10 @@ def task_add_subtask(task_id):
     data = todo.load(data_file())
     if _find_active(data, task_id) is None:
         return jsonify({"error": "unknown task"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     try:
         todo.add_subtask(data, task_id, text)
     except ValueError:
@@ -515,7 +541,10 @@ def task_edit_subtask(task_id, index):
         return jsonify({"error": "unknown task"}), 404
     if not (0 <= index < len(task.get("subtasks") or [])):
         return jsonify({"error": "subtask index out of range"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     try:
         todo.edit_subtask(data, task_id, index, text)
     except ValueError:
@@ -543,13 +572,11 @@ def task_reorder_subtask(task_id):
     task = _find_active(data, task_id)
     if task is None:
         return jsonify({"error": "unknown task"}), 404
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
     n = len(task.get("subtasks") or [])
-    try:
-        from_index = int(body.get("from"))
-        to_index = int(body.get("to"))
-    except (TypeError, ValueError):
+    if not isinstance(body, dict) or any(type(body.get(field)) is not int for field in ("from", "to")):
         return jsonify({"error": "invalid indices"}), 400
+    from_index, to_index = body["from"], body["to"]
     if not (0 <= from_index < n and 0 <= to_index < n):
         return jsonify({"error": "subtask index out of range"}), 404
     todo.reorder_subtask(data, task_id, from_index, to_index)

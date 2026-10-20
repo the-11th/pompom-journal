@@ -1,42 +1,9 @@
-{% extends "base.html" %}
+{% extends "tasks_base.html" %}
 {% from "_macros.html" import toggle_url %}
 
-{% block content %}
-  <!-- Add a new task -->
-  <form class="add-form" method="post" action="{{ url_for('add') }}">
-    <input type="text" name="title" placeholder="What needs doing?" required>
-    <input type="datetime-local" name="due">
-    <!-- Recurrence dropdown; the number input is only used for "Custom". -->
-    <select name="recurrence" class="recur-select">
-      <option value="">No repeat</option>
-      <option value="daily">Daily</option>
-      <option value="weekly">Weekly</option>
-      <option value="monthly">Monthly</option>
-      <option value="custom">Custom</option>
-    </select>
-    <input type="number" name="custom_n" min="1" placeholder="N days"
-           class="custom-n">
-
-    <!-- Tag section: toggle existing tags as chips + define a new one. -->
-    <div class="tag-section">
-      {% for name, color in all_tags.items() %}
-        <label class="tag-chip tag-toggle"
-               style="--tag-bg: {{ color }}; --tag-fg: {{ text_color_for(color) }};">
-          <input type="checkbox" name="tags" value="{{ name }}"> {{ name }}
-        </label>
-      {% endfor %}
-      <span class="tag-preview-group">
-        <input type="text" name="new_tag" class="tag-name-input"
-               placeholder="new tag">
-        <input type="color" name="new_tag_color" class="tag-color-input"
-               value="#e0a955">
-        <span class="tag-preview title-highlight"
-              style="--tag-bg: #e0a955;">preview</span>
-      </span>
-    </div>
-
-    <button type="submit">Add</button>
-  </form>
+{% block task_content %}
+  <div class="page-title-row"><h2>Tasks</h2></div>
+  {% include "_task_form.html" %}
 
   <!-- Filter chips: each known tag toggles in/out of the ?tags= filter. -->
   {% if all_tags %}
@@ -53,14 +20,16 @@
     </div>
   {% endif %}
 
+  <h3 class="task-section-heading">Active <span class="task-count">{{ tasks | length }}</span></h3>
   {% if tasks %}
-    <!-- The whole task list is one form; the Refresh button submits the
+    <!-- The active task list is one form; Save completed submits the
          checked items to /refresh, which archives them. -->
-    <form method="post" action="{{ url_for('refresh') }}">
+    <form id="active-tasks" method="post" action="{{ url_for('refresh') }}">
+      <input type="hidden" name="tags" value="{{ selected_tags | join(',') }}">
       <ul class="task-list">
         {% for task in tasks %}
           <li class="task">
-            <input type="checkbox" class="task-check" name="completed" value="{{ task.id }}">
+            <input type="checkbox" class="task-check" name="completed" value="{{ task.id }}" aria-label="Complete {{ task.title }}">
             {% set tags = task.tags or [] %}
             {% set subtasks = task.subtasks or [] %}
             {% set notes = task.notes or "" %}
@@ -94,16 +63,19 @@
             {% endif %}
             {% set badge = time_remaining(task.due) %}
             {% if badge %}
-              <span class="badge {% if is_overdue(task.due) %}overdue{% endif %}">
+              <span class="badge {% if is_overdue(task.due) %}overdue{% endif %}"
+                    data-task-due="{{ task.due }}">
                 {{ badge }}
               </span>
             {% endif %}
-            <a class="edit" href="{{ url_for('edit', task_id=task.id) }}">edit</a>
+            <a class="edit" href="{{ url_for('edit', task_id=task.id) }}" aria-label="Edit {{ task.title }}">edit</a>
             <!-- Separate small form so deleting doesn't archive everything. -->
-            <button form="delete-{{ task.id }}" type="submit" class="delete">x</button>
+            <button form="delete-{{ task.id }}" type="submit" class="delete" aria-label="Delete {{ task.title }}"
+                    data-confirm="Delete this task, including its notes and subtasks?"
+                    data-confirm-label="Delete">x</button>
             {# Difficulty picker — hidden until this task is checked done.
                Optional: no option is selected by default. #}
-            <span class="difficulty-picker" hidden>
+            <span class="difficulty-picker" role="group" aria-label="Difficulty of {{ task.title }}" hidden>
               <span class="difficulty-prompt">difficulty:</span>
               <label class="difficulty-opt"><input type="radio" class="difficulty-check"
                      name="difficulty:{{ task.id }}" value="easy"> easy</label>
@@ -121,15 +93,15 @@
                         placeholder="Notes&hellip;">{{ notes }}</textarea>
               <ul class="subtask-list">
                 {% for sub in subtasks %}
-                  <li class="subtask-row" data-index="{{ loop.index0 }}" draggable="true">
-                    <span class="subtask-drag" aria-hidden="true"
+                  <li class="subtask-row" data-index="{{ loop.index0 }}">
+                    <span class="subtask-drag" aria-hidden="true" draggable="true"
                           title="Drag to reorder">⠇</span>
-                    <input type="checkbox" class="subtask-check"
+                    <input type="checkbox" class="subtask-check" aria-label="Complete {{ sub.text }}"
                            {% if sub.done %}checked{% endif %}>
                     <input type="text" class="subtask-text" value="{{ sub.text }}"
-                           draggable="false">
+                           draggable="false" aria-label="Subtask text">
                     <button type="button" class="subtask-del"
-                            aria-label="delete subtask">&times;</button>
+                            aria-label="Delete subtask: {{ sub.text }}">&times;</button>
                   </li>
                 {% endfor %}
               </ul>
@@ -141,7 +113,7 @@
           </li>
         {% endfor %}
       </ul>
-      <button type="submit" class="refresh">Refresh</button>
+      <div class="task-list-actions"><button type="submit" class="refresh">Save completed</button><span class="muted">Checked tasks move to Completed.</span></div>
     </form>
 
     <!-- Delete forms live outside the refresh form (can't nest forms). -->
@@ -150,20 +122,31 @@
             action="{{ url_for('delete', task_id=task.id) }}"></form>
     {% endfor %}
   {% else %}
-    <p class="empty">No tasks yet. Add one above!</p>
+    <p class="empty">{{ "No active tasks match this filter." if selected_tags else "No active tasks." }}</p>
   {% endif %}
+
+  <details class="task-history" id="completed-tasks">
+    <summary><svg class="task-history-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>Completed <span class="task-count">{{ completed | length }}</span></summary>
+    {% if completed %}
+      {% with tasks=completed, completed_return='tasks' %}{% include "_completed_tasks.html" %}{% endwith %}
+    {% else %}
+      <p class="empty">{{ "No completed tasks match this filter." if selected_tags else "No completed tasks yet." }}</p>
+    {% endif %}
+  </details>
 
   <!-- Expired: missed recurring occurrences. -->
   {% if expired %}
     <section class="expired-section">
-      <h2>Expired</h2>
+      <h3 class="task-section-heading">Expired <span class="task-count">{{ expired | length }}</span></h3>
       <ul class="task-list">
         {% for task in expired %}
           <li class="task expired-item">
             <span class="title">{{ task.title }}</span>
             <span class="badge">missed {{ task.due }}</span>
             <button form="delete-exp-{{ task.id }}" type="submit"
-                    class="delete">x</button>
+                    class="delete" aria-label="Delete {{ task.title }}"
+                    data-confirm="Delete this task, including its notes and subtasks?"
+                    data-confirm-label="Delete">x</button>
           </li>
         {% endfor %}
       </ul>
@@ -176,5 +159,7 @@
 {% endblock %}
 
 {% block scripts %}
+  <script src="{{ url_for('static', filename='task-countdown.js') }}" defer></script>
   <script src="{{ url_for('static', filename='task-details.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='task-history.js') }}" defer></script>
 {% endblock %}

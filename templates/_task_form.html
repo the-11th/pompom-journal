@@ -1,0 +1,49 @@
+{% set editing = task is defined and task %}
+{% set current = (task.tags or []) if editing else [] %}
+{% set rec = (task.recurrence or "") if editing else "" %}
+{% set is_custom = rec.startswith("every:") %}
+<form class="add-form task-compose" method="post"
+      action="{{ url_for('edit_post', task_id=task.id) if editing else url_for('add') }}">
+  <div class="task-compose-title">
+    <label class="label" for="task-title">{{ 'Task title' if editing else 'New task' }}</label>
+    <div class="task-compose-line">
+      <input id="task-title" type="text" name="title" value="{{ task.title if editing else '' }}"
+             placeholder="What needs doing?" aria-label="Task title" required pattern=".*\S.*">
+      <button type="submit" class="task-save">{{ 'Save task' if editing else 'Add task' }}</button>
+    </div>
+  </div>
+  <div class="task-compose-options">
+    <div class="task-compose-field">
+      <label class="label" for="task-due">Due date</label>
+      <input id="task-due" type="datetime-local" name="due" value="{{ (task.due or '') if editing else '' }}" aria-label="Due date">
+    </div>
+    <div class="task-compose-field">
+      <label class="label" for="task-recurrence">Repeat</label>
+      <div class="task-recurrence-controls">
+        <select id="task-recurrence" name="recurrence" class="recur-select" aria-label="Repeat">
+          {% for value, label in [('', 'No repeat'), ('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly'), ('custom', 'Custom')] %}
+            <option value="{{ value }}" {% if (is_custom and value == 'custom') or rec == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <input type="number" name="custom_n" min="1" placeholder="N days" class="custom-n"
+               value="{{ rec.split(':')[1] if is_custom else '' }}" aria-label="Repeat every N days">
+      </div>
+    </div>
+  </div>
+  <div class="task-compose-tags">
+    <span class="label">Tags</span>
+    <div class="tag-section">
+      {% for name, color in all_tags.items() %}
+        <label class="tag-chip tag-toggle" style="--tag-bg: {{ color }}; --tag-fg: {{ text_color_for(color) }};">
+          <input type="checkbox" name="tags" value="{{ name }}" {% if name in current %}checked{% endif %}> {{ name }}
+        </label>
+      {% endfor %}
+      <span class="tag-preview-group">
+        <input type="text" name="new_tag" class="tag-name-input" placeholder="New tag" aria-label="New tag"
+               pattern="[\p{L}\p{N} ._\-]+" data-validation-message="use letters, numbers, spaces, . _ or -.">
+        <input type="color" name="new_tag_color" class="tag-color-input" value="#e0a955" aria-label="New tag color">
+        <span class="tag-preview title-highlight" style="--tag-bg: var(--accent);">preview</span>
+      </span>
+    </div>
+  </div>
+</form>
