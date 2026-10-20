@@ -13,7 +13,7 @@ os.environ.pop("AUTO_QUIT", None)
 
 from waitress import serve  # noqa: E402
 
-from app import app  # noqa: E402
+from datapom.web.app import app  # noqa: E402
 
 
 if __name__ == "__main__":

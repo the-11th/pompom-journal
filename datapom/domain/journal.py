@@ -19,11 +19,11 @@ import os
 import re
 import statistics
 import uuid
-import journal_media
+from datapom.domain import journal_media
 from collections import Counter
 from datetime import datetime, timedelta
 
-from todo import _HEX_COLOR_RE, _TAG_NAME_RE
+from datapom.domain.todo import _HEX_COLOR_RE, _TAG_NAME_RE
 
 # Default sections seeded on first run: six tag sections with distinct colors.
 _DEFAULT_SECTIONS = [

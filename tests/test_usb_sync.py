@@ -4,7 +4,7 @@ import subprocess
 import shutil
 import time
 import textwrap
-from integrations import store as integration_store
+from datapom.integrations import store as integration_store
 import pytest
 
 
@@ -21,7 +21,7 @@ def _python_adapter(tmp_path, root):
         import io, json, os, sys, time, urllib.request, urllib.error, urllib.parse
         from pathlib import Path
         sys.path.insert(0, os.environ['TEST_REPOSITORY'])
-        import app as app_module
+        from datapom.web import app as app_module
         folder = Path(os.environ['TODOPUP_INTEGRATIONS_FILE']).parent
         app_module.app.config.update(TESTING=True, INTEGRATIONS_FILE=os.environ['TODOPUP_INTEGRATIONS_FILE'],
             JOURNAL_FILE=str(folder/'journal.json'), DATA_FILE=str(folder/'tasks.json'))
@@ -220,7 +220,7 @@ def test_usb_watcher_waits_for_file_transfer_and_rearms_when_mode_changes(tmp_pa
 
 
 def test_helper_does_not_replace_provider_credentials_saved_during_pairing(tmp_path, monkeypatch):
-    import app as app_module
+    from datapom.web import app as app_module
     root = Path(__file__).parents[1]
     adb = tmp_path / 'adb'
     _write_success_adb(adb)
@@ -319,7 +319,7 @@ def test_helper_starts_mac_once_and_waits_until_ready(tmp_path, ready_after, dat
                     'test "$n" -gt "$READY_AFTER"\n')
     curl.chmod(0o755)
     python = binary/'python'
-    python.write_text('#!/bin/sh\nif [ "$1" != -c ]; then printf "start\\n" >> "$SERVER_STARTS"; exit 0; fi\n'
+    python.write_text('#!/bin/sh\nif [ "$1" != -c ]; then printf "%s|%s\\n" "$PWD" "$*" >> "$SERVER_STARTS"; exit 0; fi\n'
                       'printf "%s\\n" "todopup://config?url=http%3A%2F%2F127.0.0.1%3A5001&token=synthetic" '
                       '"todopup://config?url=http%3A%2F%2F127.0.0.1%3A5001%2Fintegrations%2Fphone%2Fingest&token=synthetic"\n')
     python.chmod(0o755)
@@ -330,9 +330,9 @@ def test_helper_starts_mac_once_and_waits_until_ready(tmp_path, ready_after, dat
                READY_AFTER=str(ready_after), SERVER_STARTS=str(starts), TODOPUP_USAGE_SYNC_WAIT_SECONDS='0')
     env.pop('TODOPUP_SKIP_SERVER_CHECK', None)
     env.pop('ANDROID_SERIAL', None)
-    result=subprocess.run(['/bin/bash',str(isolated/'scripts/sync_android_usb.sh')],cwd=isolated,env=env,
+    result=subprocess.run(['/bin/bash',str(isolated/'scripts/sync_android_usb.sh')],cwd=tmp_path,env=env,
                           capture_output=True,text=True,timeout=5)
     assert (result.returncode == 0) is (ready_after < 15), result.stderr
-    assert starts.read_text().splitlines() == ['start'] if ready_after else not starts.exists()
+    assert starts.read_text().splitlines() == [f'{isolated}|-m datapom.runtime.phone_server'] if ready_after else not starts.exists()
     assert ('todopup://sync' in calls.read_text()) is (ready_after < 15)
     assert int((tmp_path/'curl-count').read_text()) <= 16

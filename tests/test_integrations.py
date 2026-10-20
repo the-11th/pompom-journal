@@ -1,6 +1,6 @@
 # tests/test_integrations.py
 import json
-from integrations import store as I
+from datapom.integrations import store as I
 
 
 def test_empty_has_all_providers():

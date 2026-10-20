@@ -36,9 +36,9 @@ if [ -n "$EXISTING" ]; then
   [ -n "$STILL" ] && kill -9 $STILL 2>/dev/null
 fi
 
-# start_server.py uses a double-fork so it returns immediately to this script,
+# The runtime launcher uses a double-fork so it returns immediately to this script,
 # with Flask running as a completely detached daemon process.
-.venv/bin/python start_server.py
+.venv/bin/python -m datapom.runtime.start_server
 
 # Poll until the server is ready, then open the browser.
 # --max-time 1 prevents curl from hanging if Flask didn't start.

@@ -3,7 +3,7 @@ from datetime import datetime
 import copy
 import io
 import pytest
-import journal_media as media
+from datapom.domain import journal_media as media
 
 NOW = datetime(2026, 9, 8, 12)
 
@@ -271,7 +271,7 @@ def test_photo_gallery_includes_linked_references_and_uses_latest_display_detail
 
 
 def test_plain_body_edit_preserves_existing_photos_and_links():
-    import journal
+    from datapom.domain import journal
     data = journal._empty()
     doc = [{'id':'p','type':'text','text':'Hello river', 'links':[{'start':6,'end':11,'photos':['image']}]},
            {'id':'image','type':'photo','asset_id':'a'*64}, {'id':'tail','type':'text','text':'Good evening'}]

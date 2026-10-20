@@ -1,4 +1,4 @@
-from integrations import rescuetime
+from datapom.integrations import rescuetime
 
 ROW = {
     "date": "2026-06-28",

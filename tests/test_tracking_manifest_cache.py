@@ -3,8 +3,8 @@ import gzip
 import hashlib
 import os
 
-import journal_media
-import places
+from datapom.domain import journal_media
+from datapom.domain import places
 import pytest
 
 

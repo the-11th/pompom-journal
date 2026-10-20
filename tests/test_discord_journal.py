@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from integrations import discord_journal as discord
+from datapom.integrations import discord_journal as discord
 
 NOW = datetime(2026, 9, 8, 12, tzinfo=timezone.utc)
 
@@ -42,7 +42,7 @@ def test_signed_selected_message_only():
 
 
 def test_receiver_refuses_unsigned_and_other_users(tmp_path):
-    from integrations.discord_receiver import create_app
+    from datapom.integrations.discord_receiver import create_app
     key = Ed25519PrivateKey.generate()
     app = create_app(tmp_path, key.public_key().public_bytes_raw().hex(), '42', INBOX_TOKEN, now=lambda: NOW)
     client = app.test_client()
@@ -68,7 +68,7 @@ def test_receiver_url_requires_https_and_no_credentials():
 
 
 def test_pull_saves_before_acknowledging(tmp_path):
-    import journal_media
+    from datapom.domain import journal_media
     calls=[]
     def transport(method,url,headers,body):
         calls.append((method,url))
@@ -83,7 +83,7 @@ def test_pull_saves_before_acknowledging(tmp_path):
 
 @pytest.mark.parametrize('reply', [None, [], {}, {'ok': False}, {'ok': 'true'}])
 def test_pull_requires_an_explicit_successful_ack_and_keeps_the_saved_message(tmp_path, reply):
-    import journal_media
+    from datapom.domain import journal_media
     message = discord.selected_message(interaction(), '42', now=NOW)
     config = {'receiver_url': 'https://inbox.example.com', 'receiver_token': 'token', 'last_sync': 'previous'}
 
@@ -97,7 +97,7 @@ def test_pull_requires_an_explicit_successful_ack_and_keeps_the_saved_message(tm
 
 
 def test_pull_lost_ack_replay_keeps_local_message_edits(tmp_path):
-    import journal_media
+    from datapom.domain import journal_media
     message = discord.selected_message(interaction(), '42', now=NOW)
     config = {'receiver_url': 'https://inbox.example.com', 'receiver_token': 'token'}
     def interrupted(method, url, headers, body):
@@ -120,7 +120,7 @@ def test_pull_lost_ack_replay_keeps_local_message_edits(tmp_path):
 
 @pytest.fixture
 def receiver(tmp_path):
-    from integrations.discord_receiver import create_app
+    from datapom.integrations.discord_receiver import create_app
     key = Ed25519PrivateKey.generate()
     clock = [NOW]
     app = create_app(tmp_path, key.public_key().public_bytes_raw().hex(), '42', INBOX_TOKEN, now=lambda: clock[0])
@@ -206,7 +206,7 @@ def test_receiver_inbox_responses_cannot_be_cached(receiver):
     ('allowed_user', 'bad'), ('allowed_user', '٣٣'), ('allowed_user', 42),
     ('inbox_token', ''), ('inbox_token', 'x' * 31), ('inbox_token', None)])
 def test_receiver_fails_closed_with_invalid_configuration(tmp_path, field, bad):
-    from integrations.discord_receiver import create_app
+    from datapom.integrations.discord_receiver import create_app
     values = {'public_key': Ed25519PrivateKey.generate().public_key().public_bytes_raw().hex(),
               'allowed_user': '42', 'inbox_token': INBOX_TOKEN}
     values[field] = bad

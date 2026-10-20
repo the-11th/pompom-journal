@@ -2,9 +2,9 @@
 import hashlib
 from datetime import datetime
 import json
-import journal
-import journal_media
-import todo
+from datapom.domain import journal
+from datapom.domain import journal_media
+from datapom.domain import todo
 
 
 def commit(data, task_data, date, payload, media_data, now=None):

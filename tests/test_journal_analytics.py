@@ -5,7 +5,7 @@ Entry fixtures mirror the real entry shape: date, tags {sid: [names]},
 numbers {sid: float}, body, created.
 """
 
-import journal
+from datapom.domain import journal
 from datetime import datetime
 
 
@@ -977,7 +977,7 @@ def test_payload_includes_sleep_for_sleep_tab():
 
 def test_payload_includes_rescuetime():
     """analytics_payload entries carry a rescuetime dict for the Productivity tab."""
-    import journal
+    from datapom.domain import journal
     data = journal._seeded()
     journal.set_entry_rescuetime(data, "2026-06-28",
         {"pulse": 70, "productive_min": 120, "distracting_min": 20,
@@ -1001,7 +1001,7 @@ def _rt_entry(date, activities):
 
 
 def test_rescuetime_top_activities_aggregates_and_sorts():
-    import journal
+    from datapom.domain import journal
     entries = [
         _rt_entry("2026-06-01", [
             {"name": "github.com", "min": 60, "category": "Dev", "productivity": 2},
@@ -1018,7 +1018,7 @@ def test_rescuetime_top_activities_aggregates_and_sorts():
 
 
 def test_rescuetime_top_activities_ignores_days_without_breakdown():
-    import journal
+    from datapom.domain import journal
     data = journal._seeded()
     # legacy day: rescuetime present, but no top_activities
     journal.set_entry_rescuetime(data, "2026-06-05",
@@ -1027,7 +1027,7 @@ def test_rescuetime_top_activities_ignores_days_without_breakdown():
 
 
 def test_rescuetime_activity_minutes_series_zero_fills():
-    import journal
+    from datapom.domain import journal
     entries = [
         _rt_entry("2026-06-01", [{"name": "github.com", "min": 60}]),
         _rt_entry("2026-06-02", [{"name": "youtube.com", "min": 45}]),
@@ -1042,7 +1042,7 @@ def test_rescuetime_activity_minutes_series_zero_fills():
 # --------------------------------------------------------------------------- #
 
 def test_payload_includes_music():
-    import journal
+    from datapom.domain import journal
     data = journal._seeded()
     journal.set_entry_music(data, "2026-06-29",
         {"tracks": 10, "minutes": 40, "distinct": 9,
@@ -1054,7 +1054,7 @@ def test_payload_includes_music():
 
 
 def test_payload_includes_sanitized_rich_music_dict():
-    import journal
+    from datapom.domain import journal
     data = journal._seeded()
     journal.set_entry_music(data, "2026-06-29", {
         "tracks": 2,

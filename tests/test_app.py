@@ -6,8 +6,8 @@ data file (via app config) so we never touch the real data/tasks.json.
 
 import pytest
 
-import app as app_module
-import todo
+from datapom.web import app as app_module
+from datapom.domain import todo
 
 
 @pytest.fixture
@@ -1011,7 +1011,7 @@ def test_archive_page_renders_readonly_details(client):
 # --------------------------------------------------------------------------- #
 
 def test_tag_overview_route_merges_task_and_journal(client):
-    import journal
+    from datapom.domain import journal
     # Seed a task tagged 'work'.
     data = todo.load(_data_path(client))
     todo.set_tag_color(data, "work", "#5b8dd6")
@@ -1037,7 +1037,7 @@ def test_tag_overview_route_merges_task_and_journal(client):
 
 
 def test_tag_overview_route_honors_date_range(client):
-    import journal
+    from datapom.domain import journal
     jpath = app_module.app.config["JOURNAL_FILE"]
     jdata = journal._empty()
     sec = journal.add_section(jdata, "work", "tag", "#5b8dd6")

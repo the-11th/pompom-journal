@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-import journal_media
+from datapom.domain import journal_media
 
 
 COMMAND = {"name": "Add to Datapom", "type": 3, "integration_types": [1], "contexts": [0, 1, 2]}

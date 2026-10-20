@@ -3,9 +3,9 @@ from datetime import datetime
 
 import pytest
 
-import journal
-import journal_media
-import todo
+from datapom.domain import journal
+from datapom.domain import journal_media
+from datapom.domain import todo
 
 
 NOW = datetime(2026, 9, 11, 12)

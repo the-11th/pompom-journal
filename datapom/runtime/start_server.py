@@ -7,8 +7,9 @@ inheritance, no job-table tracking, no waiting.
 """
 import os
 import sys
+from datapom.paths import ROOT
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = str(ROOT)
 LOG_FILE = os.path.join(APP_DIR, "data", "server.log")
 PYTHON   = os.path.join(APP_DIR, ".venv", "bin", "python")
 PORT     = "5001"
@@ -43,4 +44,4 @@ os.close(devnull)
 os.close(logfd)
 
 os.environ["AUTO_QUIT"] = "1"
-os.execv(PYTHON, [PYTHON, "-m", "flask", "--app", "app", "run", "--port", PORT])
+os.execv(PYTHON, [PYTHON, "-m", "flask", "--app", "datapom.web.app", "run", "--port", PORT])

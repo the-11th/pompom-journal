@@ -1,4 +1,4 @@
-from integrations import spotify
+from datapom.integrations import spotify
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 

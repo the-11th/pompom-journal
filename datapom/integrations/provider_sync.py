@@ -8,7 +8,7 @@ from datetime import datetime
 
 from . import google_health
 from . import store as integrations
-import journal
+from datapom.domain import journal
 from . import rescuetime
 from . import spotify
 

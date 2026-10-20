@@ -20,19 +20,20 @@ from urllib.parse import urlencode
 from flask import (Flask, flash, jsonify, redirect, render_template, request,
                    session, url_for, g)
 
-from integrations import google_health
-from integrations import health
-from integrations import store as integrations
-import journal
-from integrations import music_history
-import places
-from integrations import provider_sync
-from integrations import rescuetime
-from integrations import spotify
-import todo
-from integrations import usage
+from datapom.integrations import google_health
+from datapom.integrations import health
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.integrations import music_history
+from datapom.domain import places
+from datapom.integrations import provider_sync
+from datapom.integrations import rescuetime
+from datapom.integrations import spotify
+from datapom.domain import todo
+from datapom.integrations import usage
+from datapom.paths import ROOT
 
-app = Flask(__name__)
+app = Flask(__name__, root_path=str(ROOT))
 
 # Needed so flask.flash() can sign the session cookie that carries flashed
 # messages. A constant is fine for this small local single-user app; a real
@@ -43,7 +44,7 @@ app.secret_key = "local-dev-todo-pup-not-secret"
 # Default data file lives in data/tasks.json, but tests override this via
 # app.config["DATA_FILE"] so they can use a temp file.
 app.config["DATA_FILE"] = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "tasks.json"
+    ROOT, "data", "tasks.json"
 )
 
 
@@ -53,7 +54,7 @@ def data_file():
 
 # Journal store lives alongside tasks; tests override via JOURNAL_FILE.
 app.config["JOURNAL_FILE"] = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "journal.json"
+    ROOT, "data", "journal.json"
 )
 
 
@@ -63,7 +64,7 @@ def journal_file():
 
 # Integrations store lives alongside tasks/journal; tests override via INTEGRATIONS_FILE.
 app.config["INTEGRATIONS_FILE"] = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "data", "integrations.json"
+    ROOT, "data", "integrations.json"
 )
 
 
@@ -1261,8 +1262,8 @@ def mobile_journal(device, date):
     previous = journal.get_entry_by_date(data, date)
     previous_updated = previous.get("updated") if previous else None
     try:
-        import journal_commands
-        import journal_media
+        from datapom.domain import journal_commands
+        from datapom.domain import journal_media
         from pathlib import Path
         media_data = journal_media.load(Path(journal_file()).parent / "media.json")
         if payload.get("autosave"):
@@ -1770,7 +1771,7 @@ def health_disconnect():
     return redirect(url_for("integrations_page"))
 
 
-import media_routes
+from datapom.web import media_routes
 media_routes.register(app, journal_file, _mobile_authenticated, _mobile_lock, data_file)
 
 

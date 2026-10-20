@@ -3,10 +3,10 @@ from threading import Event, Thread
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import todo
 
 
 @pytest.mark.parametrize('provider', ['google', 'rescuetime', 'spotify'])
@@ -35,19 +35,19 @@ def test_provider_fetch_releases_store_lock_and_reconciles_latest_store(tmp_path
         assert release.wait(5), 'Synthetic provider was not released'
         return {}
     if provider == 'google':
-        monkeypatch.setattr('integrations.google_health.fetch_sleep', wait_for_provider)
-        monkeypatch.setattr('integrations.google_health.parse_sleep', lambda raw, now=None: {'duration_min': 480})
+        monkeypatch.setattr('datapom.integrations.google_health.fetch_sleep', wait_for_provider)
+        monkeypatch.setattr('datapom.integrations.google_health.parse_sleep', lambda raw, now=None: {'duration_min': 480})
     elif provider == 'rescuetime':
         def summary(*args):
             wait_for_provider()
             return [{'date': day, 'total_hours': 2}]
-        monkeypatch.setattr('integrations.rescuetime.fetch_daily_summary', summary)
-        monkeypatch.setattr('integrations.rescuetime.fetch_activities', lambda *args: {})
-        monkeypatch.setattr('integrations.rescuetime.parse_activities', lambda *args: [])
+        monkeypatch.setattr('datapom.integrations.rescuetime.fetch_daily_summary', summary)
+        monkeypatch.setattr('datapom.integrations.rescuetime.fetch_activities', lambda *args: {})
+        monkeypatch.setattr('datapom.integrations.rescuetime.parse_activities', lambda *args: [])
     else:
-        monkeypatch.setattr('integrations.spotify.fetch_recently_played', wait_for_provider)
-        monkeypatch.setattr('integrations.spotify.parse_recently_played', lambda raw: [])
-        monkeypatch.setattr('integrations.spotify.fetch_top', lambda *args: {'items': []})
+        monkeypatch.setattr('datapom.integrations.spotify.fetch_recently_played', wait_for_provider)
+        monkeypatch.setattr('datapom.integrations.spotify.parse_recently_played', lambda raw: [])
+        monkeypatch.setattr('datapom.integrations.spotify.fetch_top', lambda *args: {'items': []})
     def syncing():
         try:
             with app.test_client() as client:

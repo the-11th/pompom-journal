@@ -10,7 +10,7 @@ import shutil
 import gzip
 import os
 import tempfile
-import journal_media
+from datapom.domain import journal_media
 
 
 _MANIFEST_CACHE_LIMIT = 2048

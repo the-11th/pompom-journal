@@ -10,8 +10,8 @@ before(async () => {
   const pages = JSON.parse(execFileSync(path.join(__dirname, '../.venv/bin/python'), ['-c', `
 import json, tempfile
 from pathlib import Path
-from app import app
-import todo, journal
+from datapom.web.app import app
+from datapom.domain import todo, journal
 with tempfile.TemporaryDirectory(prefix='datapom-web-controls-') as directory:
     root = Path(directory)
     app.config.update(TESTING=True, DATA_FILE=str(root/'tasks.json'), JOURNAL_FILE=str(root/'journal.json'), INTEGRATIONS_FILE=str(root/'integrations.json'))

@@ -1,8 +1,8 @@
-from integrations import store as integrations
-import journal
-import todo
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import todo
 import pytest
-import app as app_module
+from datapom.web import app as app_module
 
 
 @pytest.fixture

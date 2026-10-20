@@ -6,8 +6,8 @@ from pathlib import Path
 import sys
 import warnings
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from integrations import discord_journal
-from integrations import discord_setup
+from datapom.integrations import discord_journal
+from datapom.integrations import discord_setup
 
 
 def main(argv=None):

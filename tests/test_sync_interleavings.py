@@ -5,11 +5,11 @@ import random
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-import journal_media
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import journal_media
+from datapom.domain import todo
 
 
 @pytest.mark.parametrize('seed', [11, 29, 47, 83, 131, 197])

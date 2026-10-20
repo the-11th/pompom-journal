@@ -1,4 +1,4 @@
-from integrations import oauth
+from datapom.integrations import oauth
 from urllib.parse import urlparse, parse_qs
 
 

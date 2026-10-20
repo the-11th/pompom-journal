@@ -2,7 +2,7 @@ import struct
 import hashlib
 import json
 import pytest
-import map_packs
+from datapom.domain import map_packs
 
 
 def test_region_retry_reuses_caller_identity_without_rewriting_store(tmp_path):

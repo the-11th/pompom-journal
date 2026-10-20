@@ -21,8 +21,8 @@ def test_domain_module_imports_without_loading_http_layer(name):
     subprocess.run([
         sys.executable, "-c",
         "import importlib, sys; importlib.import_module(sys.argv[1]); "
-        "assert 'flask' not in sys.modules; assert 'app' not in sys.modules",
-        "integrations." + name,
+        "assert 'flask' not in sys.modules; assert 'datapom.web.app' not in sys.modules",
+        "datapom.integrations." + name,
     ], cwd=ROOT, check=True, capture_output=True, text=True)
 
 

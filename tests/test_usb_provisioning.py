@@ -5,8 +5,8 @@ from threading import Event, Thread
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
 
 NOW = datetime(2026, 9, 10, 12)
 

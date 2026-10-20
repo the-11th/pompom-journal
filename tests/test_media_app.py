@@ -2,13 +2,13 @@ import io
 import json
 import re
 import pytest
-import journal
-import todo
-from integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import todo
+from datapom.integrations import store as integrations
 import hashlib
 import struct
 from pathlib import Path
-from app import app
+from datapom.web.app import app
 
 
 @pytest.fixture
@@ -41,8 +41,8 @@ def test_map_ranges_reject_stale_archive_versions(client, version, status):
 
 
 def test_map_response_opens_before_a_waiting_replacement_publishes(client, monkeypatch):
-    import map_packs
-    import media_routes
+    from datapom.domain import map_packs
+    from datapom.web import media_routes
     from threading import Event, Thread
     root = Path(app.config['JOURNAL_FILE']).parent / 'maps'
     root.mkdir()
@@ -114,7 +114,7 @@ def test_location_summary_tracks_days_without_written_entries(client):
 
 
 def test_default_analytics_range_includes_tracking_only_days_and_reuses_cached_receipts(client, monkeypatch):
-    import places
+    from datapom.domain import places
     data = journal.load(app.config["JOURNAL_FILE"])
     journal.upsert_entry(data, "2026-09-10", "Review", "A journal day")
     journal.save(app.config["JOURNAL_FILE"], data)
@@ -132,8 +132,8 @@ def test_default_analytics_range_includes_tracking_only_days_and_reuses_cached_r
 
 
 def test_default_analytics_range_tracks_new_removed_and_corrupt_days(client):
-    import journal_media
-    import places
+    from datapom.domain import journal_media
+    from datapom.domain import places
     root = Path(app.config["JOURNAL_FILE"]).parent / 'tracking'
     assert client.get('/journal/analytics/data').json['date_range'] == {'min': None, 'max': None}
     day = '2026-09-11'
@@ -227,7 +227,7 @@ def test_mobile_media_state_protected_and_shares_web_store(client):
 
 
 def test_map_region_add_retry_keeps_one_region_and_never_starts_download(client, monkeypatch):
-    import map_packs
+    from datapom.domain import map_packs
     calls = []
     monkeypatch.setattr(map_packs, 'download', lambda *args, **kwargs: calls.append((args, kwargs)))
     payload = {'action': 'add', 'id': 'b' * 32, 'name': 'Trip', 'bounds': [120, 30, 122, 32]}
@@ -242,7 +242,7 @@ def test_map_region_add_retry_keeps_one_region_and_never_starts_download(client,
 
 @pytest.mark.parametrize('action', [None, '', 'downlaod', 'delete', 42, [], {}])
 def test_unknown_map_action_never_starts_download(client, monkeypatch, action):
-    import map_packs
+    from datapom.domain import map_packs
     calls = []
     monkeypatch.setattr(map_packs, 'download', lambda *args, **kwargs: calls.append((args, kwargs)))
     response = client.post('/journal/media/maps', json={'action': action, 'id': 'world'})
@@ -353,8 +353,8 @@ def test_partial_new_tag_is_not_promoted_until_commit(client):
 
 
 def test_task_retry_after_interrupted_journal_save_reuses_task(client):
-    import journal_commands
-    import journal_media
+    from datapom.domain import journal_commands
+    from datapom.domain import journal_media
     data = journal.load(app.config['JOURNAL_FILE']); tasks = todo._empty()
     payload = {'document':[{'id':'p','type':'text','text':'[] buy tea'}]}
     journal_commands.commit(data,tasks,'2026-09-08',payload,journal_media._empty())
@@ -404,8 +404,8 @@ def test_discord_status_never_exposes_receiver_token(client):
 
 
 def test_discord_pull_cannot_mark_replaced_credentials_as_synced(client, monkeypatch):
-    from integrations import discord_journal
-    import journal_media
+    from datapom.integrations import discord_journal
+    from datapom.domain import journal_media
     from pathlib import Path
     initial = {'receiver_url': 'https://inbox.example.com', 'receiver_token': 'old-secret', 'application_id': '123'}
     assert client.post('/journal/media/discord/config', json=initial).status_code == 200
@@ -438,7 +438,7 @@ def test_unchanged_autosave_does_not_write_store(client):
 
 
 def test_missing_edited_photo_and_malformed_changes_are_validation_errors(client):
-    import journal_media
+    from datapom.domain import journal_media
     from pathlib import Path
     media = journal_media._empty(); media['assets']['a'*64] = {'id':'a'*64}
     journal_media.save(Path(app.config['JOURNAL_FILE']).parent/'media.json',media)
@@ -483,7 +483,7 @@ def test_older_mobile_client_keeps_document_and_task_tokens_consistent(client):
     response=client.put('/api/mobile/journal/2026-09-08',json={'request_id':'old-1','base_updated':first['updated'],'body':'Hello\n[] buy tea'},headers={'Authorization':'Bearer '+token})
     assert response.status_code == 200
     entry=response.json['entry']
-    import journal_media
+    from datapom.domain import journal_media
     assert journal_media.document_body(entry['document']) == entry['body']
 
 
@@ -502,7 +502,7 @@ def test_invalid_new_tag_is_validation_error(client):
 
 
 def test_nonfinite_edit_layers_do_not_partially_save_stores(client):
-    import journal_media
+    from datapom.domain import journal_media
     from pathlib import Path
     root = Path(app.config['JOURNAL_FILE']).parent
     media = journal_media._empty(); media['assets']['a'*64] = {'id':'a'*64, 'rev':0}

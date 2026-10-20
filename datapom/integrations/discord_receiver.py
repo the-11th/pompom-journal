@@ -7,7 +7,7 @@ import os
 import threading
 from flask import Flask, request, jsonify
 from . import discord_journal
-import journal_media
+from datapom.domain import journal_media
 
 
 def create_app(root, public_key, allowed_user, inbox_token, now=None):

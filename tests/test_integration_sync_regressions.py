@@ -3,11 +3,11 @@ from datetime import datetime
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-import todo
-from integrations import spotify
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import todo
+from datapom.integrations import spotify
 
 
 NOW = datetime(2026, 9, 10, 9, 30)
@@ -33,8 +33,8 @@ def app(tmp_path):
 
 def test_google_focus_day_is_included_outside_recent_window(app, monkeypatch):
     fetched = []
-    monkeypatch.setattr("integrations.google_health.fetch_sleep", lambda token, date: fetched.append(date) or {})
-    monkeypatch.setattr("integrations.google_health.parse_sleep", lambda raw, now=None: None)
+    monkeypatch.setattr("datapom.integrations.google_health.fetch_sleep", lambda token, date: fetched.append(date) or {})
+    monkeypatch.setattr("datapom.integrations.google_health.parse_sleep", lambda raw, now=None: None)
     with app.app_context():
         app_module._google_sync(days=1, focus_date="2026-08-02", now=NOW)
     assert fetched == ["2026-09-10", "2026-08-02"]
@@ -46,8 +46,8 @@ def test_google_current_sleep_refreshes_while_old_complete_day_stays_cached(app,
         journal.set_entry_sleep(data, date, {"duration_min": 120}, now=NOW)
     journal.save(app.config["JOURNAL_FILE"], data)
     fetched = []
-    monkeypatch.setattr("integrations.google_health.fetch_sleep", lambda token, date: fetched.append(date) or {})
-    monkeypatch.setattr("integrations.google_health.parse_sleep", lambda raw, now=None: {"duration_min": 480})
+    monkeypatch.setattr("datapom.integrations.google_health.fetch_sleep", lambda token, date: fetched.append(date) or {})
+    monkeypatch.setattr("datapom.integrations.google_health.parse_sleep", lambda raw, now=None: {"duration_min": 480})
     with app.app_context():
         result = app_module._google_sync(days=2, now=NOW)
     assert fetched == ["2026-09-10"]
@@ -86,12 +86,12 @@ def test_rescuetime_today_refreshes_partial_totals_and_preserves_prior_details_o
         "pulse": 50, "total_min": 30, "top_activities": previous_apps,
     }, now=NOW)
     journal.save(app.config["JOURNAL_FILE"], data)
-    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary", lambda key: [{
+    monkeypatch.setattr("datapom.integrations.rescuetime.fetch_daily_summary", lambda key: [{
         "date": "2026-09-10", "productivity_pulse": 80, "total_hours": 2,
     }])
     def failed_activities(*args):
         raise RuntimeError("Synthetic activity outage")
-    monkeypatch.setattr("integrations.rescuetime.fetch_activities", failed_activities)
+    monkeypatch.setattr("datapom.integrations.rescuetime.fetch_activities", failed_activities)
     with app.app_context():
         result = app_module._rescuetime_sync(now=NOW)
     assert result["synced"] == ["2026-09-10"]
@@ -107,12 +107,12 @@ def test_partial_provider_failure_does_not_advance_success_timestamp(app, monkey
     if provider == "google":
         def fetch(*args):
             raise RuntimeError("Synthetic outage")
-        monkeypatch.setattr("integrations.google_health.fetch_sleep", fetch)
+        monkeypatch.setattr("datapom.integrations.google_health.fetch_sleep", fetch)
     else:
-        monkeypatch.setattr("integrations.spotify.fetch_recently_played", lambda token: {"items": []})
+        monkeypatch.setattr("datapom.integrations.spotify.fetch_recently_played", lambda token: {"items": []})
         def fetch(*args):
             raise RuntimeError("Synthetic taste outage")
-        monkeypatch.setattr("integrations.spotify.fetch_top", fetch)
+        monkeypatch.setattr("datapom.integrations.spotify.fetch_top", fetch)
     with app.app_context():
         result = getattr(app_module, f"_{provider}_sync")(now=NOW)
     assert result["errors"]

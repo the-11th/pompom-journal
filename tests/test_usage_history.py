@@ -1,9 +1,9 @@
 from datetime import datetime
 
-import app as app_module
-from integrations import store as integrations
-import journal
-from integrations import usage
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.integrations import usage
 
 NOW = datetime(2026, 10, 19, 22)
 

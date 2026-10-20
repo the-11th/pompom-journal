@@ -5,12 +5,12 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-from integrations import provider_sync
-from integrations import rescuetime
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.integrations import provider_sync
+from datapom.integrations import rescuetime
+from datapom.domain import todo
 
 NOW = datetime(2026, 9, 19, 14, 0)
 DAY = "2026-09-18"

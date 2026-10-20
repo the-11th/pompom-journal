@@ -12,7 +12,7 @@ import threading
 import uuid
 import urllib.request
 import shutil
-import journal_media
+from datapom.domain import journal_media
 
 _jobs = {}
 _guard = threading.RLock()

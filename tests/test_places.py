@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 import pytest
-import places
+from datapom.domain import places
 
 
 def test_device_origin_survives_sync_and_independent_routes(tmp_path):

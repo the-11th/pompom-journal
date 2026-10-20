@@ -5,7 +5,7 @@ import hashlib
 import json
 import re
 
-import journal
+from datapom.domain import journal
 from . import spotify
 
 

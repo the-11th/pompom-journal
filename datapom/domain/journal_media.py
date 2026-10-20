@@ -12,7 +12,7 @@ import re
 import tempfile
 import warnings
 
-from todo import _HEX_COLOR_RE, _TAG_NAME_RE
+from datapom.domain.todo import _HEX_COLOR_RE, _TAG_NAME_RE
 
 IDENTITY = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 BLOB = re.compile(r"^[a-f0-9]{64}$")

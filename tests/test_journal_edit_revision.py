@@ -3,11 +3,11 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-import journal_media
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import journal_media
+from datapom.domain import todo
 
 
 NOW = datetime(2026, 9, 10, 12)

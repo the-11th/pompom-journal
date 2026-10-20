@@ -1,5 +1,5 @@
 """Unit tests for the pure task-analytics helpers in todo.py."""
-import todo
+from datapom.domain import todo
 
 
 def _arch(title, completed, due=None, recurrence=None, tags=None, difficulty=None):

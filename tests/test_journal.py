@@ -9,7 +9,7 @@ from datetime import datetime
 
 import pytest
 
-import journal
+from datapom.domain import journal
 
 NOW = datetime(2026, 6, 15, 9, 0, 0)
 

@@ -1,13 +1,14 @@
 """Thin HTTP adapters for journal media, offline maps, and location history."""
 from pathlib import Path
 from flask import request, jsonify, send_file, abort, render_template
-import journal
-import journal_commands
-import todo
-import journal_media as media
-import places
-import map_packs
-from integrations import discord_journal
+from datapom.domain import journal
+from datapom.domain import journal_commands
+from datapom.domain import todo
+from datapom.domain import journal_media as media
+from datapom.domain import places
+from datapom.domain import map_packs
+from datapom.integrations import discord_journal
+from datapom.paths import ROOT
 
 
 def register(app, journal_file, mobile_authenticated, lock, data_file):
@@ -133,7 +134,7 @@ def register(app, journal_file, mobile_authenticated, lock, data_file):
 
     @app.get('/journal/media/discord/setup.md')
     def discord_setup_download():
-        return send_file(Path(__file__).parent / 'docs' / 'DISCORD_INBOX.md', mimetype='text/plain')
+        return send_file(ROOT / 'docs' / 'DISCORD_INBOX.md', mimetype='text/plain')
 
     @app.get('/journal/media/discord/status')
     def discord_status():

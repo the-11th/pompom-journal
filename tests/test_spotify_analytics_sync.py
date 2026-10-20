@@ -5,11 +5,11 @@ from threading import Event, Thread
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-from integrations import spotify
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.integrations import spotify
+from datapom.domain import todo
 
 SECTIONS = [
     ("playback", "fetch_playback_state", "parse_playback_state"),
@@ -117,7 +117,7 @@ def test_all_failed_sections_leave_file_bytes_unchanged(store, monkeypatch):
 
 
 def test_snapshot_clock_and_reconcile_preserve_newer_section(store):
-    from integrations import provider_sync
+    from datapom.integrations import provider_sync
     initial = integrations.load(store.config["INTEGRATIONS_FILE"])
     fetched, current = deepcopy(initial), deepcopy(initial)
     result = provider_sync.spotify_analytics(fetched, now=datetime(2026, 9, 10, 12))

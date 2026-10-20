@@ -1,8 +1,8 @@
 from datetime import datetime
 
 import pytest
-import journal
-import places
+from datapom.domain import journal
+from datapom.domain import places
 
 
 @pytest.mark.parametrize('content', [

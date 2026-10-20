@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-import todo
+from datapom.domain import todo
 
 
 def test_task_reference_index_covers_every_state_without_mutating_data():

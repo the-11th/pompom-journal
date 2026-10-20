@@ -5,10 +5,10 @@ from datetime import datetime
 
 import pytest
 
-import app as app_module
-from integrations import store as integrations
-import journal
-import todo
+from datapom.web import app as app_module
+from datapom.integrations import store as integrations
+from datapom.domain import journal
+from datapom.domain import todo
 
 NOW = datetime(2026, 9, 10, 12)
 
@@ -131,7 +131,7 @@ def test_later_live_sync_retains_imported_display_and_saves_live_snapshot(histor
 @pytest.mark.parametrize("first_source", ["spotify", "history_import"])
 def test_provider_reconciliation_saves_live_results_when_import_arrives_during_fetch(history_client, first_source):
     from copy import deepcopy
-    from integrations import provider_sync
+    from datapom.integrations import provider_sync
     client, root = history_client
     path = str(root / "journal.json")
     initial = journal.load(path)
@@ -186,8 +186,8 @@ def test_small_imports_add_duration_before_rounding_and_preserve_full_artist_cou
 
 def test_import_validates_later_saved_day_before_changing_caller():
     from copy import deepcopy
-    from integrations import music_history
-    from integrations import spotify
+    from datapom.integrations import music_history
+    from datapom.integrations import spotify
     data = journal._empty()
     later = journal.upsert_entry(data, "2026-09-10", "Keep", "", now=NOW)
     later["music_history"] = {"version": 1}
@@ -217,7 +217,7 @@ def test_entry_view_excludes_internal_history_receipts_and_retained_sources(hist
 
 def test_provider_reconciliation_updates_live_snapshot_for_already_imported_day(history_client):
     from copy import deepcopy
-    from integrations import provider_sync
+    from datapom.integrations import provider_sync
     client, root = history_client
     upload(client, [play("one")])
     initial = journal.load(str(root / "journal.json"))

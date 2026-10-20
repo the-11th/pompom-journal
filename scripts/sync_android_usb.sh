@@ -4,6 +4,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
 ADB="${ADB:-${ANDROID_HOME:-$HOME/Library/Android/sdk}/platform-tools/adb}"
 PYTHON="${PYTHON:-$ROOT/.venv/bin/python}"
 # Older launchers may still supply the former environment variable names.
@@ -27,7 +28,7 @@ mkdir -p "$ROOT/data"
 server_ready() { curl -fsS --connect-timeout 2 --max-time 2 "$BASE_URL/" >/dev/null 2>&1; }
 if [ "${DATAPOM_SKIP_SERVER_CHECK:-${TODOPUP_SKIP_SERVER_CHECK:-}}" != "1" ]; then
   if ! server_ready; then
-    nohup "$PYTHON" "$ROOT/phone_server.py" >> "$ROOT/data/server.log" 2>&1 &
+    nohup "$PYTHON" -m datapom.runtime.phone_server >> "$ROOT/data/server.log" 2>&1 &
     ready=0
     for attempt in {1..15}; do
       if server_ready; then ready=1; break; fi
