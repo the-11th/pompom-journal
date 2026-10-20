@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Run TodoPup's persistent, localhost-only phone-sync server.
+"""Run Datapom's persistent, localhost-only USB phone-sync server.
 
-Tailscale Serve terminates private HTTPS and proxies to this listener. Keeping
-the WSGI server on loopback is intentional: neither the Flask development
-server nor a LAN-visible port is needed for phone access.
+The WSGI server stays on loopback and the attached phone reaches it only through
+an ADB reverse tunnel; no LAN-visible port is needed.
 """
 
 import os

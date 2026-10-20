@@ -9,30 +9,18 @@ def test_empty_has_all_providers():
     assert d["google"] == {}
 
 
-def test_mobile_enrollment_creates_separate_device_token():
+def test_mobile_device_can_be_created_directly_with_unstored_token():
     d = I._empty()
-    enrollment = I.issue_mobile_enrollment(d, now="2026-07-15T10:00:00")
-    device, token = I.enroll_mobile_device(
-        d, enrollment, "Pixel 9", now="2026-07-15T10:01:00")
-    assert device["name"] == "Pixel 9"
+    device, token = I.create_mobile_device(
+        d, "  Julia phone  ", now="2026-07-17T00:56:07")
+    assert device["name"] == "Julia phone"
     assert token not in json.dumps(d)
     assert I.authenticate_mobile_device(d, token)["id"] == device["id"]
-    assert I.authenticate_mobile_device(d, enrollment) is None
-    # Enrollment tokens are single-use.
-    assert I.enroll_mobile_device(d, enrollment, "Other") is None
-
-
-def test_mobile_enrollment_expires_after_ten_minutes():
-    d = I._empty()
-    enrollment = I.issue_mobile_enrollment(d, now="2026-07-15T10:00:00")
-    assert I.enroll_mobile_device(
-        d, enrollment, "Pixel", now="2026-07-15T10:10:01") is None
 
 
 def test_mobile_request_receipts_are_scoped_per_device():
     d = I._empty()
-    enrollment = I.issue_mobile_enrollment(d)
-    device, _ = I.enroll_mobile_device(d, enrollment, "Pixel")
+    device, _ = I.create_mobile_device(d, "Pixel")
     assert I.mobile_request_receipt(d, device["id"], "r1") is None
     I.remember_mobile_request(d, device["id"], "r1", 200, {"ok": True})
     assert I.mobile_request_receipt(d, device["id"], "r1") == {

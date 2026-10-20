@@ -10,13 +10,26 @@ import os
 import secrets
 import tempfile
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 
 _PROVIDERS = ("google", "rescuetime", "spotify", "phone", "health", "mobile")
 
 
 def _empty():
     return {name: {} for name in _PROVIDERS}
+
+
+def sync_dates(days=7, focus_date=None, now=None):
+    """Recent provider days plus an explicitly opened journal date, without duplicates."""
+    days = max(1, min(365, int(days)))
+    today = (now or datetime.now()).date()
+    result = [(today - timedelta(days=i)).isoformat() for i in range(days)]
+    if focus_date:
+        if not isinstance(focus_date, str) or date.fromisoformat(focus_date).isoformat() != focus_date:
+            raise ValueError("Choose a valid sync date")
+        if focus_date not in result:
+            result.append(focus_date)
+    return result
 
 
 def load(path):
@@ -78,7 +91,11 @@ def set_tokens(data, name, tokens):
 
 
 def set_api_key(data, name, key):
-    get_provider(data, name)["api_key"] = key
+    provider = get_provider(data, name)
+    if provider.get("api_key") != key:
+        provider.pop("analytics", None)
+        provider.pop("last_sync", None)
+    provider["api_key"] = key
     return data
 
 
@@ -162,45 +179,8 @@ def _iso_now(now=None):
     return (now or datetime.now()).isoformat()
 
 
-def _mobile_enrollment_fresh(enrollment, now=None):
-    """Pairing codes are valid for ten minutes and exactly one exchange."""
-    try:
-        created = datetime.fromisoformat(enrollment.get("created", ""))
-        current = datetime.fromisoformat(_iso_now(now))
-    except (TypeError, ValueError):
-        return False
-    return created <= current <= created + timedelta(minutes=10)
-
-
-def issue_mobile_enrollment(data, now=None):
-    """Create a single-use pairing secret. Only its SHA-256 digest is stored."""
-    token = secrets.token_urlsafe(32)
-    mobile = get_provider(data, "mobile")
-    mobile.setdefault("enrollments", []).append({
-        "digest": _token_digest(token), "created": _iso_now(now)})
-    # Pairing codes are deliberately short-lived in practice; cap abandoned
-    # records so a long-running local install cannot grow without bound.
-    mobile["enrollments"] = mobile["enrollments"][-20:]
-    return token
-
-
-def enroll_mobile_device(data, enrollment_token, device_name, now=None):
-    """Consume a pairing secret and return ``(public_device, bearer_token)``.
-
-    Returns None for an unknown/already-consumed secret. Device bearer tokens
-    are independently generated and stored only as hashes.
-    """
-    mobile = get_provider(data, "mobile")
-    digest = _token_digest(enrollment_token)
-    enrollments = mobile.setdefault("enrollments", [])
-    # Prune stale codes before matching so an abandoned QR cannot remain a
-    # permanent credential and the store stays forgiving across old versions.
-    enrollments[:] = [e for e in enrollments if _mobile_enrollment_fresh(e, now)]
-    match = next((e for e in enrollments
-                  if secrets.compare_digest(e.get("digest", ""), digest)), None)
-    if match is None:
-        return None
-    enrollments.remove(match)
+def create_mobile_device(data, device_name, now=None):
+    """Register a device and return its public record plus one-time token."""
     bearer = secrets.token_urlsafe(40)
     device = {
         "id": uuid.uuid4().hex,
@@ -209,12 +189,29 @@ def enroll_mobile_device(data, enrollment_token, device_name, now=None):
         "created": _iso_now(now),
         "last_seen": _iso_now(now),
     }
-    mobile.setdefault("devices", []).append(device)
+    get_provider(data, "mobile").setdefault("devices", []).append(device)
     return mobile_device_public(device), bearer
 
 
 def mobile_device_public(device):
     return {key: device.get(key) for key in ("id", "name", "created", "last_seen")}
+
+
+def provision_usb(data, cached_token, now=None):
+    """Reuse or create USB credentials within the caller's store transaction."""
+    if not isinstance(cached_token, str) or len(cached_token) > 512:
+        raise ValueError("token must be a string of at most 512 characters")
+    digest = _token_digest(cached_token)
+    current = any(secrets.compare_digest(device.get("token_digest", ""), digest)
+                  for device in get_provider(data, "mobile").get("devices", []))
+    token = cached_token
+    if not token or not current:
+        _, token = create_mobile_device(data, "USB-connected Android", now=now)
+    usage_token = get_token(data, "phone")
+    if not usage_token:
+        usage_token = secrets.token_urlsafe(24)
+        set_token(data, "phone", usage_token)
+    return {"token": token, "usage_token": usage_token}
 
 
 def authenticate_mobile_device(data, bearer_token, now=None):

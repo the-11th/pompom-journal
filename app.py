@@ -1120,14 +1120,6 @@ def _integrations_context():
     data = integrations.load(integrations_file())
     gh = integrations.get_provider(data, "google")
     sp = integrations.get_provider(data, "spotify")
-    mobile_enrollment = session.pop("mobile_enrollment_once", None)
-    mobile_base_url = _public_origin()
-    mobile_pair_url = None
-    if mobile_enrollment:
-        mobile_pair_url = "todopup://config?" + urlencode({
-            "url": mobile_base_url.rstrip("/"),
-            "enrollment_token": mobile_enrollment,
-        })
     return dict(
         google_connected=integrations.is_connected(data, "google"),
         google_has_creds=bool(gh.get("client_id") and gh.get("client_secret")),
@@ -1149,15 +1141,6 @@ def _integrations_context():
         health_last_sync=integrations.last_sync(data, "health"),
         health_endpoint=_health_endpoint(),
         mobile_devices=integrations.mobile_devices(data),
-        mobile_enrollment_token=mobile_enrollment,
-        mobile_base_url=mobile_base_url.rstrip("/"),
-        mobile_pair_payload=(json.dumps({
-            "base_url": mobile_base_url.rstrip("/"),
-            "enrollment_token": mobile_enrollment,
-        }) if mobile_enrollment else None),
-        mobile_pair_url=mobile_pair_url,
-        # Revealed exactly once, right after generation (never read from storage).
-        phone_token=session.pop("phone_token_once", None),
         health_token=session.pop("health_token_once", None),
     )
 
@@ -1170,35 +1153,46 @@ PHONE_APK_URL = (
 
 
 def _phone_endpoint():
-    """Stable private origin + ingest path for the Android app's config."""
-    return _public_origin() + url_for("phone_ingest")
+    """USB-loopback ingest endpoint configured by the Mac helper."""
+    return "http://127.0.0.1:5001" + url_for("phone_ingest")
 
 
 def _health_endpoint():
-    return _public_origin() + url_for("health_ingest")
-
-
-def _public_origin():
-    """Configured phone-facing HTTPS origin, falling back to this request.
-
-    Persistent phone mode is commonly opened from localhost on the Mac.  The
-    explicit origin keeps every pairing/config QR on the private Tailscale
-    address instead of accidentally embedding 127.0.0.1.
-    """
-    return (os.environ.get("TODOPUP_PUBLIC_URL")
-            or request.host_url.rstrip("/")).rstrip("/")
+    return "http://127.0.0.1:5001" + url_for("health_ingest")
 
 
 # Android journal/task API ------------------------------------------------- #
 
-@app.route("/integrations/mobile/enrollment", methods=["POST"])
-def mobile_enrollment_create():
-    """Create a one-time pairing code and reveal it on the next Manage load."""
-    data = integrations.load(integrations_file())
-    token = integrations.issue_mobile_enrollment(data)
-    integrations.save(integrations_file(), data)
-    session["mobile_enrollment_once"] = token
-    return redirect(url_for("journal_sections") + "#sec-integrations")
+@app.route("/integrations/mobile/usb", methods=["POST"])
+def mobile_usb_provision():
+    # The USB helper shares this local server's trust boundary and transaction
+    # lock. Forwarded headers cannot grant access to a remote requester.
+    origin = request.headers.get("Origin")
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if (request.remote_addr not in {"127.0.0.1", "::1"}
+            or (origin is not None and origin != request.host_url.rstrip("/"))
+            or (fetch_site is not None and fetch_site not in {"same-origin", "none"})):
+        response = jsonify(ok=False, message="USB setup requires a local request")
+        response.status_code = 403
+    else:
+        payload = request.get_json(silent=True) if request.is_json else None
+        if not isinstance(payload, dict):
+            response = jsonify(ok=False, message="Expected a JSON object")
+            response.status_code = 400
+        else:
+            data = integrations.load(integrations_file())
+            before = deepcopy(data)
+            try:
+                result = integrations.provision_usb(data, payload.get("token", ""))
+            except ValueError as exc:
+                response = jsonify(ok=False, message=str(exc))
+                response.status_code = 400
+            else:
+                if data != before:
+                    integrations.save(integrations_file(), data)
+                response = jsonify(ok=True, **result)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/integrations/mobile/devices/<device_id>/revoke", methods=["POST"])
@@ -1207,21 +1201,6 @@ def mobile_device_revoke(device_id):
     integrations.revoke_mobile_device(data, device_id)
     integrations.save(integrations_file(), data)
     return redirect(url_for("journal_sections") + "#sec-integrations")
-
-
-@app.route("/api/mobile/enroll", methods=["POST"])
-def mobile_enroll():
-    payload = _mobile_payload()
-    if payload is None:
-        return _mobile_error("invalid_json", "A JSON object is required", 400)
-    data = integrations.load(integrations_file())
-    result = integrations.enroll_mobile_device(
-        data, payload.get("enrollment_token"), payload.get("device_name"))
-    if result is None:
-        return _mobile_error("invalid_enrollment", "Pairing code is invalid or already used", 401)
-    device, bearer = result
-    integrations.save(integrations_file(), data)
-    return jsonify({"ok": True, "device": device, "token": bearer}), 201
 
 
 @app.route("/api/mobile/config")
@@ -1235,13 +1214,17 @@ def mobile_config(device):
     sections = []
     for section in journal.active_sections(jdata):
         item = {key: section.get(key) for key in (
-            "id", "name", "type", "color", "tags", "unit", "managed", "metric")}
+            "id", "name", "type", "color", "tags", "archived_tags", "unit", "managed", "metric")}
         item["mention_tags"] = mention_tags.get(section.get("id"), [])
         sections.append(item)
     return jsonify({
         "ok": True, "device": device, "mood_scale": {"min": 1, "max": 7},
         "sections": sections, "task_tags": tdata.get("tags", {}),
-        "capabilities": ["journal", "tags", "numbers", "audio_transcript", "tasks"],
+        "entry_dates": journal.entry_dates(jdata),
+        "stored_entry_dates": journal.stored_entry_dates(jdata),
+        "empty_edit_revision": journal.edit_revision(jdata, None),
+        "calendar_dates": journal.calendar_dates(jdata),
+        "capabilities": ["journal", "tags", "numbers", "audio_transcript", "tasks", "journal_tag_archive"],
     })
 
 
@@ -1252,7 +1235,7 @@ def mobile_journal(device, date):
         return _mobile_error("validation_error", "date must be YYYY-MM-DD", 400)
     data = journal.load(journal_file())
     if request.method == "GET":
-        return jsonify({"ok": True, "entry": journal.get_entry_by_date(data, date)})
+        return jsonify({"ok": True, "entry": journal.entry_view(data, journal.get_entry_by_date(data, date))})
 
     payload = _mobile_payload()
     if payload is None:
@@ -1260,47 +1243,39 @@ def mobile_journal(device, date):
     request_id, cached = _mobile_cached(device, payload)
     if cached:
         return cached
+    previous = journal.get_entry_by_date(data, date)
+    previous_updated = previous.get("updated") if previous else None
     try:
-        entry = journal.upsert_mobile_entry(
-            data, date, payload.get("title"), payload.get("body", ""),
-            tags=payload.get("tags"), numbers=payload.get("numbers"),
-            mood=payload.get("mood"),
-            audio_transcript=payload.get("audio_transcript"),
-            base_updated=payload.get("base_updated"))
-
-        # Keep inline [] behavior centralized in the existing Python grammar.
-        index = journal.tag_section_index(data)
-        task_lines = journal.extract_task_lines(
-            entry.get("body", ""), index, todo.parse_due_token)
-        if task_lines:
+        import journal_commands
+        import journal_media
+        from pathlib import Path
+        media_data = journal_media.load(Path(journal_file()).parent / "media.json")
+        if payload.get("autosave"):
+            entry = journal.autosave_entry(data, date, payload, media_data)
+        else:
             task_data = todo.load(data_file())
-            new_ids = []
-            for task_line in task_lines:
-                try:
-                    todo.add_task(task_data, task_line["title"],
-                                  due=task_line["due"], tags=task_line["tags"])
-                    new_ids.append(task_data["active"][-1]["id"])
-                except ValueError:
-                    new_ids.append(None)
+            entry = journal_commands.commit(data, task_data, date, payload, media_data)
             todo.save(data_file(), task_data)
-            entry["body"] = journal.rewrite_task_lines(entry["body"], new_ids)
-        journal.save(journal_file(), data)
+        if not payload.get("autosave") or (entry and entry.get("updated") != previous_updated):
+            journal.save(journal_file(), data)
     except journal.EntryConflictError as exc:
         body = {"ok": False, "error": {
             "code": "conflict", "message": "Entry changed since it was loaded"},
-            "current": exc.current}
+            "current": journal.entry_view(data, exc.current)}
         _mobile_remember(device, request_id, 409, body)
         return jsonify(body), 409
     except (TypeError, ValueError) as exc:
         return _mobile_error("validation_error", str(exc), 400)
-    body = {"ok": True, "entry": entry}
+    body = {"ok": True, "entry": journal.entry_view(data, entry)}
     _mobile_remember(device, request_id, 200, body)
     return jsonify(body)
 
 
 @app.route("/api/mobile/tags", methods=["POST"])
+@app.route("/api/mobile/tags/archive", methods=["POST"], defaults={"tag_action": "archive"})
+@app.route("/api/mobile/tags/restore-temporary", methods=["POST"], defaults={"tag_action": "restore_temporary"})
 @_mobile_authenticated
-def mobile_tag_add(device):
+def mobile_tag_add(device, tag_action=None):
     payload = _mobile_payload()
     if payload is None:
         return _mobile_error("invalid_json", "A JSON object is required", 400)
@@ -1308,7 +1283,15 @@ def mobile_tag_add(device):
     if cached:
         return cached
     try:
-        if payload.get("domain") == "task":
+        domain = payload.get("domain", "journal")
+        action = tag_action or payload.get("action", "add")
+        if tag_action and payload.get("action", tag_action) != tag_action:
+            raise ValueError("Tag action does not match the requested endpoint")
+        if domain not in ("journal", "task"):
+            raise ValueError("Choose the journal or task tag domain")
+        if domain == "task":
+            if action != "add":
+                raise ValueError("Only journal tags support archive or temporary restore")
             data = todo.load(data_file())
             todo.set_tag_color(data, payload.get("name"), payload.get("color"))
             todo.save(data_file(), data)
@@ -1316,16 +1299,14 @@ def mobile_tag_add(device):
                    "color": payload.get("color")}
         else:
             data = journal.load(journal_file())
-            journal.add_section_tag(data, payload.get("section_id"), payload.get("name"))
+            tag = journal.mutate_mobile_tag(data, payload.get("section_id"), payload.get("name"), action)
             journal.save(journal_file(), data)
-            section = journal.section_by_id(data, payload.get("section_id"))
-            tag = {"name": payload.get("name", "").strip().lower(),
-                   "section_id": section["id"], "color": section["color"]}
     except (TypeError, ValueError) as exc:
         return _mobile_error("validation_error", str(exc), 400)
     body = {"ok": True, "tag": tag}
-    _mobile_remember(device, request_id, 201, body)
-    return jsonify(body), 201
+    status = 201 if action == "add" else 200
+    _mobile_remember(device, request_id, status, body)
+    return jsonify(body), status
 
 
 @app.route("/api/mobile/tasks", methods=["GET", "POST"])
@@ -1346,9 +1327,15 @@ def mobile_tasks(device):
                       task_id=payload.get("client_id"))
         task = data["active"][-1]
         todo.set_task_notes(data, task["id"], payload.get("notes", ""))
+        if "subtasks" in payload:
+            todo.replace_subtasks(data, task["id"], payload.get("subtasks"))
+        if payload.get("done") is True:
+            todo.refresh(data, [task["id"]], difficulties={
+                task["id"]: payload.get("difficulty")})
         todo.save(data_file(), data)
     except todo.TaskIdConflictError as exc:
-        return _mobile_error("id_conflict", str(exc), 409)
+        return _mobile_error("id_conflict", str(exc), 409,
+                             current=todo.mobile_task_view(data, payload.get("client_id")))
     except (TypeError, ValueError) as exc:
         return _mobile_error("validation_error", str(exc), 400)
     body = {"ok": True, "task": todo.mobile_task_view(data, task["id"])}
@@ -1367,34 +1354,50 @@ def mobile_task(device, task_id):
         return cached
     data = todo.load(data_file())
     current, status = todo.task_by_id(data, task_id)
-    if current is None:
-        return _mobile_error("not_found", "Task was not found", 404)
     try:
+        if "base" in payload:
+            todo.validate_mobile_task_base(data, task_id, payload["base"],
+                                           None if request.method == "DELETE" else payload)
+        if current is None:
+            return _mobile_error("not_found", "Task was not found", 404)
         if request.method == "DELETE":
             todo.delete_task(data, task_id)
             task_view = None
         else:
+            if payload.get("done") is False and status == "completed":
+                todo.reopen_task(data, task_id)
+                current, status = todo.task_by_id(data, task_id)
             editable = any(key in payload for key in (
                 "title", "due", "recurrence", "tags"))
             if editable:
                 if status != "active":
-                    return _mobile_error("conflict", "Only active tasks can be edited", 409)
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
                 todo.edit_task(
                     data, task_id, payload.get("title", current.get("title")),
                     due=payload.get("due", current.get("due")),
                     recurrence=payload.get("recurrence", current.get("recurrence")),
                     tags=payload.get("tags", current.get("tags")))
             if "notes" in payload:
+                if status != "active":
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
                 todo.set_task_notes(data, task_id, payload.get("notes"))
             if "subtasks" in payload:
                 if status != "active":
-                    return _mobile_error("conflict", "Only active tasks can be edited", 409)
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
                 todo.replace_subtasks(data, task_id, payload.get("subtasks"))
             if payload.get("done") is True and status == "active":
                 todo.refresh(data, [task_id], difficulties={
                     task_id: payload.get("difficulty")})
             task_view = todo.mobile_task_view(data, task_id)
         todo.save(data_file(), data)
+    except todo.TaskConflictError as exc:
+        body = {"ok": False, "error": {"code": "conflict", "message": str(exc)},
+                "current": exc.current}
+        _mobile_remember(device, request_id, 409, body)
+        return jsonify(body), 409
     except (TypeError, ValueError) as exc:
         return _mobile_error("validation_error", str(exc), 400)
     body = {"ok": True, "task": task_view}
@@ -1677,29 +1680,21 @@ def phone_ingest():
     if not stored or not supplied or not secrets.compare_digest(supplied, stored):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     days = usage.parse_push(request.get_json(silent=True))
+    if not days:
+        return jsonify(ok=False, error="Include at least one valid YYYY-MM-DD day"), 400
     jdata = journal.load(journal_file())
     written = []
     for day in days:
-        journal.set_entry_usage(jdata, day["date"], day)
+        previous = journal.get_entry_by_date(jdata, day["date"])
+        value = usage.merge_day((previous or {}).get("usage"), day)
+        if value != (previous or {}).get("usage"):
+            journal.set_entry_usage(jdata, day["date"], value)
         written.append(day["date"])
     journal.save(journal_file(), jdata)
     integrations.set_last_sync(istore, "phone",
                                datetime.now().replace(microsecond=0).isoformat())
     integrations.save(integrations_file(), istore)
     return jsonify({"ok": True, "dates": written})
-
-
-@app.route("/integrations/phone/token", methods=["POST"])
-def phone_token():
-    data = integrations.load(integrations_file())
-    token = secrets.token_urlsafe(24)
-    integrations.set_token(data, "phone", token)
-    integrations.save(integrations_file(), data)
-    # Reveal once via the next Manage-page render (never stored in the URL/log).
-    session["phone_token_once"] = token
-    flash("Phone-usage token generated — copy it into the app now; "
-          "it won't be shown again.")
-    return redirect(url_for("integrations_page"))
 
 
 @app.route("/integrations/phone/disconnect", methods=["POST"])
@@ -1725,6 +1720,8 @@ def health_ingest():
     if not stored or not supplied or not secrets.compare_digest(supplied, stored):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     days = health.parse_push(request.get_json(silent=True))
+    if not days:
+        return jsonify(ok=False, error="Include at least one valid YYYY-MM-DD day"), 400
     jdata = journal.load(journal_file())
     written = []
     for day in days:
