@@ -26,9 +26,10 @@ def exchange_code(client_id, client_secret, code, redirect_uri, transport=None, 
                                transport=transport, now=now)
 
 
-def refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None):
+def refresh_tokens(client_id, client_secret, refresh_token, transport=None, now=None, prev=None):
     return oauth.refresh_tokens(_TOKEN, client_id, client_secret, refresh_token,
-                                transport=transport, now=now)
+                                transport=transport, now=now,
+                                prev=prev or {"refresh_token": refresh_token})
 
 
 def token_expired(tokens, now=None):
@@ -442,22 +443,39 @@ def summarize_day(plays, audio_features=None, now=None):
 
 def parse_streaming_history(payload_or_list):
     if isinstance(payload_or_list, dict):
-        rows = payload_or_list.get("items") or payload_or_list.get("plays") or []
+        rows = payload_or_list.get("items", payload_or_list.get("plays"))
     else:
-        rows = payload_or_list or []
+        rows = payload_or_list
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Choose a history JSON file containing a list of plays")
     out = []
-    for row in rows:
+    for index, row in enumerate(rows, 1):
         if not isinstance(row, dict):
-            continue
+            raise ValueError(f"Invalid history row {index}: expected an object")
         played_at = row.get("ts") or row.get("endTime") or ""
+        if not isinstance(played_at, str):
+            raise ValueError(f"Invalid history row {index}: timestamp must be text")
+        try:
+            stamp = datetime.fromisoformat(played_at.replace("Z", "+00:00"))
+            if stamp.date().isoformat() != played_at[:10]:
+                raise ValueError()
+        except ValueError as exc:
+            raise ValueError(f"Invalid history row {index}: choose a valid timestamp") from exc
         name = row.get("master_metadata_track_name") or row.get("trackName")
         artist = row.get("master_metadata_album_artist_name") or row.get("artistName")
         album = row.get("master_metadata_album_album_name") or row.get("albumName")
+        if any(value is not None and not isinstance(value, str) for value in (name, artist, album)):
+            raise ValueError(f"Invalid history row {index}: names must be text")
         duration_ms = row.get("ms_played", row.get("msPlayed", 0))
         try:
-            duration_ms = int(duration_ms or 0)
-        except (TypeError, ValueError):
-            duration_ms = 0
+            if isinstance(duration_ms, bool):
+                raise ValueError()
+            parsed_duration = int(duration_ms)
+            if parsed_duration < 0 or float(duration_ms) != parsed_duration:
+                raise ValueError()
+            duration_ms = parsed_duration
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Invalid history row {index}: play duration must be a non-negative integer") from exc
         play = {
             "played_at": played_at,
             "date": played_at[:10],

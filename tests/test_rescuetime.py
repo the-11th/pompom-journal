@@ -42,11 +42,13 @@ def test_parse_day_missing_fields_default_zero():
 def test_fetch_daily_summary_calls_feed():
     sink = []
     def t(method, url, headers, body):
-        sink.append(url)
+        sink.append((url, headers))
         return 200, [ROW]
     out = rescuetime.fetch_daily_summary("KEY123", transport=t)
     assert out == [ROW]
-    assert "daily_summary_feed" in sink[0] and "key=KEY123" in sink[0]
+    assert "/anapi/daily_summary_feed" in sink[0][0]
+    assert "KEY123" not in sink[0][0]
+    assert sink[0][1]["Authorization"] == "Bearer KEY123"
 
 
 # --- Per-activity (website/app) breakdown via the Analytic Data API --------- #
@@ -58,7 +60,7 @@ ACTIVITY_PAYLOAD = {
         [1, 5400, 1, "github.com", "General Software Development", 2],
         [2, 3600, 1, "mail.google.com", "Email", 0],
         [3, 1800, 1, "youtube.com", "Video", -2],
-        [4, 20,   1, "blip.example", "Uncategorized", 0],  # <30s -> 0 min, dropped
+        [4, 20,   1, "blip.example", "Uncategorized", 0],  # short visits retained
     ],
 }
 
@@ -77,8 +79,9 @@ def test_fetch_activities_calls_analytic_endpoint():
 
 def test_parse_activities_shape_sort_and_cap():
     acts = rescuetime.parse_activities(ACTIVITY_PAYLOAD)
-    # sorted by minutes desc; sub-minute activity dropped
-    assert [a["name"] for a in acts] == ["github.com", "mail.google.com", "youtube.com"]
+    # Preserve short visits too; rounding belongs in the display.
+    assert [a["name"] for a in acts] == ["github.com", "mail.google.com", "youtube.com", "blip.example"]
+    assert acts[-1]["min"] == 20 / 60
     assert acts[0] == {"name": "github.com", "min": 90,
                        "category": "General Software Development", "productivity": 2}
     assert acts[2]["productivity"] == -2

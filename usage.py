@@ -2,8 +2,8 @@
 
 Unlike the cloud integrations there is no REST API to pull: the phone *pushes*
 usage stats to /integrations/phone/ingest. `parse_push` normalizes an inbound
-push (a single day dict OR a list of days — the worker sends the last 3 days per
-Decision 8) into our per-day `usage` dicts. The aggregation helpers mirror the
+push (a single day dict OR a batch of archived days) into our per-day `usage`
+dicts. The aggregation helpers mirror the
 RescueTime ones: injectable date bounds, skip entries lacking usable usage, and
 degrade gracefully on too few points. Pure — no network, no clock except the
 injectable `now`.
@@ -18,8 +18,7 @@ def _valid_date(s):
     if not isinstance(s, str):
         return False
     try:
-        datetime.strptime(s, "%Y-%m-%d")
-        return True
+        return datetime.strptime(s, "%Y-%m-%d").date().isoformat() == s
     except ValueError:
         return False
 
@@ -28,7 +27,7 @@ def _int(v):
     """Coerce to a non-negative int; junk -> 0."""
     try:
         n = int(round(float(v)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return n if n > 0 else 0
 
@@ -66,7 +65,7 @@ def _parse_one(day, fetched):
     date = day.get("date")
     if not _valid_date(date):
         return None
-    return {
+    result = {
         "date": date,
         "screen_min": _int(day.get("screen_min")),
         "unlocks": _int(day.get("unlocks")),
@@ -76,13 +75,26 @@ def _parse_one(day, fetched):
         "source": "phone",
         "fetched": fetched,
     }
+    for field in ("details_available", "recovered"):
+        if isinstance(day.get(field), bool):
+            result[field] = day[field]
+    return result
+
+
+def merge_day(previous, incoming):
+    """Backfill fills missing dates; expired detail cannot downgrade saved data."""
+    if previous and (incoming.get("recovered") is True or
+                     (previous.get("details_available", True) and
+                      incoming.get("details_available") is False)):
+        return previous
+    return incoming
 
 
 def parse_push(payload, now=None):
     """Normalize an inbound phone push into a list of usage dicts.
 
-    Accepts either a single day dict or a list of day dicts (the worker pushes
-    the last 3 days). Defensive: coerces/clamps types, caps top_apps at 8, and
+    Accepts either a single day dict or a batch of archived days.
+    Defensive: coerces/clamps types, caps top_apps at 8, and
     skips any day lacking a valid YYYY-MM-DD `date`. Returns a (possibly empty)
     list in the order received.
     """
@@ -145,7 +157,7 @@ def usage_unlocks_series(entries, start=None, end=None):
     out = []
     for e in _filter_entries_by_date(entries, start, end):
         u = _entry_usage(e)
-        if u:
+        if u and u.get("details_available") is not False:
             out.append({"date": e["date"], "unlocks": u.get("unlocks", 0)})
     out.sort(key=lambda d: d["date"])
     return out
@@ -237,9 +249,9 @@ def usage_stats(entries, start=None, end=None):
     if not rows:
         return {"avg_screen_min": None, "avg_unlocks": None, "days": 0}
     screen = [r.get("screen_min", 0) for r in rows]
-    unlocks = [r.get("unlocks", 0) for r in rows]
+    unlocks = [r.get("unlocks", 0) for r in rows if r.get("details_available") is not False]
     return {
         "avg_screen_min": round(sum(screen) / len(screen)),
-        "avg_unlocks": round(sum(unlocks) / len(unlocks)),
+        "avg_unlocks": round(sum(unlocks) / len(unlocks)) if unlocks else None,
         "days": len(rows),
     }

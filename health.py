@@ -1,7 +1,7 @@
 """Daily health-data parse helpers. Zero Flask imports.
 
 Xiaomi/Mi Fitness does not provide a stable public cloud API for personal
-health history, so TodoPup receives normalized data pushed from a bridge
+health history, so Datapom receives normalized data pushed from a bridge
 (Health Connect, export importer, or a small Android companion) and stores it
 per journal day.
 """
@@ -14,8 +14,7 @@ def _valid_date(s):
     if not isinstance(s, str):
         return False
     try:
-        datetime.strptime(s, "%Y-%m-%d")
-        return True
+        return datetime.strptime(s, "%Y-%m-%d").date().isoformat() == s
     except ValueError:
         return False
 
@@ -23,7 +22,7 @@ def _valid_date(s):
 def _int(v):
     try:
         n = int(round(float(v)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
     return n if n > 0 else 0
 
@@ -41,7 +40,9 @@ def _time_of(sample):
         return None
     if "T" in raw:
         raw = raw.split("T", 1)[1]
-    if len(raw) >= 5 and raw[2] == ":":
+    if (len(raw) >= 5 and raw[2] == ":" and raw[:2].isascii() and raw[:2].isdigit()
+            and raw[3:5].isascii() and raw[3:5].isdigit()
+            and int(raw[:2]) < 24 and int(raw[3:5]) < 60):
         return raw[:5]
     return None
 
