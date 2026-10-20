@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TodoPupUsage"
+rootProject.name = "Datapom"
 include(":app")

@@ -8,5 +8,15 @@
         <item name="android:windowBackground">@color/background</item>
         <item name="android:colorAccent">@color/accent</item>
         <item name="colorAccent">@color/accent</item>
+        <item name="android:alertDialogTheme">@style/Theme.TodoPupUsage.Dialog</item>
+    </style>
+    <style name="Theme.TodoPupUsage.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+        <item name="android:textColorHint">@color/muted</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowBackground">@color/panel</item>
+        <item name="android:dialogPreferredPadding">18dp</item>
     </style>
 </resources>
