@@ -56,7 +56,7 @@ stored or applied). The reference clock is `datetime.now()`.
 ## Project layout
 
 ```
-pompom-journal/
+datapom/
 ├── app.py              # Flask routes (thin HTTP layer only)
 ├── todo.py             # to-do domain logic (no Flask imports, unit-tested)
 ├── journal.py          # journal domain logic (no Flask imports, unit-tested)
@@ -70,7 +70,7 @@ pompom-journal/
 ├── data/               # local JSON storage (gitignored, auto-created)
 ├── templates/          # Jinja templates (base, active, journal, analytics, …)
 ├── static/             # style.css, vanilla JS, images
-├── android/            # offline-first journal/task + phone-usage app (Kotlin)
+├── android/            # Datapom for Android (Kotlin)
 ├── tests/              # pytest suite
 ├── docs/               # specs, Automator dock-app files
 └── Datapom.command     # double-click launcher (macOS)
@@ -413,7 +413,7 @@ downloadable APK by GitHub Actions.
 1. In **Manage → Integrations → Phone usage**, click **Generate token** — this
    shows the **endpoint URL**, a **config QR**, and a **download QR**.
 2. On the phone, **scan the download QR** (or open
-   [the latest release APK](https://github.com/the-11th/pompom-journal/releases/latest/download/phone-usage.apk)).
+   [the latest Datapom APK](https://github.com/the-11th/pompom-journal/releases/latest/download/phone-usage.apk)).
    Allow "install unknown apps" for your browser once, then install.
 
 #### Connect your phone (step by step)
@@ -484,9 +484,19 @@ Tests are written first (TDD). Pure logic lives in Flask-free modules
 (`todo.py`, `journal.py`, integration clients) with an injectable clock; the HTTP
 layer in `app.py` stays thin.
 
-### Building the phone-usage app
+### Building Datapom for Android
 
-The Android companion app under `android/` is built automatically by
-`.github/workflows/android.yml` on pushes touching `android/**`, and published as
-a GitHub Release asset (`phone-usage.apk`). To build it locally you'll need the
-Android SDK — see `android/README.md`.
+Datapom for Android is built automatically by `.github/workflows/android.yml`
+on pushes touching `android/**`. The workflow artifact is `datapom-apk`, containing
+`datapom.apk`. Builds on `main` and manual runs also publish a Datapom release,
+including a `phone-usage.apk` alias for existing download links. To build locally
+you'll need the Android SDK — see `android/README.md`.
+
+### Naming and compatibility
+
+The app is **Datapom** on the web, Android, and macOS. The existing GitHub URL,
+Android package ID, storage keys, native bridge, and macOS service/bundle IDs
+retain their original identifiers so updates preserve installations and data.
+Older launcher names and deep links remain compatibility aliases. New server
+and USB configuration variables use `DATAPOM_*`; the former `TODOPUP_*` names
+are still accepted. Pompompurin asset filenames refer to the mascot.

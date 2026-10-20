@@ -1,4 +1,4 @@
-name: Build phone-usage APK
+name: Build Datapom APK
 
 on:
   push:
@@ -39,22 +39,23 @@ jobs:
 
       - name: Rename APK
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk phone-usage.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk datapom.apk
+          cp datapom.apk phone-usage.apk
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: phone-usage-apk
-          path: phone-usage.apk
+          name: datapom-apk
+          path: datapom.apk
 
-      # Publish as a GitHub Release asset named phone-usage.apk so the
-      # always-latest URL resolves:
-      #   https://github.com/<owner>/todo-cli/releases/latest/download/phone-usage.apk
+      # Keep the old asset as an alias so existing Manage-page download links work.
       - name: Publish GitHub Release
         if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: phone-app-v${{ github.run_number }}
-          name: Phone usage app v${{ github.run_number }}
-          files: phone-usage.apk
+          tag_name: datapom-v${{ github.run_number }}
+          name: Datapom v${{ github.run_number }}
+          files: |
+            datapom.apk
+            phone-usage.apk
           fail_on_unmatched_files: true

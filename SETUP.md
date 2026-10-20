@@ -1,4 +1,4 @@
-# Setup
+# Datapom setup
 
 ## Running the app
 
@@ -19,8 +19,8 @@ flask --app app run --port 5001
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/the-11th/pompom-journal.git ~/projects/todo-journal
-cd ~/projects/todo-journal
+git clone https://github.com/the-11th/pompom-journal.git ~/projects/datapom
+cd ~/projects/datapom
 ```
 
 ### 2. Create the virtual environment
@@ -60,7 +60,7 @@ that shortcut in its existing position:
 4. Paste the script below into the action, replacing any existing content:
 
 ```bash
-cd /Users/<your-username>/projects/todo-journal
+cd /Users/<your-username>/projects/datapom
 exec /bin/bash Datapom.command
 ```
 

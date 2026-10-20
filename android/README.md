@@ -137,9 +137,10 @@ The debug APK lands at `app/build/outputs/apk/debug/app-debug.apk`. A
 **debug-signed** APK is intentional — no keystore/signing ceremony is needed for
 personal sideloading.
 
-CI builds it automatically on every push under `android/**` and publishes the
-backward-compatible release asset name `phone-usage.apk`. The Manage page links
-to that latest APK.
+CI builds it automatically on every push under `android/**` as the
+`datapom-apk` artifact containing `datapom.apk`. Builds on `main` and manual runs
+also publish a Datapom release with both `datapom.apk` and the compatible
+`phone-usage.apk` alias used by existing Manage-page download links.
 
 ## Optional usage-access setup
 
@@ -277,7 +278,9 @@ real journal entries or grant location permissions.
 For interactive checks with disposable photos and entries, build `assembleQa`.
 This installs as **Datapom QA** (`com.todopup.usage.qa`) with separate private
 storage and no production connection credentials. It uses the same app source
-and bundled assets, with a distinct `todopup-qa` deep-link scheme. Keep the
+and bundled assets, with a distinct `datapom-qa` deep-link scheme. The production
+app uses `datapom`; the former `todopup-qa` and `todopup` schemes remain aliases
+for existing helpers, with the same separation between QA and production. Keep the
 normal Datapom installation in place; remove only the QA app after testing.
 
 The same runtime checks can target QA without updating production:
