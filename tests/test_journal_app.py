@@ -3,6 +3,8 @@ JOURNAL_FILE so the real data/journal.json is never touched."""
 
 import io
 import json
+from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +37,23 @@ def client(app):
 
 def _journal_path():
     return app_module.app.config["JOURNAL_FILE"]
+
+
+@pytest.mark.parametrize("source, expected", [("history_import", True), ("spotify", False)])
+def test_entry_music_labels_imported_history_source(client, app, source, expected):
+    data = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_music(data, "2026-09-10", {
+        "minutes": 42, "tracks": 7, "top_artists": [{"name": "Review artist"}],
+        "source": source, "source_label": "Imported history" if expected else None,
+    })
+    journal.save(app.config["JOURNAL_FILE"], data)
+    html = client.get("/journal/2026-09-10").get_data(as_text=True)
+    assert ('<span class="muted">Imported history</span>' in html) is expected
+
+
+def test_spotify_import_form_explains_displayed_history_totals(client):
+    html = client.get("/journal/sections").get_data(as_text=True)
+    assert "Imported days use history totals. Live sync stays saved separately." in html
 
 
 def test_todo_index_has_brand_toggle_link_to_journal(client):
@@ -143,7 +162,17 @@ def test_edit_existing_date_prefills(client):
     resp = client.get("/journal/2026-06-10")
     assert resp.status_code == 200
     assert b"Past" in resp.data
-    assert b"Update entry" in resp.data
+    assert b"Save entry" in resp.data
+
+
+def test_saved_status_is_transient_overlay():
+    root = Path(__file__).parents[1]
+    css = (root / "static" / "style.css").read_text()
+    script = (root / "static" / "journal-entry-convenience.js").read_text()
+
+    overlay = css[css.index(".entry-actions .draft-status"):]
+    assert "position: absolute" in overlay.split("}", 1)[0]
+    assert 'setStatus("Entry saved", 1800)' in script
 
 
 def test_save_preserves_archived_section_data(client):
@@ -860,7 +889,13 @@ def _people_sid():
     return journal.load(_journal_path())["sections"][0]["id"]
 
 
-def test_suggestion_detail_shape(client):
+def test_suggestion_detail_shape(client, monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 20, tzinfo=tz)
+
+    monkeypatch.setattr(journal, "datetime", FixedDateTime)
     sid = _people_sid()
     client.post("/journal/save", data={
         "date": "2026-06-20", "title": "t", "body": "went running today"})
@@ -1183,7 +1218,7 @@ def test_rescuetime_disconnect(client, app):
 
 def test_integrations_page_has_rescuetime_card(client):
     r = client.get("/journal/sections")
-    assert b"RescueTime" in r.data
+    assert b"RescueTime" in r.data.replace(b"<wbr>", b"")
     assert b'name="api_key"' in r.data
 
 
@@ -1200,14 +1235,6 @@ def _connect_phone(app, token="TOK-123"):
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_token(d, "phone", token)
     I.save(app.config["INTEGRATIONS_FILE"], d)
-
-
-def test_phone_generate_token(client, app):
-    r = client.post("/integrations/phone/token")
-    assert r.status_code == 302
-    d = I.load(app.config["INTEGRATIONS_FILE"])
-    assert I.get_token(d, "phone")
-    assert I.is_connected(d, "phone")
 
 
 def test_phone_ingest_requires_token(client, app):
@@ -1280,19 +1307,11 @@ def test_phone_card_has_apk_download_url_and_qr(client, app):
     assert b"phone-qr.js" in r.data
 
 
-def test_phone_config_qr_only_after_token_generate(client, app):
-    # No token reveal on a normal page load → no config deep-link QR.
+def test_phone_usage_card_is_usb_configured(client, app):
     r = client.get("/journal/sections")
     assert b"todopup://config" not in r.data
-    # Generating a token reveals it once; the config QR is emitted only then,
-    # carrying endpoint + token in a todopup://config deep link.
-    client.post("/integrations/phone/token")
-    r2 = client.get("/journal/sections")
-    assert b"todopup://config" in r2.data
-    assert b"token%3D" in r2.data or b"token=" in r2.data
-    # ...and it is not re-rendered from storage on the next load.
-    r3 = client.get("/journal/sections")
-    assert b"todopup://config" not in r3.data
+    assert b"USB sync endpoint" in r.data
+    assert b"http://127.0.0.1:5001/integrations/phone/ingest" in r.data
 
 
 def test_analytics_data_entries_carry_usage(client, app):

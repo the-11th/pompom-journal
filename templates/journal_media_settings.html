@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block brand_mascot %}<img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}" width="56" height="56" alt="pompompurin">{% endblock %}
+{% block brand_title %}{% endblock %}
+{% block nav %}
+  <a href="{{ url_for('journal_today') }}">New entry</a>
+  <a href="{{ url_for('journal_analytics') }}">Analytics</a>
+  <a href="{{ url_for('journal_sections') }}">Manage</a>
+  <a class="nav-search" href="{{ url_for('journal_search') }}">Search</a>
+{% endblock %}
+{% block content %}
+  <div class="page-title-row"><h2>Photos & places</h2><a class="archive-link back-link" href="{{ url_for('journal_sections') }}">← Manage</a></div>
+  <div id="media-settings-root"></div>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='offline-map.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-ui.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-settings.js') }}" defer></script>
+{% endblock %}

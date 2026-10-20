@@ -643,20 +643,7 @@ def _task_ref_index(entry):
     ids = journal.linked_task_ids((entry or {}).get("body", ""))
     if not ids:
         return {}
-    tdata = todo.load(data_file())
-    by_id = {}
-    for t in tdata.get("active", []):
-        by_id[t.get("id")] = ("active", False, t)
-    for t in tdata.get("archive", []):
-        by_id[t.get("id")] = ("done", True, t)
-    for t in tdata.get("expired", []):
-        by_id[t.get("id")] = ("expired", False, t)
-    out = {}
-    for tid in ids:
-        status, done, t = by_id.get(tid, ("missing", False, None))
-        out[tid] = {"done": done, "status": status,
-                    "title": (t or {}).get("title", "")}
-    return out
+    return todo.task_ref_index(todo.load(data_file()), ids)
 
 
 def _render_entry(data, date):
@@ -665,8 +652,10 @@ def _render_entry(data, date):
     return render_template(
         "journal_entry.html", data=data,
         entry=entry,
+        entry_edit_revision=journal.edit_revision(data, entry),
         date=date, sections=journal.active_sections(data),
-        entry_dates=journal.entry_dates(data),
+        entry_dates=journal.calendar_dates(data),
+        occupied_dates=journal.stored_entry_dates(data),
         mention_index=_mention_index(data),
         tag_voice_catalog=_tag_voice_catalog(data),
         numeric_index=_numeric_index(data),
@@ -715,12 +704,11 @@ def journal_analytics_data():
     on window focus; the client filters by date and renders."""
     payload = journal.analytics_payload(journal.load(journal_file()))
     payload["tasks"] = todo.task_payload(todo.load(data_file()))
-    # Widen the shared date range so the date filter spans both domains.
-    jr, tr = payload["date_range"], payload["tasks"]["date_range"]
-    mins = [d for d in (jr.get("min"), tr.get("min")) if d]
-    maxs = [d for d in (jr.get("max"), tr.get("max")) if d]
-    payload["date_range"] = {"min": min(mins) if mins else None,
-                             "max": max(maxs) if maxs else None}
+    payload["rescuetime_connected"] = integrations.is_connected(integrations.load(integrations_file()), "rescuetime")
+    payload["date_range"] = journal.analytics_date_range(
+        payload["date_range"], payload["tasks"]["date_range"],
+        places.manifest(os.path.join(os.path.dirname(journal_file()), "tracking"), skip_invalid=True),
+    )
     return jsonify(payload)
 
 
@@ -1753,6 +1741,10 @@ def health_disconnect():
     integrations.save(integrations_file(), data)
     flash("Health data disconnected.")
     return redirect(url_for("integrations_page"))
+
+
+import media_routes
+media_routes.register(app, journal_file, _mobile_authenticated, _mobile_lock, data_file)
 
 
 if __name__ == "__main__":
