@@ -11,17 +11,22 @@ import secrets
 import signal
 import threading
 import time
+from contextlib import nullcontext
+from copy import deepcopy
 from datetime import datetime, timedelta
 from functools import wraps
 from urllib.parse import urlencode
 
 from flask import (Flask, flash, jsonify, redirect, render_template, request,
-                   session, url_for)
+                   session, url_for, g)
 
 import google_health
 import health
 import integrations
 import journal
+import music_history
+import places
+import provider_sync
 import rescuetime
 import spotify
 import todo
@@ -67,6 +72,29 @@ def integrations_file():
 
 
 _mobile_lock = threading.RLock()
+_provider_sync_locks = {name: threading.RLock() for name in ('google', 'rescuetime', 'spotify')}
+
+
+@app.before_request
+def _serialize_store_transactions():
+    # Old form routes, integrations, and new autosaves must share a transaction
+    # boundary. Atomic replacement alone cannot prevent a lost update between
+    # concurrent load/modify/save sequences. Binary streams and the independently
+    # locked Discord pull do not hold up journal work.
+    if request.endpoint in {'static', 'heartbeat', 'quit', 'media_file_web',
+                            'media_file_mobile', 'media_map_file', 'mobile_map_file',
+                            'discord_pull', 'google_sync_route', 'rescuetime_sync_route', 'spotify_sync_route',
+                            'spotify_analytics', 'rescuetime_detail'}:
+        return
+    _mobile_lock.acquire()
+    g.todopup_store_locked = True
+
+
+@app.teardown_request
+def _release_store_transaction(error=None):
+    if g.pop('todopup_store_locked', False):
+        _mobile_lock.release()
+
 
 
 def _mobile_error(code, message, status=400, **extra):
@@ -1035,67 +1063,46 @@ def journal_section_tag_archive_temp(section_id, tag):
 
 
 def _recent_dates(days, now=None):
-    today = (now or datetime.now()).date()
-    return [(today - timedelta(days=i)).isoformat() for i in range(days)]
+    return integrations.sync_dates(days, now=now)
+
+
+def _run_provider_sync(provider, fetch, **kwargs):
+    # Sync routes fetch outside the shared store lock. Legacy OAuth callbacks
+    # already hold that lock, so they must not acquire locks in reverse order.
+    provider_lock = nullcontext() if g.get('todopup_store_locked', False) else _provider_sync_locks[provider]
+    with provider_lock:
+        with _mobile_lock:
+            initial_integrations = integrations.load(integrations_file())
+            initial_journal = journal.load(journal_file())
+        fetched_integrations = deepcopy(initial_integrations)
+        fetched_journal = deepcopy(initial_journal)
+        result = fetch(fetched_integrations, fetched_journal, **kwargs)
+        if not result['connected']:
+            return result
+        with _mobile_lock:
+            current_integrations = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial_integrations, current_integrations, provider):
+                return {'connected': integrations.is_connected(current_integrations, provider),
+                        'synced': [], 'errors': ['Connection changed during sync. Run sync again.']}
+            current_journal = journal.load(journal_file())
+            result = provider_sync.reconcile(provider, initial_integrations, fetched_integrations,
+                current_integrations, initial_journal, fetched_journal, current_journal, result, now=kwargs.get('now'))
+            journal.save(journal_file(), current_journal)
+            integrations.save(integrations_file(), current_integrations)
+        return result
 
 
 def _google_sync(days=7, force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "google"):
-        return {"connected": False, "synced": [], "errors": []}
-    gh = integrations.get_provider(istore, "google")
-    tokens = gh["tokens"]
-    cid, csecret = gh.get("client_id"), gh.get("client_secret")
-
-    if google_health.token_expired(tokens) and tokens.get("refresh_token") and cid:
-        try:
-            tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
-            integrations.set_tokens(istore, "google", tokens)
-        except Exception:  # noqa: BLE001
-            pass
-
-    jdata = journal.load(journal_file())
-    # Backfill managed sleep-metric numeric sections from already-synced days
-    # (the per-date `entry.sleep` guard below skips them). Idempotent — no
-    # timestamp churn on repeated syncs. The single save at the end persists it.
-    for entry in jdata.get("entries", []):
-        if entry.get("sleep"):
-            journal.apply_sleep_metrics(jdata, entry["date"], entry["sleep"])
-    synced, errors = [], []
-    for date in _recent_dates(days, now=now):
-        existing = journal.get_entry_by_date(jdata, date)
-        if not force and existing is not None and existing.get("sleep"):
-            continue
-        try:
-            try:
-                raw = google_health.fetch_sleep(tokens["access_token"], date)
-            except PermissionError:
-                if cid and tokens.get("refresh_token"):
-                    tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
-                    integrations.set_tokens(istore, "google", tokens)
-                    raw = google_health.fetch_sleep(tokens["access_token"], date)
-                else:
-                    raise
-            sleep = google_health.parse_sleep(raw)
-            if sleep:
-                journal.set_entry_sleep(jdata, date, sleep)
-                journal.apply_sleep_metrics(jdata, date, sleep)
-                synced.append(date)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{date}: {exc}")
-
-    journal.save(journal_file(), jdata)
-    integrations.set_last_sync(istore, "google",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
+    return _run_provider_sync("google", provider_sync.google_sync, days=days, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/google/sync", methods=["POST"])
 def google_sync_route():
     days = request.args.get("days", type=int) or 7
     focus = request.args.get("date")
-    result = _google_sync(days=days, focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _google_sync(days=days, focus_date=focus, force=request.args.get("force") == "1")
     sleep = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
@@ -1464,85 +1471,15 @@ def google_disconnect():
 
 
 def _spotify_sync(force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "spotify"):
-        return {"connected": False, "synced": [], "errors": []}
-    sp = integrations.get_provider(istore, "spotify")
-    tokens = sp["tokens"]
-    cid, csecret = sp.get("client_id"), sp.get("client_secret")
-    errors = []
-
-    if spotify.token_expired(tokens) and tokens.get("refresh_token") and cid:
-        try:
-            tokens = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
-            integrations.set_tokens(istore, "spotify", tokens)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _recent():
-        try:
-            return spotify.fetch_recently_played(tokens["access_token"])
-        except PermissionError:
-            if cid and tokens.get("refresh_token"):
-                new = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
-                tokens.update(new)
-                integrations.set_tokens(istore, "spotify", tokens)
-                return spotify.fetch_recently_played(tokens["access_token"])
-            raise
-
-    jdata = journal.load(journal_file())
-    synced = []
-    try:
-        plays = spotify.parse_recently_played(_recent())
-        buffer = spotify.merge_plays(
-            integrations.get_plays_buffer(istore, "spotify"), plays, now=now)
-        integrations.set_plays_buffer(istore, "spotify", buffer)
-        for date, by_ts in buffer.items():
-            day_plays = list(by_ts.values())
-            ids = [p["track_id"] for p in day_plays if p.get("track_id")]
-            try:
-                feats = spotify.fetch_audio_features(tokens["access_token"], ids)
-            except Exception as exc:  # noqa: BLE001
-                feats, _ = None, errors.append(f"features {date}: {exc}")
-            journal.set_entry_music(jdata, date, spotify.summarize_day(day_plays, feats, now=now))
-            synced.append(date)
-        journal.save(journal_file(), jdata)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(str(exc))
-
-    # Taste snapshot (best-effort).
-    try:
-        terms = ("short_term", "medium_term", "long_term")
-        tops = {"tracks": {}, "artists": {}}
-        for kind in ("tracks", "artists"):
-            for term in terms:
-                tops[kind][term] = spotify.fetch_top(tokens["access_token"], kind, term)
-        integrations.set_taste(istore, "spotify", spotify.build_taste(tops, now=now))
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"taste: {exc}")
-
-    integrations.set_last_sync(istore, "spotify",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
-
-
-def _spotify_tokens_or_none(data):
-    if not integrations.is_connected(data, "spotify"):
-        return None
-    sp = integrations.get_provider(data, "spotify")
-    tokens = sp.get("tokens") or {}
-    cid, csecret = sp.get("client_id"), sp.get("client_secret")
-    if spotify.token_expired(tokens) and tokens.get("refresh_token") and cid:
-        tokens = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
-        integrations.set_tokens(data, "spotify", tokens)
-    return tokens
+    return _run_provider_sync("spotify", provider_sync.spotify_sync, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/spotify/sync", methods=["POST"])
 def spotify_sync_route():
     focus = request.args.get("date")
-    result = _spotify_sync(focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _spotify_sync(focus_date=focus, force=request.args.get("force") == "1")
     music = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
@@ -1552,73 +1489,24 @@ def spotify_sync_route():
 
 @app.route("/integrations/spotify/analytics", methods=["GET", "POST"])
 def spotify_analytics():
-    data = integrations.load(integrations_file())
-    tokens = _spotify_tokens_or_none(data)
-    if not tokens:
-        return jsonify({"ok": True, "connected": False, "analytics": {}})
-
-    access = tokens["access_token"]
-    errors = []
-
-    def collect(label, fetch, parse):
-        try:
-            return parse(fetch(access))
-        except Exception as exc:  # noqa: BLE001 - best-effort snapshot
-            errors.append(f"{label}: {exc}")
-            return {} if label != "devices" and label != "followed_artists" else []
-
-    analytics = {
-        "playback": collect("playback", spotify.fetch_playback_state,
-                            spotify.parse_playback_state),
-        "queue": collect("queue", spotify.fetch_queue, spotify.parse_queue),
-        "devices": collect("devices", spotify.fetch_devices, spotify.parse_devices),
-        "library": {
-            "saved_tracks": collect("saved_tracks", spotify.fetch_saved_tracks,
-                                    spotify.parse_saved_tracks),
-            "saved_albums": collect("saved_albums", spotify.fetch_saved_albums,
-                                    spotify.parse_saved_albums),
-            "saved_episodes": collect("saved_episodes", spotify.fetch_saved_episodes,
-                                      spotify.parse_saved_episodes),
-        },
-        "playlists": collect("playlists", spotify.fetch_current_user_playlists,
-                             spotify.parse_playlists),
-        "followed_artists": collect("followed_artists", spotify.fetch_followed_artists,
-                                    spotify.parse_followed_artists),
-        "fetched": datetime.now().replace(microsecond=0).isoformat(),
-    }
-    integrations.set_analytics(data, "spotify", analytics)
-    integrations.set_last_sync(data, "spotify", analytics["fetched"])
-    integrations.save(integrations_file(), data)
-    return jsonify({"ok": True, "connected": True, "analytics": analytics,
-                    "errors": errors})
-
-
-def _merge_music_summary(existing, incoming, source):
-    merged = dict(existing or {})
-    incoming = dict(incoming or {})
-    for key in ("tracks", "minutes"):
-        merged[key] = int(merged.get(key) or 0) + int(incoming.get(key) or 0)
-    merged["distinct"] = max(int(merged.get("distinct") or 0),
-                             int(incoming.get("distinct") or 0))
-    for key in ("top_artists", "top_tracks", "top_albums", "top_contexts"):
-        counts = {}
-        for row in (merged.get(key) or []) + (incoming.get(key) or []):
-            name = row.get("name") if isinstance(row, dict) else None
-            if not name:
-                continue
-            counts[name] = counts.get(name, 0) + int(row.get("count") or 1)
-        if counts:
-            rows = [{"name": name, "count": count} for name, count in counts.items()]
-            rows.sort(key=lambda r: r["count"], reverse=True)
-            merged[key] = rows[:10 if key != "top_artists" else 5]
-    sources = set(merged.get("sources") or [])
-    if merged.get("source"):
-        sources.add(merged["source"])
-    sources.add(source)
-    merged["sources"] = sorted(sources)
-    merged["source"] = "spotify"
-    merged["fetched"] = datetime.now().replace(microsecond=0).isoformat()
-    return merged
+    with _provider_sync_locks['spotify']:
+        with _mobile_lock:
+            initial = integrations.load(integrations_file())
+        fetched = deepcopy(initial)
+        result = provider_sync.spotify_analytics(fetched)
+        if not result['connected']:
+            return jsonify({key: value for key, value in result.items() if key != 'updated'})
+        with _mobile_lock:
+            current = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial, current, 'spotify'):
+                return jsonify(ok=False, connected=integrations.is_connected(current, 'spotify'),
+                    analytics=integrations.get_analytics(current, 'spotify'),
+                    errors=['Connection changed during sync. Run sync again.'])
+            before = deepcopy(current)
+            result = provider_sync.reconcile_spotify_analytics(initial, fetched, current, result)
+            if current != before:
+                integrations.save(integrations_file(), current)
+        return jsonify(result)
 
 
 @app.route("/integrations/spotify/history/import", methods=["POST"])
@@ -1628,24 +1516,21 @@ def spotify_history_import():
         flash("Choose a Spotify history JSON file to import.")
         return redirect(url_for("integrations_page"))
     try:
-        raw = json.loads(uploaded.read().decode("utf-8"))
+        content = uploaded.read()
+        if content.startswith(b"PK") or (uploaded.filename or "").lower().endswith(".zip"):
+            raise ValueError("Extract the ZIP and choose a Spotify history JSON file")
+        raw = json.loads(content.decode("utf-8-sig"))
         plays = spotify.parse_streaming_history(raw)
-        grouped = spotify.group_plays_by_day(plays)
+        data = journal.load(journal_file())
+        result = music_history.import_plays(data, plays)
+        if result["days"]:
+            journal.save(journal_file(), data)
     except Exception as exc:  # noqa: BLE001 - surface as validation feedback
         flash(f"Spotify history import failed: {exc}")
         return redirect(url_for("integrations_page"))
 
-    data = journal.load(journal_file())
-    count = 0
-    for date, day_plays in grouped.items():
-        existing = journal.get_entry_by_date(data, date)
-        summary = spotify.summarize_day(day_plays)
-        summary["sources"] = sorted({p.get("source", "history_import") for p in day_plays})
-        merged = _merge_music_summary((existing or {}).get("music"), summary, "history_import")
-        journal.set_entry_music(data, date, merged)
-        count += 1
-    journal.save(journal_file(), data)
-    flash(f"Imported Spotify history for {count} day{'s' if count != 1 else ''}.")
+    count = len(result["days"])
+    flash(f"Imported Spotify history for {count} day{'s' if count != 1 else ''}." if count else "This Spotify history is already imported.")
     return redirect(url_for("integrations_page"))
 
 
@@ -1737,66 +1622,44 @@ def rescuetime_disconnect():
 
 
 def _rescuetime_sync(force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "rescuetime"):
-        return {"connected": False, "synced": [], "errors": []}
-    key = integrations.get_provider(istore, "rescuetime").get("api_key")
-    jdata = journal.load(journal_file())
-    synced, errors = [], []
-    try:
-        rows = rescuetime.fetch_daily_summary(key)
-    except Exception as exc:  # noqa: BLE001
-        return {"connected": True, "synced": [], "errors": [str(exc)]}
-    for row in rows:
-        try:
-            day = rescuetime.parse_day(row, now=now)
-            date = day.get("date")
-            if not date:
-                continue
-            existing = journal.get_entry_by_date(jdata, date)
-            ex_rt = existing.get("rescuetime") if existing else None
-            write_summary = force or not ex_rt
-            # Backfill the per-activity breakdown onto days synced before this
-            # feature existed (they have a rescuetime dict but no top_activities).
-            backfill_only = (not write_summary) and not (ex_rt or {}).get("top_activities")
-            if not write_summary and not backfill_only:
-                continue
-            # Best-effort per-activity (website/app) breakdown; a failure here
-            # must not lose the day's summary, so it's isolated.
-            activities = None
-            try:
-                activities = rescuetime.parse_activities(
-                    rescuetime.fetch_activities(key, date))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{date} activities: {exc}")
-            if write_summary:
-                if activities is not None:
-                    day["top_activities"] = activities
-                journal.set_entry_rescuetime(jdata, date, day)
-                synced.append(date)
-            elif activities is not None:
-                merged = dict(ex_rt)
-                merged["top_activities"] = activities
-                journal.set_entry_rescuetime(jdata, date, merged)
-                synced.append(date)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{row.get('date')}: {exc}")
-    journal.save(journal_file(), jdata)
-    integrations.set_last_sync(istore, "rescuetime",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
+    return _run_provider_sync("rescuetime", provider_sync.rescuetime_sync, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/rescuetime/sync", methods=["POST"])
 def rescuetime_sync_route():
     focus = request.args.get("date")
-    result = _rescuetime_sync(focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _rescuetime_sync(focus_date=focus, force=request.args.get("force") == "1")
     data = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
         data = {focus: (entry or {}).get("rescuetime")}
     return jsonify({"ok": True, **result, "data": data})
+
+
+@app.route("/integrations/rescuetime/detail", methods=["POST"])
+def rescuetime_detail():
+    date = request.args.get("date")
+    if not journal._valid_date(date):
+        return jsonify(ok=False, error="Choose a valid report date"), 400
+    with _provider_sync_locks["rescuetime"]:
+        with _mobile_lock:
+            initial = integrations.load(integrations_file())
+        fetched = deepcopy(initial)
+        result = provider_sync.rescuetime_detail(fetched, date, force=request.args.get("force") == "1")
+        if not result["connected"]:
+            return jsonify(result)
+        with _mobile_lock:
+            current = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial, current, "rescuetime"):
+                return jsonify(ok=False, connected=integrations.is_connected(current, "rescuetime"),
+                               error="Connection changed during sync. Load the day again.")
+            details = integrations.get_analytics(fetched, "rescuetime")
+            if details != integrations.get_analytics(current, "rescuetime"):
+                integrations.set_analytics(current, "rescuetime", details)
+                integrations.save(integrations_file(), current)
+        return jsonify(result)
 
 
 # --------------------------------------------------------------------------- #
