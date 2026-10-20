@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block brand_mascot %}<img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}" width="56" height="56" alt="pompompurin">{% endblock %}
+{% block brand_title %}{% endblock %}
+{% block nav %}<a href="{{ url_for('journal_today') }}">New entry</a><a href="{{ url_for('journal_analytics') }}">Analytics</a><a href="{{ url_for('journal_sections') }}">Manage</a><a class="nav-search" href="{{ url_for('journal_search') }}">Search</a>{% endblock %}
+{% block content %}
+<section class="media-setup-guide">
+<h2>Discord inbox setup</h2>
+<p class="muted">Add selected DM messages to your journal using Discord’s own message action. Imported text and timestamps work offline; capturing new messages uses a small private HTTPS inbox.</p>
+<ol>
+<li>Create your own application in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Discord Developer Portal</a>. Enable User Install with the applications.commands scope.</li>
+<li>Host the included private receiver with a persistent data volume. Set your application public key, your Discord user ID, and a private receiver token.</li>
+<li>Set the application’s Interactions Endpoint to your receiver’s /interactions address, then register the “Add to Datapom” command using the included setup script.</li>
+<li>Return to <a href="{{ url_for('media_settings') }}">Photos &amp; places Settings</a>, enter the receiver details, and install the action in Discord.</li>
+</ol>
+<p><a href="{{ url_for('discord_setup_download') }}">Open the complete setup guide</a></p>
+<p class="muted">A private message link alone cannot supply its contents. This integration captures only messages you select. Photos can be imported separately.</p>
+</section>
+{% endblock %}
