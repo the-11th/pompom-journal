@@ -9,7 +9,7 @@ To run manually from a terminal:
 
 ```bash
 source .venv/bin/activate
-flask --app app run --port 5001
+flask --app datapom.web.app run --port 5001
 ```
 
 ---

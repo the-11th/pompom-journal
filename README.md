@@ -57,16 +57,23 @@ stored or applied). The reference clock is `datetime.now()`.
 
 ```
 datapom/
-├── app.py              # Flask routes (thin HTTP layer only)
-├── todo.py             # to-do domain logic (no Flask imports, unit-tested)
-├── journal.py          # journal domain logic (no Flask imports, unit-tested)
-├── integrations/       # provider clients, authentication, imports, and sync
-│   ├── store.py        # third-party credentials, tokens, and mobile devices
-│   ├── oauth.py        # shared OAuth2 helpers (Google Health, Spotify)
-│   ├── google_health.py / rescuetime.py / spotify.py   # provider clients
-│   ├── health.py / usage.py   # pushed health and Android usage data
-│   ├── music_history.py / provider_sync.py   # imports and reconciliation
-│   └── discord_journal.py / discord_receiver.py / discord_setup.py
+├── datapom/            # Python application package
+│   ├── domain/         # pure logic and local storage (no Flask imports)
+│   │   ├── todo.py
+│   │   ├── journal.py / journal_commands.py / journal_media.py
+│   │   └── places.py / map_packs.py
+│   ├── integrations/   # provider clients, authentication, imports, and sync
+│   │   ├── store.py / oauth.py
+│   │   ├── google_health.py / rescuetime.py / spotify.py
+│   │   ├── health.py / usage.py / music_history.py / provider_sync.py
+│   │   └── discord_journal.py / discord_receiver.py / discord_setup.py
+│   ├── web/            # thin Flask HTTP layer
+│   │   └── app.py / media_routes.py
+│   ├── runtime/        # desktop daemon and persistent USB server
+│   │   └── start_server.py / phone_server.py
+│   └── paths.py        # stable repository paths for data and web resources
+├── scripts/            # installation, USB sync, and maintenance helpers
+├── requirements.txt    # Python dependencies
 ├── data/               # local JSON storage (gitignored, auto-created)
 ├── templates/          # Jinja templates (base, active, journal, analytics, …)
 ├── static/             # style.css, vanilla JS, images
@@ -89,7 +96,7 @@ pip install -r requirements.txt
 ## Run
 
 ```bash
-flask --app app run --port 5001
+flask --app datapom.web.app run --port 5001
 ```
 
 Then open http://127.0.0.1:5001/ in your browser. Your data is saved to `data/`
@@ -480,9 +487,11 @@ pytest tests/test_app.py                 # Flask route tests
 pytest -k time_remaining                 # single test by name substring
 ```
 
-Tests are written first (TDD). Pure logic lives in Flask-free modules
-(`todo.py`, `journal.py`, integration clients) with an injectable clock; the HTTP
-layer in `app.py` stays thin.
+Tests are written first (TDD). Pure logic lives in `datapom/domain/` and
+`datapom/integrations/` with an injectable clock; the HTTP layer in
+`datapom/web/` stays thin. Startup modules live in `datapom/runtime/` and run
+from the repository root with `python -m datapom.runtime.start_server` (desktop)
+or `python -m datapom.runtime.phone_server` (persistent USB server).
 
 ### Building Datapom for Android
 

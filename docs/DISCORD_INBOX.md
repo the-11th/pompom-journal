@@ -35,7 +35,7 @@ persistent volume.
    - `DATAPOM_INBOX_TOKEN`: a secret generated from at least 32 random bytes,
      encoded as base64url or hexadecimal.
 
-   The container runs `python -m integrations.discord_receiver` from the repository
+   The container runs `python -m datapom.integrations.discord_receiver` from the repository
    root. The receiver listens on port 8080 by default (`PORT` can override it). HTTPS is
    supplied by your hosting provider. A single running instance owns the volume;
    do not scale this file-backed service across multiple instances.
