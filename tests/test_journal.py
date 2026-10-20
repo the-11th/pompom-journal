@@ -19,6 +19,82 @@ def test_empty_store_shape():
         "sections": [], "entries": [], "dismissed_suggestions": {}}
 
 
+@pytest.mark.parametrize("permanent", [True, False])
+def test_mobile_tag_archive_preserves_entries_and_restores(permanent):
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.upsert_entry(data, "2026-09-10", "History", "Met Alex",
+                         tags={section["id"]: ["alex"]}, now=NOW)
+    if permanent:
+        journal.add_section_tag(data, section["id"], "alex")
+    entries_before = json.dumps(data["entries"], sort_keys=True)
+
+    result = journal.mutate_mobile_tag(data, section["id"], " Alex ", "archive")
+    assert result == {"name": "alex", "section_id": section["id"],
+                      "color": "#123456", "archived": True}
+    assert section["tags"] == []
+    assert section["archived_tags"] == ["alex"]
+    assert "alex" not in journal.temporary_tags(data).get(section["id"], [])
+    assert journal.tag_section_index(data)["alex"] == section["id"]
+    journal.mutate_mobile_tag(data, section["id"], "alex", "archive")
+    assert section["archived_tags"] == ["alex"]
+    assert json.dumps(data["entries"], sort_keys=True) == entries_before
+
+    restored = journal.mutate_mobile_tag(data, section["id"], "alex")
+    assert restored["name"] == "alex"
+    assert section["tags"] == ["alex"]
+    assert section["archived_tags"] == []
+    assert json.dumps(data["entries"], sort_keys=True) == entries_before
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", None), ("name", ["alex"]), ("name", ""),
+    ("name", "bad;name"), ("name", "x" * 201),
+    ("section", None), ("section", []), ("section", "missing"),
+    ("action", None), ("action", []), ("action", "delete"),
+])
+def test_mobile_tag_mutation_validates_before_changing_store(field, value):
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.add_section_tag(data, section["id"], "alex")
+    before = json.dumps(data, sort_keys=True)
+    args = {"section": section["id"], "name": "alex", "action": "archive"}
+    args[field] = value
+    with pytest.raises(ValueError):
+        journal.mutate_mobile_tag(data, args["section"], args["name"], args["action"])
+    assert json.dumps(data, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("section_type,archived", [("numeric", False), ("tag", True)])
+def test_mobile_tag_mutation_rejects_unavailable_section(section_type, archived):
+    data = journal._empty()
+    section = journal.add_section(data, "section", section_type, "#123456")
+    section["archived"] = archived
+    before = json.dumps(data, sort_keys=True)
+    with pytest.raises(ValueError):
+        journal.mutate_mobile_tag(data, section["id"], "alex", "archive")
+    assert json.dumps(data, sort_keys=True) == before
+
+
+def test_mobile_temporary_tag_restore_reveals_history_without_promoting():
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.upsert_entry(data, "2026-09-10", "History", "",
+                         tags={section["id"]: ["alex"]}, now=NOW)
+    journal.archive_temporary_tag(data, section["id"], "alex")
+    entries = json.dumps(data["entries"], sort_keys=True)
+    result = journal.mutate_mobile_tag(data, section["id"], "alex", "restore_temporary")
+    assert result["archived"] is False
+    assert section["tags"] == []
+    assert section["archived_tags"] == []
+    assert journal.temporary_tags(data)[section["id"]] == ["alex"]
+    assert json.dumps(data["entries"], sort_keys=True) == entries
+    # This restore operation must not demote a separately promoted tag.
+    journal.add_section_tag(data, section["id"], "alex")
+    journal.mutate_mobile_tag(data, section["id"], "alex", "restore_temporary")
+    assert section["tags"] == ["alex"]
+
+
 def test_seeded_has_six_default_tag_sections():
     data = journal._seeded()
     names = [s["name"] for s in data["sections"]]
@@ -506,6 +582,40 @@ def test_entry_dates_sorted_unique():
     assert journal.entry_dates(journal._empty()) == []
 
 
+@pytest.mark.parametrize("title", ["", "   ", "2026-06-15"])
+def test_entry_dates_omit_empty_entries(title):
+    data = journal._empty()
+    data["entries"] = [{"date": "2026-06-15", "title": title,
+                        "body": " \n", "tags": {"people": []},
+                        "numbers": {}, "mood": None}]
+    assert journal.entry_dates(data) == []
+
+
+@pytest.mark.parametrize("content", [
+    {"title": "A day"}, {"body": "Something happened"},
+    {"audio_transcript": "A voice note"}, {"mood": 4},
+    {"tags": {"people": ["alex"]}}, {"numbers": {"hours": 0}},
+])
+def test_entry_dates_keep_entries_with_content(content):
+    data = journal._empty()
+    data["entries"] = [{"date": "2026-06-15", "title": "2026-06-15",
+                        "body": "", **content}]
+    assert journal.entry_dates(data) == ["2026-06-15"]
+
+
+@pytest.mark.parametrize("provider", ["sleep", "rescuetime", "music", "usage", "health"])
+def test_entry_dates_omit_imported_data_only(provider):
+    data = journal._empty()
+    section = journal.add_section(data, "auto hours", "numeric", "#123456",
+                                  managed=provider, metric="hours")
+    entry = journal.upsert_entry(data, "2026-06-15", "2026-06-15", "",
+                                 numbers={section["id"]: 7}, now=NOW)
+    entry[provider] = {"total": 420}
+    assert journal.entry_dates(data) == []
+    entry["body"] = "Wrote something"
+    assert journal.entry_dates(data) == ["2026-06-15"]
+
+
 # --------------------------------------------------------------------------- #
 # move_entry
 # --------------------------------------------------------------------------- #
@@ -884,6 +994,33 @@ def test_tag_section_index_normalizes_names():
 # --------------------------------------------------------------------------- #
 # Rich entries: @mention extraction
 # --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize('body,expected', [
+    ('__@alex__', {'people':['alex']}),
+    ('word__@alex__', {'people':['alex']}),
+    ('__@alex', {}),
+    ('@__proto__', {'people':['__proto__']}),
+    ('é@alex 文字@alex a@alex', {}),
+])
+def test_capture_underlined_mentions_preserves_literal_names_and_boundaries(body, expected):
+    assert journal.extract_mentions(body, {'alex':'people','__proto__':'people'}) == expected
+
+
+@pytest.mark.parametrize('body,expected', [
+    ('__#weight 5__', {'weight':5}),
+    ('word__#weight 5__', {'weight':5}),
+    ('__#weight 5', {}),
+    ('#__proto__ 3', {'special':3}),
+    ('é#weight 5 文字#weight 6 a#weight 3', {}),
+])
+def test_capture_underlined_numbers_preserves_literal_names_and_boundaries(body, expected):
+    assert journal.extract_numbers(body, {'weight':'weight','__proto__':'special'}) == expected
+
+
+def test_spawned_tasks_inherit_the_same_underlined_mentions():
+    tasks = journal.extract_task_lines('[] Review __@alex__ and @__proto__', {'alex':'people','__proto__':'people'}, lambda *_: None)
+    assert tasks[0]['tags'] == ['alex','__proto__']
+
 
 def test_extract_mentions_matches_word_boundary():
     index = {"maya": "S1"}

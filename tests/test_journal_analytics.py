@@ -190,6 +190,18 @@ def test_creation_hours_histogram():
     assert len(hours) == 24
 
 
+def test_creation_hours_preserves_recorded_local_hour_across_timezones():
+    entries = [
+        _entry("2026-09-01", created="2026-09-01T09:30:00+08:00"),
+        _entry("2026-09-02", created="2026-09-02T09:05:00-07:00"),
+        _entry("2026-09-10", created="2026-09-10T22:00:00Z"),
+    ]
+    hours = journal.creation_hours(entries, None, None)
+    assert hours[9] == 2
+    assert hours[22] == 1
+    assert hours[1] == 0
+
+
 def test_date_density_presence_per_day():
     entries = [_entry("2026-06-01"), _entry("2026-06-03")]
     assert journal.date_density(entries, None, None) == {"2026-06-01": 1, "2026-06-03": 1}
@@ -500,7 +512,8 @@ def test_analytics_payload_shape():
     assert set(s) == {"id", "name", "type", "color", "tags", "unit", "chart_opts"}
     assert s["name"] == "people" and s["tags"] == ["alex"]
     e = payload["entries"][0]
-    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage", "health"}
+    assert set(e) == {"date", "tags", "numbers", "body", "created", "mood", "sleep", "rescuetime", "music", "usage", "health", "document"}
+    assert e["document"] is None
     assert e["date"] == "2026-06-10"
     assert e["mood"] == 5
     assert payload["date_range"] == {"min": "2026-06-10", "max": "2026-06-10"}
@@ -521,6 +534,24 @@ def test_analytics_payload_empty_date_range():
     payload = journal.analytics_payload(journal._empty())
     assert payload["entries"] == []
     assert payload["date_range"] == {"min": None, "max": None}
+
+
+def test_shared_analytics_range_includes_nonempty_tracked_dates():
+    assert journal.analytics_date_range(
+        {"min": "2026-09-10", "max": "2026-09-10"},
+        {"min": "2026-09-05", "max": "2026-09-12"},
+        [{"date": "2026-09-01", "count": 1}, {"date": "2026-09-15", "count": 4}],
+    ) == {"min": "2026-09-01", "max": "2026-09-15"}
+
+
+def test_shared_analytics_range_ignores_empty_corrupt_and_invalid_tracking_days():
+    days = [{"date": "2026-01-01", "count": 0},
+            {"date": "2026-12-31", "count": -1},
+            {"date": "2026-02-30", "count": 2},
+            {"date": "2026-09-10", "count": True}]
+    assert journal.analytics_date_range({}, {}, days) == {"min": None, "max": None}
+    assert journal.analytics_date_range({}, {}, [{"date": "2026-09-10", "count": 1}]) == {
+        "min": "2026-09-10", "max": "2026-09-10"}
 
 
 def test_analytics_payload_omits_suggestions_and_dormant():

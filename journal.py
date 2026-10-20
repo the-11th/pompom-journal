@@ -13,11 +13,13 @@ local time, matching todo.py.
 """
 
 import json
+import hashlib
 import math
 import os
 import re
 import statistics
 import uuid
+import journal_media
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -115,9 +117,13 @@ def load(path):
             e.setdefault("sleep", None)
             e.setdefault("rescuetime", None)
             e.setdefault("music", None)
+            e.setdefault("music_history", None)
+            e.setdefault("music_live", None)
+            e.setdefault("music_legacy", None)
             e.setdefault("usage", None)
             e.setdefault("health", None)
             e.setdefault("audio_transcript", "")
+            e.setdefault("document", None)
         if not isinstance(parsed.get("dismissed_suggestions"), dict):
             parsed["dismissed_suggestions"] = {}
         return parsed
@@ -185,7 +191,7 @@ def is_registered_tag(data, section_id, tag):
 
 # Expects an already-normalized (stripped, lowercased) name.
 def _valid_name(name):
-    return bool(name) and bool(_TAG_NAME_RE.match(name))
+    return bool(name) and bool(_TAG_NAME_RE.fullmatch(name))
 
 
 # The Manage page's per-section "Configure" popup: which analytics charts (by
@@ -414,6 +420,41 @@ def archive_temporary_tag(data, section_id, tag):
     return data
 
 
+def mutate_mobile_tag(data, section_id, name, action="add"):
+    """Apply a validated registry intent without changing any entry selections.
+
+    Add restores a permanent choice; archive works for permanent and temporary
+    names. A temporary restore only removes the archive marker, leaving the
+    entry that selected the tag as its source. HTTP request receipts handle
+    replay ordering around later, explicitly different intentions.
+    """
+    if action not in ("add", "archive", "restore_temporary"):
+        raise ValueError("Choose add, archive or restore_temporary")
+    if not isinstance(name, str):
+        raise ValueError("A tag name is required")
+    tag = _normalize_name(name)
+    if not _valid_name(tag) or len(tag) > 200:
+        raise ValueError("Use a tag name of at most 200 letters, numbers, spaces, dots, dashes or underscores")
+    if not isinstance(section_id, str) or not section_id:
+        raise ValueError("Choose an active tag section")
+    section = section_by_id(data, section_id)
+    if section is None or section.get("archived") or section.get("type") != "tag":
+        raise ValueError("Choose an active tag section")
+    if action == "add":
+        add_section_tag(data, section_id, tag)
+    elif action == "archive":
+        remove_section_tag(data, section_id, tag)
+        archive_temporary_tag(data, section_id, tag)
+    else:
+        archived = section.setdefault("archived_tags", [])
+        if tag in archived:
+            archived.remove(tag)
+    result = {"name": tag, "section_id": section_id, "color": section["color"]}
+    if action != "add":
+        result["archived"] = action == "archive"
+    return result
+
+
 def archived_sections(data):
     """Sections that have been archived (soft-deleted), in stored order."""
     return [s for s in data.get("sections", []) if s.get("archived")]
@@ -489,8 +530,7 @@ def _valid_date(date_str):
     if not isinstance(date_str, str):
         return False
     try:
-        datetime.strptime(date_str, "%Y-%m-%d")
-        return True
+        return datetime.strptime(date_str, "%Y-%m-%d").date().isoformat() == date_str
     except ValueError:
         return False
 
@@ -525,7 +565,7 @@ def suggest_entry_title(body, limit=60):
     """Return a short deterministic title suggestion for journal prose.
 
     This is deliberately conservative and local: use the first meaningful
-    sentence/line, remove TodoPup's inline control syntax and rich-text markers,
+    sentence/line, remove Datapom's inline control syntax and rich-text markers,
     then truncate at a word boundary.  The helper only proposes text; callers
     must never replace a non-empty user title with it.
     """
@@ -539,9 +579,8 @@ def suggest_entry_title(body, limit=60):
                    "", first, flags=re.IGNORECASE)
     first = re.sub(r"\[task:[0-9a-f]+\]\s*", "", first, flags=re.IGNORECASE)
     first = re.sub(r"(?:\*\*|__|~~|\*)", "", first)
-    first = re.sub(r"@([A-Za-z0-9_.-]+)", lambda m: m.group(1).replace("_", " "), first)
-    first = re.sub(r"#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)",
-                   lambda m: f"{m.group(1).replace('_', ' ')} {m.group(2)}", first)
+    first = _MENTION_RE.sub(lambda m: m.group(1).replace("_", " "), first)
+    first = _NUMERIC_RE.sub(lambda m: f"{m.group(1).replace('_', ' ')} {m.group(2)}", first)
     first = re.sub(r"\s+", " ", first).strip(" \t.,:;!?-–—")
     if not first:
         return ""
@@ -561,7 +600,7 @@ def entries_sorted(data):
 # --------------------------------------------------------------------------- #
 
 def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None,
-                 now=None, audio_transcript=None):
+                 now=None, audio_transcript=None, document=None):
     """Create or update the entry for `date` (the unique key).
 
     `tags` is {section_id: [tag names]} and `numbers` is {section_id: value};
@@ -577,6 +616,9 @@ def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None,
     title = (title or "").strip()
     if not title:
         raise ValueError("Entry title must not be empty")
+    if document is not None:
+        document = journal_media.validate_document(document)
+        body = journal_media.document_body(document)
     body = body or ""
     now = now or datetime.now()
 
@@ -615,11 +657,15 @@ def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None,
 
     existing = get_entry_by_date(data, date)
     if existing is not None:
+        if document is None and existing.get("document") is not None:
+            document = journal_media.replace_document_body(existing["document"], body)
         existing["title"] = title
         existing["body"] = body
         existing["tags"] = clean_tags
         existing["numbers"] = clean_numbers
         existing["mood"] = clean_mood
+        if document is not None:
+            existing["document"] = document
         if audio_transcript is not None:
             existing["audio_transcript"] = str(audio_transcript)
         existing["updated"] = now.isoformat()
@@ -636,6 +682,10 @@ def upsert_entry(data, date, title, body, tags=None, numbers=None, mood=None,
         "numbers": clean_numbers,
         "mood": clean_mood,
         "audio_transcript": str(audio_transcript or ""),
+        "document": document,
+        "music_history": None,
+        "music_live": None,
+        "music_legacy": None,
     }
     data.setdefault("entries", []).append(entry)
     return entry
@@ -649,24 +699,62 @@ class EntryConflictError(ValueError):
         self.current = current
 
 
+def edit_revision(data, entry):
+    """Opaque revision of user-editable content, independent of provider refreshes.
+
+    Missing dates and provider-only placeholders share an empty revision.
+    Archived user fields remain part of the revision so historical edits cannot
+    be overwritten by a stale form. This projection is never persisted.
+    """
+    entry = entry or {}
+    managed = {s['id'] for s in data.get('sections', []) if s.get('managed')}
+    content = {key: entry.get(key) or '' for key in ('title', 'body', 'audio_transcript')}
+    if content['title'] == entry.get('date'):
+        content['title'] = ''
+    content['mood'] = entry.get('mood')
+    content['document'] = entry.get('document') or None
+    for key in ('tags', 'numbers'):
+        content[key] = {sid: value for sid, value in (entry.get(key) or {}).items()
+                        if sid not in managed}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=False).encode()).hexdigest()
+
+
+def entry_view(data, entry):
+    """A response copy with its edit revision; keep the stored object untouched."""
+    if entry is None:
+        return None
+    visible = {key: value for key, value in entry.items() if key not in {"music_history", "music_live", "music_legacy"}}
+    return {**visible, 'edit_revision': edit_revision(data, entry)}
+
+
+def _check_entry_base(data, existing, base_updated, base_edit_revision=None):
+    if base_edit_revision is not None:
+        if not isinstance(base_edit_revision, str) or not re.fullmatch(r'[0-9a-f]{64}', base_edit_revision):
+            raise ValueError('Invalid entry edit revision')
+        if base_edit_revision != edit_revision(data, existing):
+            raise EntryConflictError(existing)
+    elif (existing is not None and base_updated != existing.get('updated')) or (existing is None and base_updated is not None):
+        raise EntryConflictError(existing)
+
+
 def upsert_mobile_entry(data, date, title, body, tags=None, numbers=None,
                         mood=None, audio_transcript=None, base_updated=None,
-                        now=None):
+                        now=None, document=None, base_edit_revision=None):
     """Validate and apply a versioned mobile entry edit.
 
     Explicit tag/number maps are the starting point. Inline ``@mention`` tags
     are added, while inline ``#numeric`` values fill only missing explicit
-    numbers, matching the browser save semantics. ``base_updated`` must equal
-    the current timestamp for an existing entry; ``None`` means the phone
-    expects to create a new date.
+    numbers, matching the browser save semantics. A supplied editable revision
+    must match current user content. Legacy requests use the overall timestamp.
     """
     existing = get_entry_by_date(data, date)
-    if existing is not None:
-        if base_updated != existing.get("updated"):
-            raise EntryConflictError(existing)
-    elif base_updated is not None:
-        raise EntryConflictError(None)
+    _check_entry_base(data, existing, base_updated, base_edit_revision)
 
+    if document is not None:
+        document = journal_media.validate_document(document)
+        body = journal_media.document_body(document)
+    title = (title or "").strip() or suggest_entry_title(body) or date
     merged_tags = dict(tags or {})
     mentions = extract_mentions(body or "", tag_section_index(data))
     merged_tags = merge_entry_tags(merged_tags, mentions)
@@ -676,7 +764,77 @@ def upsert_mobile_entry(data, date, title, body, tags=None, numbers=None,
         merged_numbers.setdefault(section_id, value)
     return upsert_entry(
         data, date, title, body, tags=merged_tags, numbers=merged_numbers,
-        mood=mood, now=now, audio_transcript=audio_transcript)
+        mood=mood, now=now, audio_transcript=audio_transcript, document=document)
+
+
+def reconcile_photo_groups(data, media_data):
+    """Create matching journal sections for groups explicitly shared in Settings."""
+    existing = {s['name'].lower(): s for s in active_sections(data)}
+    for group in media_data.get('groups', {}).values():
+        if group.get('archived') or not group.get('share_entry'):
+            continue
+        name = _normalize_name(group['name'])
+        if name in existing:
+            if existing[name]['type'] != 'tag':
+                raise ValueError('This name already belongs to a numeric section')
+            continue
+        if not _valid_name(name):
+            raise ValueError('Shared entry groups use letters, numbers, spaces, dots, underscores, or dashes')
+        existing[name] = add_section(data, name, 'tag', group.get('color') or '#e0a955')
+    return data
+
+
+def autosave_entry(data, date, payload, media_data, now=None):
+    """Save a changed draft without committing unfinished inline task commands."""
+    import copy
+    existing = get_entry_by_date(data, date)
+    _check_entry_base(data, existing, payload.get('base_updated'), payload.get('base_edit_revision'))
+    document = payload.get("document")
+    body = payload.get("body")
+    title = payload.get("title")
+    body = journal_media._text("" if body is None else body)
+    title = journal_media._text("" if title is None else title)
+    for key in ("tags", "numbers"):
+        if payload.get(key) is not None and not isinstance(payload[key], dict):
+            raise ValueError("Invalid " + key)
+    if document is not None:
+        document = journal_media.validate_document(document)
+        body = journal_media.document_body(document)
+        for block in document:
+            if block["type"] == "photo" and block["asset_id"] not in media_data["assets"]:
+                raise ValueError("A photo is still being transferred")
+            if block.get("edited_asset_id") and block["edited_asset_id"] not in media_data["assets"]:
+                raise ValueError("An edited photo is still being transferred")
+            if block["type"] == "message" and block["message_id"] not in media_data["messages"]:
+                raise ValueError("A message is still being imported")
+    transcript = journal_media._text(payload.get("audio_transcript") or "")
+    if existing is None and not (body.strip() or title.strip() or transcript.strip()
+                                or payload.get("mood") or payload.get("tags")
+                                or payload.get("numbers") or any(b["type"] != "text" for b in (document or []))):
+        if not _valid_date(date):
+            raise ValueError("Invalid date")
+        return None
+    manual_tags = payload.get("tags") or {}
+    shared = journal_media.shared_tags(document or [], media_data, active_sections(data))
+    manual_numbers = dict(payload.get("numbers") or {})
+    if existing:
+        for section in data.get("sections", []):
+            if section.get("archived") or section.get("managed"):
+                sid = section["id"]
+                if sid in existing.get("tags", {}):
+                    manual_tags = {**manual_tags, sid: existing["tags"][sid]}
+                if sid in existing.get("numbers", {}):
+                    manual_numbers[sid] = existing["numbers"][sid]
+    before = copy.deepcopy(existing)
+    entry = upsert_mobile_entry(data, date, payload.get("title"), body,
+                                tags=merge_entry_tags(manual_tags, shared),
+                                numbers=manual_numbers, mood=payload.get("mood"),
+                                audio_transcript=payload.get("audio_transcript"),
+                                base_updated=payload.get("base_updated"), document=document, now=now,
+                                base_edit_revision=payload.get("base_edit_revision"))
+    if before and all(before.get(k) == entry.get(k) for k in entry if k != "updated"):
+        entry["updated"] = before["updated"]
+    return entry
 
 
 def delete_entry(data, entry_id):
@@ -756,7 +914,10 @@ def set_entry_music(data, date, value, now=None):
     entry = get_entry_by_date(data, date)
     if entry is None:
         entry = upsert_entry(data, date, date, "", now=now)
-    entry["music"] = value
+    if entry.get("music_history") and (value or {}).get("source") != "history_import":
+        entry["music_live"] = value
+    else:
+        entry["music"] = value
     entry["updated"] = now.isoformat()
     return entry
 
@@ -852,7 +1013,7 @@ def ensure_sleep_sections(data, metrics):
     """Get-or-create the managed numeric section for each metric key.
 
     Returns {metric: section_id}. Reuses an existing section whose `metric`
-    matches AND whose `managed` is truthy (searching ALL sections, archived
+    matches AND whose `managed` identifies Google sleep (searching ALL sections, archived
     included, so an archived managed section is reused rather than duplicated).
     Otherwise creates one via `_create_managed_sleep_section`. Idempotent;
     unknown metric keys are skipped. Pure."""
@@ -860,7 +1021,7 @@ def ensure_sleep_sections(data, metrics):
     out = {}
     for metric in metrics:
         found = next((s for s in data.get("sections", [])
-                      if s.get("metric") == metric and s.get("managed")), None)
+                      if s.get("metric") == metric and s.get("managed") == _GOOGLE_SLEEP_PROVIDER), None)
         if found is not None:
             out[metric] = found["id"]
             continue
@@ -874,11 +1035,21 @@ def ensure_sleep_sections(data, metrics):
 def apply_sleep_metrics(data, date, sleep, now=None):
     """Mirror a parsed sleep dict's numeric parts onto `date` as managed numeric
     sections. Creates sections lazily (only for available metrics), writes each
-    value via `set_entry_number`, and returns the {metric: value} it wrote (an
+    value via `set_entry_number`, removes previously imported metrics that are
+    unavailable in the refreshed result, and returns the {metric: value} it wrote (an
     empty dict when the sleep dict has no usable numbers). Idempotent. Pure."""
     values = sleep_metric_values(sleep)
     if not values:
         return {}
+    entry = get_entry_by_date(data, date)
+    if entry is not None:
+        available_metrics = {spec['metric'] for spec in _SLEEP_METRIC_SECTIONS}
+        for section in data.get('sections', []):
+            if (section.get('managed') == _GOOGLE_SLEEP_PROVIDER
+                    and section.get('metric') in available_metrics - values.keys()
+                    and section['id'] in entry.get('numbers', {})):
+                entry['numbers'].pop(section['id'])
+                entry['updated'] = (now or datetime.now()).isoformat()
     ids = ensure_sleep_sections(data, values.keys())
     for metric, value in values.items():
         sid = ids.get(metric)
@@ -896,8 +1067,32 @@ def apply_sleep_metrics(data, date, sleep, now=None):
 # between segments, so sentence punctuation is not swallowed. The leading
 # boundary makes `a@b.com` not match (the char before '@' is a word char).
 _MENTION_RE = re.compile(
-    r"(?:^|(?<=\W))@([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)"
+    r"(?:^|(?<=\W))@([\w-]+(?:\.[\w-]+)*)"
 )
+_CAPTURE_TOKEN_RE = re.compile(
+    r"(^|\W)(@[\w-]+(?:\.[\w-]+)*|#[\w-]+\s+-?\d+(?:\.\d+)?)"
+)
+
+
+def _capture_source(body):
+    """Expose paired underline boundaries without changing literal token names.
+
+    Mirrors journal-richtext.js: protect existing @/# tokens first, then
+    treat underline delimiters as boundaries for extraction, never as data.
+    """
+    body = body or ""
+    prefix = "\x00journal-token:"
+    while prefix in body:
+        prefix += ":"
+    tokens = []
+
+    def protect(match):
+        tokens.append(match.group(2))
+        return match.group(1) + prefix + str(len(tokens) - 1) + ";"
+
+    source = _CAPTURE_TOKEN_RE.sub(protect, body)
+    source = re.sub(r"__([^\n]+?)__", r" \1 ", source)
+    return re.sub(re.escape(prefix) + r"(\d+);", lambda match: tokens[int(match.group(1))], source)
 
 
 def tag_section_index(data):
@@ -954,14 +1149,14 @@ def extract_mentions(body, index):
     """Find @mentions in `body` that match a known tag.
 
     Returns {section_id: [names]}. A mention is an '@' at a word boundary
-    followed by period-separated [A-Za-z0-9_-]+ segments (so `a@b.com` does
+    followed by period-separated Unicode word/hyphen segments (so `a@b.com` does
     not match and trailing punctuation is excluded). Each token is
     resolved to a known tag name (underscores match spaces, so `@alex_dad`
     matches `alex dad`); unknown tokens are dropped. Resolved names are grouped
     by section id and deduped within a section, preserving first-seen order.
     """
     out = {}
-    for raw in _MENTION_RE.findall(body or ""):
+    for raw in _MENTION_RE.findall(_capture_source(body)):
         n = _resolve_mention(raw, index)
         if n is None:
             continue
@@ -973,9 +1168,9 @@ def extract_mentions(body, index):
 
 
 # A numeric token: '#' at a word boundary (like _MENTION_RE) followed by a
-# section-name (`[A-Za-z0-9_-]+`), whitespace, then a number. `a#b 1` does NOT
+# section-name (Unicode word characters/hyphens), whitespace, then a number. `a#b 1` does NOT
 # match (the char before '#' is a word char). Mirrors @-mention grammar.
-_NUMERIC_RE = re.compile(r"(?:^|(?<=\W))#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)")
+_NUMERIC_RE = re.compile(r"(?:^|(?<=\W))#([\w-]+)\s+(-?\d+(?:\.\d+)?)")
 
 
 def numeric_section_index(data):
@@ -1001,7 +1196,7 @@ def extract_numbers(body, index):
     """Find #name value tokens in `body` that match a known numeric section.
 
     Returns {section_id: float}. A token is a '#' at a word boundary followed
-    by [A-Za-z0-9_-]+, whitespace, and a number (so `a#b 1` does not match).
+    by Unicode word characters/hyphens, whitespace, and a number (so `a#b 1` does not match).
     Each name is resolved like a mention (as-is, then underscores -> spaces, so
     `#hours_slept` matches `hours slept`; a literal-underscore section wins when
     both exist); unknown names are dropped. The LAST occurrence per section wins
@@ -1009,7 +1204,7 @@ def extract_numbers(body, index):
     skipped.
     """
     out = {}
-    for raw, value in _NUMERIC_RE.findall(body or ""):
+    for raw, value in _NUMERIC_RE.findall(_capture_source(body)):
         n = _resolve_mention(raw, index)
         if n is None:
             continue
@@ -1097,7 +1292,7 @@ def extract_task_lines(body, mention_index, due_parser, now=None):
 
         # Resolve @mention tags on the line (mirror extract_mentions).
         tags = []
-        for raw in _MENTION_RE.findall(rest):
+        for raw in _MENTION_RE.findall(_capture_source(rest)):
             n = _resolve_mention(raw, mention_index)
             if n is not None and n not in tags:
                 tags.append(n)
@@ -1160,9 +1355,48 @@ def rewrite_task_lines(body, task_ids):
 # Calendar helpers
 # --------------------------------------------------------------------------- #
 
+def has_calendar_content(entry):
+    """A calendar dot means text, tags, or an attached photo/message."""
+    if not entry:
+        return False
+    title = (entry.get("title") or "").strip()
+    return (
+        bool(title and title != entry.get("date"))
+        or any((entry.get(field) or "").strip() for field in ("body", "audio_transcript"))
+        or any(name.strip() for names in (entry.get("tags") or {}).values() for name in names)
+        or any(block.get("type") in ("photo", "message") for block in entry.get("document") or [])
+    )
+
+
+def calendar_dates(data):
+    return sorted({entry["date"] for entry in data.get("entries", [])
+                   if entry.get("date") and has_calendar_content(entry)})
+
+
+def stored_entry_dates(data):
+    """Every occupied date, including records without a calendar dot."""
+    return sorted({entry["date"] for entry in data.get("entries", []) if entry.get("date")})
+
+
 def entry_dates(data):
-    """Sorted list of YYYY-MM-DD strings that have an entry (for calendar dots)."""
-    return sorted(e["date"] for e in data.get("entries", []) if e.get("date"))
+    """Sorted dates with user-recorded content, excluding imported placeholders."""
+    managed_ids = {s["id"] for s in data.get("sections", []) if s.get("managed")}
+    def has_content(entry):
+        # Integration syncs and blank saves can create date-titled placeholders.
+        title = (entry.get("title") or "").strip()
+        return (
+            bool(title and title != entry.get("date"))
+            or any((entry.get(field) or "").strip()
+                   for field in ("body", "audio_transcript"))
+            or entry.get("mood") is not None
+            or any(b.get("type") in ("photo", "message") for b in entry.get("document") or [])
+            or any(entry.get("tags", {}).values())
+            or any(value is not None and sid not in managed_ids
+                   for sid, value in entry.get("numbers", {}).items())
+        )
+
+    return sorted(e["date"] for e in data.get("entries", [])
+                  if e.get("date") and has_content(e))
 
 
 # --------------------------------------------------------------------------- #
@@ -1746,7 +1980,8 @@ def rescuetime_time_series(entries, start=None, end=None):
             out.append({"date": e["date"],
                         "productive_min": r.get("productive_min", 0),
                         "distracting_min": r.get("distracting_min", 0),
-                        "neutral_min": r.get("neutral_min", 0)})
+                        "neutral_min": r.get("neutral_min", 0),
+                        "unrated_min": r.get("unrated_min", 0)})
     out.sort(key=lambda d: d["date"])
     return out
 
@@ -1791,7 +2026,22 @@ def rescuetime_top_activities(entries, start=None, end=None, cap=8):
              "productivity": meta[k]["productivity"]}
             for k, v in totals.items()]
     rows.sort(key=lambda a: a["min"], reverse=True)
-    return rows[:cap]
+    return rows if cap is None else rows[:max(0, cap)]
+
+
+def rescuetime_hourly_totals(rows):
+    """Reported hourly time, not inferred exact sessions. Mirror rtHourlyTotals in JS."""
+    hours = [{"hour": hour, "productive_min": 0, "neutral_min": 0,
+              "distracting_min": 0, "unrated_min": 0, "total_min": 0} for hour in range(24)]
+    for row in rows:
+        hour, minutes = row.get("hour"), row.get("min")
+        if type(hour) is not int or not 0 <= hour < 24 or type(minutes) not in (int, float) or not math.isfinite(minutes) or minutes <= 0:
+            continue
+        score = row.get("productivity")
+        field = "unrated_min" if type(score) not in (int, float) or score not in (-2, -1, 0, 1, 2) else "productive_min" if score > 0 else "distracting_min" if score < 0 else "neutral_min"
+        hours[hour][field] += minutes
+        hours[hour]["total_min"] += minutes
+    return hours
 
 
 def rescuetime_activity_minutes_series(entries, start=None, end=None, top_n=6):
@@ -2475,7 +2725,9 @@ _SNIPPET_DEFAULT_RADIUS = 40
 
 def _word_match_re(word):
     """A compiled whole-word, case-insensitive regex for `word` (escaped)."""
-    return re.compile(r"(?<![a-z0-9])" + re.escape(word.lower()) + r"(?![a-z0-9])",
+    # Unicode alphanumeric boundaries; underscores remain delimiters, matching
+    # the existing word-suggestion tokenizer's ASCII behavior.
+    return re.compile(r"(?<![^\W_])" + re.escape(word.lower()) + r"(?![^\W_])",
                       re.IGNORECASE)
 
 
@@ -2951,6 +3203,21 @@ def lag_profile(entries, predictor, target="mood", lags=(0, 1, 2, 3),
     return out
 
 
+def analytics_date_range(journal_range, task_range, tracking_days=()):
+    """Default dashboard bounds include every usable domain, including tracking.
+
+    Empty receipts also represent unreadable days, so they cannot establish a
+    recorded date. The client applies any explicit date selection separately.
+    """
+    dates = [value for bounds in (journal_range, task_range)
+             for value in (bounds.get("min"), bounds.get("max"))
+             if _valid_date(value)]
+    dates.extend(day["date"] for day in tracking_days
+                 if type(day.get("count")) is int and day["count"] > 0
+                 and _valid_date(day.get("date")))
+    return {"min": min(dates) if dates else None, "max": max(dates) if dates else None}
+
+
 def analytics_payload(data):
     """The full JSON payload for the analytics page.
 
@@ -2977,6 +3244,7 @@ def analytics_payload(data):
             "numbers": dict(e.get("numbers") or {}),
             "body": e.get("body", ""),
             "created": e.get("created"),
+            "document": e.get("document"),
             "mood": _entry_mood(e),
             "sleep": _entry_sleep(e),
             "rescuetime": _entry_rescuetime(e),
