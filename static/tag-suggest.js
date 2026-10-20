@@ -78,7 +78,7 @@
     if (SUGGESTIONS.length) {
       var lbl = document.createElement("div");
       lbl.className = "suggest-label";
-      lbl.textContent = "Frequent words you don't tag yet — click to tag them:";
+      lbl.textContent = "Frequent words to tag";
       root.appendChild(lbl);
       var chips = document.createElement("div");
       chips.className = "suggest-chips";
@@ -129,7 +129,15 @@
       del.disabled = true;
       apiPost("/journal/suggestions/" + encodeURIComponent(s.word) + "/dismiss")
         .then(function () { location.reload(); })
-        .catch(function () { del.disabled = false; });
+        .catch(function () {
+          del.disabled = false;
+          var status = root.querySelector('[role="status"]');
+          if (!status) {
+            status = document.createElement("p"); status.className = "muted-note";
+            status.setAttribute("role", "status"); root.appendChild(status);
+          }
+          status.textContent = "Could not dismiss · try again";
+        });
     });
 
     chip.appendChild(body);
@@ -139,28 +147,55 @@
 
   // ----- apply popup -----
   var _applyPopup = null;
+  var _applying = false;
+  var _applyOpener = null;
+  var _applyOverflow = "";
   function closeApplyPopup() {
-    if (_applyPopup) { _applyPopup.remove(); _applyPopup = null; }
+    if (_applying) return;
+    if (_applyPopup) {
+      _applyPopup.remove(); _applyPopup = null;
+      document.body.style.overflow = _applyOverflow;
+      if (_applyOpener && _applyOpener.isConnected) _applyOpener.focus();
+    }
     document.removeEventListener("keydown", _applyEscHandler);
     document.removeEventListener("mousedown", _applyOutsideHandler, true);
   }
-  function _applyEscHandler(e) { if (e.key === "Escape") closeApplyPopup(); }
+  function _applyEscHandler(e) {
+    if (e.key === "Escape") {
+      e.preventDefault(); e.stopImmediatePropagation(); closeApplyPopup();
+    } else if (e.key === "Tab" && _applyPopup) {
+      if (_applying) { e.preventDefault(); return; }
+      var choices = Array.from(_applyPopup.querySelectorAll('button:not(:disabled), input:not(:disabled)')).filter(function (el) { return el.tabIndex >= 0 && el.getClientRects().length; });
+      var first = choices[0], last = choices[choices.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
   function _applyOutsideHandler(e) {
-    if (_applyPopup && !_applyPopup.contains(e.target)) closeApplyPopup();
+    if (_applyPopup && (e.target === _applyPopup || !_applyPopup.contains(e.target))) {
+      e.preventDefault(); closeApplyPopup();
+    }
   }
 
   function openApplyPopup(word, chip) {
+    if (_applying) return;
     closeApplyPopup();
+    _applyOpener = document.activeElement;
     var overlay = document.createElement("div");
     overlay.className = "suggest-popup-overlay";
     var pop = document.createElement("div");
     pop.className = "suggest-popup";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-modal", "true");
+    pop.setAttribute("aria-label", "Tag " + word);
+    pop.tabIndex = -1;
     overlay.appendChild(pop);
 
     var close = document.createElement("button");
     close.type = "button";
     close.className = "suggest-popup-close";
     close.textContent = "×";
+    close.setAttribute("aria-label", "Close tag suggestion");
     close.addEventListener("click", closeApplyPopup);
     pop.appendChild(close);
 
@@ -171,19 +206,49 @@
 
     var loading = document.createElement("p");
     loading.className = "analytics-empty";
+    loading.setAttribute("role", "status");
     loading.textContent = "Loading…";
     pop.appendChild(loading);
+    var retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "modal-cancel";
+    retry.textContent = "Retry suggestion";
+    retry.hidden = true;
+    pop.appendChild(retry);
 
     document.body.appendChild(overlay);
     _applyPopup = overlay;
+    _applyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     document.addEventListener("keydown", _applyEscHandler);
     document.addEventListener("mousedown", _applyOutsideHandler, true);
+    close.focus();
 
-    fetch("/journal/suggestions/" + encodeURIComponent(word),
-          { headers: { "Accept": "application/json" } })
-      .then(function (r) { return r.json(); })
-      .then(function (d) { fillApplyPopup(pop, loading, word, chip, d); })
-      .catch(function () { loading.textContent = "Could not load suggestion."; });
+    function loadSuggestion() {
+      var restore = document.activeElement === retry;
+      retry.disabled = true;
+      loading.textContent = "Loading…";
+      fetch("/journal/suggestions/" + encodeURIComponent(word),
+            { headers: { "Accept": "application/json" } })
+        .then(function (r) {
+          if (!r.ok) throw new Error("Suggestion unavailable");
+          return r.json();
+        })
+        .then(function (d) {
+          if (_applyPopup !== overlay) return;
+          retry.remove();
+          fillApplyPopup(pop, loading, word, chip, d);
+          if (restore) pop.querySelector('.kind-opt').focus();
+        })
+        .catch(function () {
+          if (_applyPopup !== overlay) return;
+          loading.textContent = "Could not load suggestion.";
+          retry.hidden = false; retry.disabled = false;
+          if (restore) retry.focus();
+        });
+    }
+    retry.addEventListener('click', loadSuggestion);
+    loadSuggestion();
   }
 
   function fillApplyPopup(pop, loading, word, chip, d) {
@@ -199,13 +264,16 @@
       var b = document.createElement("button");
       b.type = "button";
       b.className = "kind-opt" + (k[0] === kindVal ? " active" : "");
+      b.setAttribute("aria-pressed", String(k[0] === kindVal));
       b.textContent = k[1];
       b.addEventListener("click", function () {
         kindVal = k[0];
         kindWrap.querySelectorAll(".kind-opt").forEach(function (o) {
           o.classList.remove("active");
+          o.setAttribute("aria-pressed", "false");
         });
         b.classList.add("active");
+        b.setAttribute("aria-pressed", "true");
       });
       kindWrap.appendChild(b);
     });
@@ -214,6 +282,7 @@
     // Section select (active tag sections).
     var sel = document.createElement("select");
     sel.className = "suggest-section-select";
+    sel.setAttribute("aria-label", "Section");
     sections.forEach(function (s) {
       var o = document.createElement("option");
       o.value = s.id; o.textContent = s.name;
@@ -269,20 +338,34 @@
     actions.appendChild(cancel);
     actions.appendChild(confirm);
     pop.appendChild(actions);
+    var status = document.createElement("p");
+    status.className = "muted-note";
+    status.setAttribute("role", "status");
+    status.hidden = true;
+    pop.appendChild(status);
+    var applying = false;
 
     function checkedDates() {
       return boxes.filter(function (b) { return b.checked; })
                   .map(function (b) { return b.value; });
     }
     function refreshConfirm() {
-      confirm.disabled = !sections.length || checkedDates().length === 0;
+      confirm.disabled = applying || !sections.length || checkedDates().length === 0;
     }
     refreshConfirm();
 
     confirm.addEventListener("click", function () {
       var dates = checkedDates();
-      if (!dates.length || !sections.length) return;
-      confirm.disabled = true;
+      if (applying || !dates.length || !sections.length) return;
+      applying = _applying = true;
+      var controls = Array.from(pop.querySelectorAll('button, input, select')).map(function (control) {
+        var state = { control: control, disabled: control.disabled };
+        control.disabled = true;
+        return state;
+      });
+      pop.setAttribute("aria-busy", "true");
+      pop.focus();
+      status.hidden = true;
       var fd = new FormData();
       fd.append("section_id", sel.value);
       fd.append("kind", kindVal);
@@ -291,11 +374,17 @@
         .then(function (res) {
           if (res && res.ok) {
             location.reload();
-          } else {
-            confirm.disabled = false;
-          }
+          } else throw new Error("Apply failed");
         })
-        .catch(function () { confirm.disabled = false; });
+        .catch(function () {
+          applying = _applying = false;
+          controls.forEach(function (state) { state.control.disabled = state.disabled; });
+          pop.removeAttribute("aria-busy");
+          refreshConfirm();
+          confirm.focus();
+          status.textContent = "Could not apply · try again";
+          status.hidden = false;
+        });
     });
   }
 

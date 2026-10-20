@@ -1,12 +1,17 @@
 """Tests for the journal HTTP layer. Uses test_client() and a temp
 JOURNAL_FILE so the real data/journal.json is never touched."""
 
+import io
+import json
+from datetime import datetime
+from pathlib import Path
+
 import pytest
 
 import app as app_module
 import journal
 import todo
-import integrations as I
+from integrations import store as I
 
 
 @pytest.fixture
@@ -32,6 +37,23 @@ def client(app):
 
 def _journal_path():
     return app_module.app.config["JOURNAL_FILE"]
+
+
+@pytest.mark.parametrize("source, expected", [("history_import", True), ("spotify", False)])
+def test_entry_music_labels_imported_history_source(client, app, source, expected):
+    data = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_music(data, "2026-09-10", {
+        "minutes": 42, "tracks": 7, "top_artists": [{"name": "Review artist"}],
+        "source": source, "source_label": "Imported history" if expected else None,
+    })
+    journal.save(app.config["JOURNAL_FILE"], data)
+    html = client.get("/journal/2026-09-10").get_data(as_text=True)
+    assert ('<span class="muted">Imported history</span>' in html) is expected
+
+
+def test_spotify_import_form_explains_displayed_history_totals(client):
+    html = client.get("/journal/sections").get_data(as_text=True)
+    assert "Imported days use history totals. Live sync stays saved separately." in html
 
 
 def test_todo_index_has_brand_toggle_link_to_journal(client):
@@ -89,6 +111,21 @@ def test_save_permanent_new_tag_joins_registry(client):
     assert "cousin lee" in journal.get_entry_by_date(data, "2026-06-15")["tags"][sid]
 
 
+def test_save_permanent_tag_with_period(client):
+    sid = _first_tag_section_id()
+    response = client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "Office day", "body": "",
+        f"newtag-name:{sid}": "ID.me Office",
+        f"newtag-kind:{sid}": "permanent",
+    })
+
+    assert response.status_code == 302
+    data = journal.load(_journal_path())
+    assert "id.me office" in journal.section_by_id(data, sid)["tags"]
+    entry = journal.get_entry_by_date(data, "2026-06-15")
+    assert entry["tags"][sid] == ["id.me office"]
+
+
 def test_save_temporary_new_tag_stays_off_registry(client):
     sid = _first_tag_section_id()
     client.post("/journal/save", data={
@@ -107,12 +144,35 @@ def test_save_invalid_title_flashes_and_saves_nothing(client):
     assert journal.get_entry_by_date(data, "2026-06-15") is None
 
 
+def test_save_tag_before_title_creates_dated_entry(client):
+    sid = _first_tag_section_id()
+    resp = client.post("/journal/save", data={
+        "date": "2026-06-15", "title": "  ", "body": "",
+        f"newtag-name:{sid}": "maya", f"newtag-kind:{sid}": "temporary",
+    })
+    assert resp.status_code == 302
+    data = journal.load(_journal_path())
+    e = journal.get_entry_by_date(data, "2026-06-15")
+    assert e["title"] == "2026-06-15"
+    assert e["tags"][sid] == ["maya"]
+
+
 def test_edit_existing_date_prefills(client):
     client.post("/journal/save", data={"date": "2026-06-10", "title": "Past", "body": "hi"})
     resp = client.get("/journal/2026-06-10")
     assert resp.status_code == 200
     assert b"Past" in resp.data
-    assert b"Update entry" in resp.data
+    assert b"Save entry" in resp.data
+
+
+def test_saved_status_is_transient_overlay():
+    root = Path(__file__).parents[1]
+    css = (root / "static" / "style.css").read_text()
+    script = (root / "static" / "journal-entry-convenience.js").read_text()
+
+    overlay = css[css.index(".entry-actions .draft-status"):]
+    assert "position: absolute" in overlay.split("}", 1)[0]
+    assert 'setStatus("Entry saved", 1800)' in script
 
 
 def test_save_preserves_archived_section_data(client):
@@ -457,6 +517,16 @@ def test_add_permanent_tag_to_section(client):
     assert "maya" in journal.section_by_id(journal.load(_journal_path()), sid)["tags"]
 
 
+def test_add_multiword_permanent_tag_to_section(client):
+    sid = journal.active_sections(journal.load(_journal_path()))[0]["id"]
+    resp = client.post(
+        f"/journal/sections/{sid}/tags", data={"tag": "Alex Dad"}
+    )
+    assert resp.status_code == 302
+    section = journal.section_by_id(journal.load(_journal_path()), sid)
+    assert "alex dad" in section["tags"]
+
+
 def test_remove_permanent_tag_does_not_affect_entries(client):
     """Removing a tag from the master list must NOT remove it from existing entries."""
     sid = _first_tag_section_id()
@@ -797,6 +867,20 @@ def test_entry_page_embeds_mention_index(client):
     assert b"maya" in resp.data
 
 
+def test_entry_page_embeds_voice_tag_catalog_and_convenience_script(client):
+    data = journal.load(_journal_path())
+    sid = data["sections"][0]["id"]
+    journal.add_section_tag(data, sid, "alex dad")
+    journal.save(_journal_path(), data)
+
+    resp = client.get("/journal")
+
+    assert b'id="tag-voice-catalog"' in resp.data
+    assert b'"alex dad"' in resp.data
+    assert b"journal-entry-convenience.js" in resp.data
+    assert resp.data.index(b'class="body-field"') < resp.data.index(b"Tag the day")
+
+
 # --------------------------------------------------------------------------- #
 # Suggestions v2: detail / apply / dismiss routes
 # --------------------------------------------------------------------------- #
@@ -805,7 +889,13 @@ def _people_sid():
     return journal.load(_journal_path())["sections"][0]["id"]
 
 
-def test_suggestion_detail_shape(client):
+def test_suggestion_detail_shape(client, monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 6, 20, tzinfo=tz)
+
+    monkeypatch.setattr(journal, "datetime", FixedDateTime)
     sid = _people_sid()
     client.post("/journal/save", data={
         "date": "2026-06-20", "title": "t", "body": "went running today"})
@@ -907,7 +997,7 @@ def test_google_callback_exchanges_code(client, app, monkeypatch):
     client.get("/integrations/google/connect")
     d = I.load(app.config["INTEGRATIONS_FILE"])
     state = d["google"]["oauth_state"]
-    monkeypatch.setattr("google_health.exchange_code",
+    monkeypatch.setattr("integrations.google_health.exchange_code",
         lambda *a, **k: {"access_token": "A", "refresh_token": "R",
                          "scope": "sleep", "expires_at": 9e9})
     # avoid network on the post-connect backfill
@@ -953,7 +1043,7 @@ def test_google_sync_writes_sleep(client, app, monkeypatch):
     I.set_tokens(d, "google", {"access_token": "A", "refresh_token": "R",
                                "expires_at": 9e9})
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",
@@ -993,8 +1083,8 @@ def test_google_sync_refreshes_on_401(client, app, monkeypatch):
                 "endTime": f"{date}T12:00:00Z", "endUtcOffset": "0s"},
             "sleepType": "CLASSIC", "sleepStages": [],
             "sleepSummary": {"efficiency": 90}}}]}
-    monkeypatch.setattr("google_health.fetch_sleep", fake_fetch)
-    monkeypatch.setattr("google_health.refresh_tokens",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep", fake_fetch)
+    monkeypatch.setattr("integrations.google_health.refresh_tokens",
         lambda *a, **k: {"access_token": "NEW", "refresh_token": "R2",
                          "scope": "sleep", "expires_at": 9e9})
     r = client.post("/integrations/google/sync?days=1")
@@ -1039,12 +1129,12 @@ def test_rescuetime_sync_writes_entries(client, app, monkeypatch):
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 70,
              "all_productive_hours": 2.0, "total_hours": 3.0}])
     # Isolate the per-activity fetch (a separate Analytic Data API call).
-    monkeypatch.setattr("rescuetime.fetch_activities",
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities",
         lambda key, date, transport=None: {
             "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
                             "Activity", "Category", "Productivity"],
@@ -1066,13 +1156,13 @@ def test_rescuetime_sync_activity_fetch_failure_keeps_summary(client, app, monke
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 70,
              "all_productive_hours": 2.0, "total_hours": 3.0}])
     def boom(key, date, transport=None):
         raise RuntimeError("anapi down")
-    monkeypatch.setattr("rescuetime.fetch_activities", boom)
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities", boom)
     body = client.post("/integrations/rescuetime/sync?date=2026-06-28").get_json()
     assert "2026-06-28" in body["synced"]           # summary still written
     assert any("activities" in e for e in body["errors"])
@@ -1093,10 +1183,10 @@ def test_rescuetime_sync_backfills_activities_on_legacy_days(client, app, monkey
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_api_key(d, "rescuetime", "KEY123")
     I.save(app.config["INTEGRATIONS_FILE"], d)
-    monkeypatch.setattr("rescuetime.fetch_daily_summary",
+    monkeypatch.setattr("integrations.rescuetime.fetch_daily_summary",
         lambda key, transport=None: [
             {"date": "2026-06-28", "productivity_pulse": 55, "total_hours": 3.33}])
-    monkeypatch.setattr("rescuetime.fetch_activities",
+    monkeypatch.setattr("integrations.rescuetime.fetch_activities",
         lambda key, date, transport=None: {
             "row_headers": ["Rank", "Time Spent (seconds)", "Number of People",
                             "Activity", "Category", "Productivity"],
@@ -1128,7 +1218,7 @@ def test_rescuetime_disconnect(client, app):
 
 def test_integrations_page_has_rescuetime_card(client):
     r = client.get("/journal/sections")
-    assert b"RescueTime" in r.data
+    assert b"RescueTime" in r.data.replace(b"<wbr>", b"")
     assert b'name="api_key"' in r.data
 
 
@@ -1145,14 +1235,6 @@ def _connect_phone(app, token="TOK-123"):
     d = I.load(app.config["INTEGRATIONS_FILE"])
     I.set_token(d, "phone", token)
     I.save(app.config["INTEGRATIONS_FILE"], d)
-
-
-def test_phone_generate_token(client, app):
-    r = client.post("/integrations/phone/token")
-    assert r.status_code == 302
-    d = I.load(app.config["INTEGRATIONS_FILE"])
-    assert I.get_token(d, "phone")
-    assert I.is_connected(d, "phone")
 
 
 def test_phone_ingest_requires_token(client, app):
@@ -1216,6 +1298,7 @@ def test_integrations_page_has_phone_card(client, app):
 def test_phone_card_has_apk_download_url_and_qr(client, app):
     r = client.get("/journal/sections")
     # Real GitHub Release APK link (no placeholder "#").
+    assert b"github.com/the-11th/pompom-journal/" in r.data
     assert b"releases/latest/download/phone-usage.apk" in r.data
     # Download QR div carries the APK URL in its data-qr attribute.
     assert b'class="phone-qr" data-qr="https://github.com/' in r.data
@@ -1224,19 +1307,11 @@ def test_phone_card_has_apk_download_url_and_qr(client, app):
     assert b"phone-qr.js" in r.data
 
 
-def test_phone_config_qr_only_after_token_generate(client, app):
-    # No token reveal on a normal page load → no config deep-link QR.
+def test_phone_usage_card_is_usb_configured(client, app):
     r = client.get("/journal/sections")
     assert b"todopup://config" not in r.data
-    # Generating a token reveals it once; the config QR is emitted only then,
-    # carrying endpoint + token in a todopup://config deep link.
-    client.post("/integrations/phone/token")
-    r2 = client.get("/journal/sections")
-    assert b"todopup://config" in r2.data
-    assert b"token%3D" in r2.data or b"token=" in r2.data
-    # ...and it is not re-rendered from storage on the next load.
-    r3 = client.get("/journal/sections")
-    assert b"todopup://config" not in r3.data
+    assert b"USB sync endpoint" in r.data
+    assert b"http://127.0.0.1:5001/integrations/phone/ingest" in r.data
 
 
 def test_analytics_data_entries_carry_usage(client, app):
@@ -1247,6 +1322,50 @@ def test_analytics_data_entries_carry_usage(client, app):
     journal.save(app.config["JOURNAL_FILE"], jdata)
     body = client.get("/journal/analytics/data").get_json()
     assert any(e.get("usage") for e in body["entries"])
+
+
+def test_health_token_ingest_and_disconnect(client, app):
+    r = client.post("/integrations/health/token")
+    assert r.status_code == 302
+    token = I.get_token(I.load(app.config["INTEGRATIONS_FILE"]), "health")
+    assert token
+
+    r = client.post("/integrations/health/ingest",
+                    json={"date": "2026-07-06", "steps": 8000,
+                          "heart_rate": [{"time": "09:00", "bpm": 72}]},
+                    headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert r.get_json()["dates"] == ["2026-07-06"]
+    h = journal.get_entry_by_date(
+        journal.load(app.config["JOURNAL_FILE"]), "2026-07-06")["health"]
+    assert h["steps"] == 8000
+    assert h["avg_hr"] == 72
+
+    client.post("/integrations/health/disconnect")
+    assert not I.is_connected(I.load(app.config["INTEGRATIONS_FILE"]), "health")
+
+
+def test_health_ingest_requires_token(client):
+    r = client.post("/integrations/health/ingest",
+                    json={"date": "2026-07-06", "steps": 8000})
+    assert r.status_code == 401
+
+
+def test_integrations_page_has_health_card(client):
+    r = client.get("/journal/sections")
+    assert r.status_code == 200
+    assert b"Xiaomi health" in r.data
+    assert b"/integrations/health/ingest" in r.data
+
+
+def test_analytics_data_entries_carry_health(client, app):
+    jdata = journal.load(app.config["JOURNAL_FILE"])
+    journal.set_entry_health(jdata, "2026-07-06",
+        {"date": "2026-07-06", "steps": 8000, "avg_hr": 72,
+         "heart_rate_samples": [], "source": "xiaomi", "fetched": "x"})
+    journal.save(app.config["JOURNAL_FILE"], jdata)
+    body = client.get("/journal/analytics/data").get_json()
+    assert any(e.get("health") for e in body["entries"])
 
 
 # --------------------------------------------------------------------------- #
@@ -1269,7 +1388,7 @@ def test_spotify_callback_exchanges_code(client, app, monkeypatch):
                 data={"client_id": "CID", "client_secret": "SEC"})
     client.get("/integrations/spotify/connect")
     state = I.load(app.config["INTEGRATIONS_FILE"])["spotify"]["oauth_state"]
-    monkeypatch.setattr("spotify.exchange_code",
+    monkeypatch.setattr("integrations.spotify.exchange_code",
         lambda *a, **k: {"access_token": "A", "refresh_token": "R",
                          "scope": "s", "expires_at": 9e9})
     monkeypatch.setattr("app._spotify_sync", lambda *a, **k: {"connected": True, "synced": [], "errors": []})
@@ -1292,6 +1411,53 @@ def test_spotify_taste_endpoint(client, app):
     I.save(app.config["INTEGRATIONS_FILE"], d)
     body = client.get("/integrations/spotify/taste").get_json()
     assert body["genres"]["short_term"] == ["indie"]
+
+
+def test_spotify_analytics_endpoint_fetches_snapshot(client, app, monkeypatch):
+    _connect_spotify(app)
+    monkeypatch.setattr("integrations.spotify.fetch_playback_state",
+        lambda tok: {"item": {"name": "Now"}, "is_playing": True})
+    monkeypatch.setattr("integrations.spotify.parse_playback_state",
+        lambda raw: {"item": {"name": raw["item"]["name"]}, "is_playing": raw["is_playing"]})
+    monkeypatch.setattr("integrations.spotify.fetch_queue", lambda tok: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("integrations.spotify.parse_queue", lambda raw: {"queue": [{"name": "Next"}]})
+    monkeypatch.setattr("integrations.spotify.fetch_devices", lambda tok: {"devices": [{"name": "Mac"}]})
+    monkeypatch.setattr("integrations.spotify.parse_devices", lambda raw: [{"name": "Mac"}])
+    monkeypatch.setattr("integrations.spotify.fetch_saved_tracks", lambda tok: {"total": 12, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_tracks", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_saved_albums", lambda tok: {"total": 3, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_albums", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_saved_episodes", lambda tok: {"total": 2, "items": []})
+    monkeypatch.setattr("integrations.spotify.parse_saved_episodes", lambda raw: {"total": raw["total"]})
+    monkeypatch.setattr("integrations.spotify.fetch_current_user_playlists", lambda tok: {"items": []})
+    monkeypatch.setattr("integrations.spotify.parse_playlists", lambda raw: [])
+    monkeypatch.setattr("integrations.spotify.fetch_followed_artists", lambda tok: {"artists": {"items": []}})
+    monkeypatch.setattr("integrations.spotify.parse_followed_artists", lambda raw: [])
+
+    body = client.post("/integrations/spotify/analytics").get_json()
+    assert body["ok"] and body["analytics"]["playback"]["item"]["name"] == "Now"
+    saved = I.get_analytics(I.load(app.config["INTEGRATIONS_FILE"]), "spotify")
+    assert saved["library"]["saved_tracks"]["total"] == 12
+
+
+def test_spotify_history_import_writes_daily_music(client, app, monkeypatch):
+    _connect_spotify(app)
+    rows = [{"ts": "2026-06-29T22:10:00Z", "master_metadata_track_name": "A",
+             "master_metadata_album_artist_name": "Artist", "ms_played": 180000}]
+    monkeypatch.setattr("integrations.spotify.parse_streaming_history",
+        lambda payload: [{"played_at": payload[0]["ts"], "date": "2026-06-29",
+                          "track_id": "t1", "name": "A", "artists": ["Artist"],
+                          "duration_ms": payload[0]["ms_played"], "source": "history_import"}])
+    monkeypatch.setattr("integrations.spotify.group_plays_by_day",
+        lambda plays: {"2026-06-29": plays})
+    r = client.post("/integrations/spotify/history/import",
+        data={"history": (io.BytesIO(json.dumps(rows).encode("utf-8")),
+                          "Streaming_History_Audio_2026.json")},
+        content_type="multipart/form-data")
+    assert r.status_code == 302
+    entry = journal.get_entry_by_date(journal.load(app.config["JOURNAL_FILE"]), "2026-06-29")
+    assert entry["music"]["tracks"] == 1
+    assert "history_import" in entry["music"]["sources"]
 
 
 def test_spotify_disconnect(client, app):
@@ -1327,9 +1493,9 @@ def test_spotify_sync_writes_music(client, app, monkeypatch):
     from datetime import date
     today = date.today().isoformat()
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: _rp_on(today))
-    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
-    monkeypatch.setattr("spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
+    monkeypatch.setattr("integrations.spotify.fetch_recently_played", lambda tok, transport=None: _rp_on(today))
+    monkeypatch.setattr("integrations.spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("integrations.spotify.fetch_top", lambda tok, kind, tr, transport=None: {"items": []})
     r = client.post("/integrations/spotify/sync?date=" + today)
     body = r.get_json()
     assert body["ok"] and body["connected"]
@@ -1346,9 +1512,9 @@ def test_spotify_sync_not_connected(client, app):
 
 def test_spotify_sync_refreshes_taste(client, app, monkeypatch):
     _connect_spotify(app)
-    monkeypatch.setattr("spotify.fetch_recently_played", lambda tok, transport=None: {"items": []})
-    monkeypatch.setattr("spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
-    monkeypatch.setattr("spotify.fetch_top",
+    monkeypatch.setattr("integrations.spotify.fetch_recently_played", lambda tok, transport=None: {"items": []})
+    monkeypatch.setattr("integrations.spotify.fetch_audio_features", lambda tok, ids, transport=None: None)
+    monkeypatch.setattr("integrations.spotify.fetch_top",
         lambda tok, kind, tr, transport=None: {"items": [{"name": "X", "genres": ["indie"]}]}
         if kind == "artists" else {"items": [{"name": "Song"}]})
     client.post("/integrations/spotify/sync")
@@ -1478,7 +1644,7 @@ def _connect_google(app):
 
 def test_google_sync_creates_managed_sections_staged(client, app, monkeypatch):
     _connect_google(app)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:14:00Z", "startUtcOffset": "-25200s",
@@ -1509,7 +1675,7 @@ def test_google_sync_creates_managed_sections_staged(client, app, monkeypatch):
 
 def test_google_sync_classic_creates_only_two(client, app, monkeypatch):
     _connect_google(app)
-    monkeypatch.setattr("google_health.fetch_sleep",
+    monkeypatch.setattr("integrations.google_health.fetch_sleep",
         lambda token, date, transport=None: {"dataPoints": [{"sleep": {
             "interval": {
                 "startTime": f"{date}T05:00:00Z", "startUtcOffset": "0s",

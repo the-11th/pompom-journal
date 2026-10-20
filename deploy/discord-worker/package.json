@@ -1,0 +1,19 @@
+{
+  "name": "datapom-discord-inbox",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test test/inbox.test.mjs",
+    "dev": "wrangler dev --local",
+    "check": "wrangler deploy --dry-run --outdir .wrangler/check",
+    "deploy": "wrangler deploy",
+    "test:runtime": "node --test test/runtime.test.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "5.20260908.0-alpha",
+    "wrangler": "4.130.0"
+  }
+}

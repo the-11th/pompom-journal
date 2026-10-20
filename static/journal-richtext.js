@@ -68,32 +68,34 @@
   }
 
   // Mirror journal.extract_mentions: '@' at a word boundary (start of string
-  // or preceded by a non-word char) followed by [A-Za-z0-9_-]+.
-  var MENTION_RE = /(^|\W)@([A-Za-z0-9_-]+)/g;
+  // or preceded by a non-word char) followed by period-separated name
+  // segments. A period must have name characters after it, so sentence-ending
+  // punctuation is not swallowed.
+  var MENTION_RE = /(^|[^\p{L}\p{N}_])@([\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*)/gu;
 
   // Resolve a mention token to a known tag name in INDEX, or null. Mirrors
   // journal._resolve_mention: try the token as-is, then with underscores as
   // spaces (so `@alex_dad` matches a multi-word tag `alex dad`); literal wins.
   function resolveMention(token) {
     var direct = normalize(token);
-    if (INDEX[direct]) return direct;
+    if (Object.prototype.hasOwnProperty.call(INDEX, direct)) return direct;
     var spaced = normalize(token.replace(/_/g, ' '));
-    if (INDEX[spaced]) return spaced;
+    if (Object.prototype.hasOwnProperty.call(INDEX, spaced)) return spaced;
     return null;
   }
 
-  // Mirror journal._NUMERIC_RE: '#' at a word boundary, a name [A-Za-z0-9_-]+,
+  // Mirror journal._NUMERIC_RE: '#' at a word boundary, a name [\p{L}\p{N}_-]+,
   // whitespace, then a number (-?\d+(\.\d+)?). So `a#b 1` does not match.
-  var NUMERIC_RE = /(^|\W)#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)/g;
+  var NUMERIC_RE = /(^|[^\p{L}\p{N}_])#([\p{L}\p{N}_-]+)\s+(-?\d+(?:\.\d+)?)/gu;
 
   // Resolve a numeric token to a known section name in NUM_INDEX, or null.
   // Mirrors journal._resolve_mention (as-is, then underscores -> spaces;
   // literal-underscore section wins).
   function resolveNumeric(token) {
     var direct = normalize(token);
-    if (NUM_INDEX[direct]) return direct;
+    if (Object.prototype.hasOwnProperty.call(NUM_INDEX, direct)) return direct;
     var spaced = normalize(token.replace(/_/g, ' '));
-    if (NUM_INDEX[spaced]) return spaced;
+    if (Object.prototype.hasOwnProperty.call(NUM_INDEX, spaced)) return spaced;
     return null;
   }
 
@@ -149,15 +151,27 @@
     });
   }
 
-  // The shared inline pipeline (escape -> markers -> mentions -> numbers) for
-  // a single run of text. Used for whole non-task lines and for task-line
-  // labels alike.
+  function withProtectedTokens(text, transform, renderToken) {
+    var tokens = [], prefix = '\u0000journal-token:';
+    while (text.indexOf(prefix) !== -1) prefix += ':';
+    text = text.replace(/(^|[^\p{L}\p{N}_])(@[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*|#[\p{L}\p{N}_-]+\s+-?\d+(?:\.\d+)?)/gu, function (_, boundary, token) {
+      var at = tokens.length;
+      tokens.push(renderToken ? renderToken(token) : token);
+      return boundary + prefix + at + ';';
+    });
+    return transform(text).replace(new RegExp(prefix + '(\\d+);', 'g'), function (_, at) { return tokens[Number(at)]; });
+  }
+
+  // Mirror journal._capture_source. Paired underline markers can expose a
+  // boundary while literal @/# names containing underscores remain intact.
+  function captureSource(raw) {
+    return withProtectedTokens(raw, function (text) { return text.replace(/__([^\n]+?)__/g, ' $1 '); });
+  }
+
   function inlineFormat(text) {
-    var html = escapeHtml(text);
-    html = applyMarkers(html);
-    html = applyMentions(html);
-    html = applyNumbers(html);
-    return html;
+    return withProtectedTokens(escapeHtml(text), function (html) {
+      return applyNumbers(applyMentions(applyMarkers(html)));
+    }, function (token) { return token[0] === '@' ? applyMentions(token) : applyNumbers(token); });
   }
 
   // Mirror journal._TASK_LINKED_RE and _TASK_FRESH_RE (single-line; the body is
@@ -169,14 +183,14 @@
   // Build a themed checkbox span for a task line. `cls` adds a state modifier;
   // `mark` is the glyph (☑ / ☐). When `href` is set the checkbox links to the
   // task. The label is already-rendered (safe) HTML.
-  function taskLineHtml(prefixHtml, cls, mark, labelHtml, href) {
+  function taskLineHtml(prefixHtml, cls, mark, labelHtml, href, taskId, title) {
     var checkOpen, checkClose;
     if (href) {
       checkOpen = '<a class="task-check ' + cls + '" href="' + href +
-        '" title="Open task">';
+        '" data-task-id="' + escapeHtml(taskId) + '" aria-label="' + escapeHtml('Open task: ' + title) + '" title="Open task">';
       checkClose = '</a>';
     } else {
-      checkOpen = '<span class="task-check ' + cls + '">';
+      checkOpen = '<span class="task-check ' + cls + '"' + (taskId ? ' data-task-id="' + escapeHtml(taskId) + '"' : '') + '>';
       checkClose = '</span>';
     }
     return prefixHtml + checkOpen + mark + checkClose +
@@ -194,18 +208,19 @@
       var info = TASK_INDEX[id];
       var status = info ? info.status : 'missing';
       var done = info ? !!info.done : false;
+      var taskTitle = info && info.title || m[3];
       if (status === 'done') {
-        return taskLineHtml(prefixHtml, 'done', '☑', label, '/archive');
+        return taskLineHtml(prefixHtml, 'done', '☑', label, '/archive', id, taskTitle);
       }
       if (status === 'expired') {
-        return taskLineHtml(prefixHtml, 'expired', '☐', label, '/');
+        return taskLineHtml(prefixHtml, 'expired', '☐', label, '/', id, taskTitle);
       }
       if (status === 'missing') {
-        return taskLineHtml(prefixHtml, 'missing', '☐', label, null);
+        return taskLineHtml(prefixHtml, 'missing', '☐', label, null, id, taskTitle);
       }
       // active
       return taskLineHtml(prefixHtml, '', done ? '☑' : '☐',
-        label, '/');
+        label, '/', id, taskTitle);
     }
     var f = TASK_FRESH_RE.exec(line);
     if (f) {
@@ -232,16 +247,19 @@
   // of mentions ticking chips. Last occurrence per section wins. Additive in
   // spirit: removing the text does not clear the field.
   function reflectNumbers(raw) {
-    var re = /(^|\W)#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)/g;  // own lastIndex
-    var m, values = {};
-    while ((m = re.exec(raw)) !== null) {
+    var re = new RegExp(NUMERIC_RE.source, NUMERIC_RE.flags);  // own lastIndex
+    var m, values = {}, source = captureSource(raw);
+    while ((m = re.exec(source)) !== null) {
       var key = resolveNumeric(m[2]);
       if (!key) continue;
       values[NUM_INDEX[key].section_id] = m[3];   // last write wins
     }
     Object.keys(values).forEach(function (sid) {
       var field = document.querySelector('input[name="num:' + sid + '"]');
-      if (field) field.value = values[sid];
+      if (field && field.value !== values[sid]) {
+        field.value = values[sid];
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+      }
     });
   }
 
@@ -254,15 +272,18 @@
   // chip yet. Purely additive / non-destructive (Q4): removing a mention never
   // unticks a chip — the user unticks manually.
   function selectChip(sectionId, name) {
-    var section = document.querySelector('.section[data-section-id="' + sectionId + '"]');
+    var section = document.querySelector('.section[data-section-id="' + sectionId + '"], .media-entry-section[data-section-id="' + sectionId + '"]');
     if (!section) return;
-    var chips = section.querySelector('.chips');
+    var chips = section.querySelector('.chips, .media-tag-chips');
     if (!chips) return;
 
     var boxes = chips.querySelectorAll('input[type="checkbox"]');
     for (var i = 0; i < boxes.length; i++) {
       if (normalize(boxes[i].value) === name) {   // already has a chip
-        boxes[i].checked = true;
+        if (!boxes[i].checked) {
+          boxes[i].checked = true;
+          boxes[i].dispatchEvent(new Event('change', { bubbles: true }));
+        }
         return;
       }
     }
@@ -270,7 +291,7 @@
     // mirroring how the template renders temp chips. createTextNode keeps it
     // injection-safe regardless of the (already-normalized) name.
     var label = document.createElement('label');
-    label.className = 'chip temp tag-toggle';
+    label.className = section.classList.contains('media-entry-section') ? 'media-toggle temp' : 'chip temp tag-toggle';
     var cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.name = 'tag:' + sectionId;
@@ -279,12 +300,13 @@
     label.appendChild(cb);
     label.appendChild(document.createTextNode(' ' + name));
     chips.appendChild(label);
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   function reconcileChips(raw) {
-    var re = /(^|\W)@([A-Za-z0-9_-]+)/g;   // own regex: don't share lastIndex
-    var m, seen = {};
-    while ((m = re.exec(raw)) !== null) {
+    var re = new RegExp(MENTION_RE.source, MENTION_RE.flags);
+    var m, seen = {}, source = captureSource(raw);
+    while ((m = re.exec(source)) !== null) {
       var name = resolveMention(m[2]);     // canonical tag name (spaces, no @)
       if (!name) continue;
       var hit = INDEX[name];
@@ -299,10 +321,29 @@
   /* View swapping                                                        */
   /* ------------------------------------------------------------------ */
 
+  var bodyHeight = null;
+
+  function rememberInputHeight() {
+    if (input.hidden) return;
+    var box = input.getBoundingClientRect();
+    if (box && box.height > 0) {
+      bodyHeight = box.height + 'px';
+      input.style.height = bodyHeight;
+    }
+  }
+
+  function applyRememberedHeight() {
+    if (!bodyHeight) return;
+    input.style.height = bodyHeight;
+    rendered.style.minHeight = bodyHeight;
+  }
+
   function showRendered() {
+    rememberInputHeight();
     rendered.innerHTML = render(input.value, INDEX);
     reconcileChips(input.value);
     reflectNumbers(input.value);
+    applyRememberedHeight();
     rendered.hidden = false;
     input.hidden = true;
   }
@@ -310,6 +351,7 @@
   function showInput(focus) {
     input.hidden = false;
     rendered.hidden = true;
+    applyRememberedHeight();
     if (focus) input.focus();
   }
 
@@ -352,12 +394,21 @@
   }
 
   rendered.addEventListener('click', function (ev) {
+    if (ev.target.closest('a')) return;
     var off = renderedClickOffset(ev.clientX, ev.clientY);
     showInput(true);
     if (off != null) {
       off = Math.max(0, Math.min(off, input.value.length));
       try { input.setSelectionRange(off, off); } catch (e) { /* ignore */ }
     }
+  });
+  rendered.setAttribute('role', 'button');
+  rendered.setAttribute('tabindex', '0');
+  rendered.setAttribute('aria-label', 'Edit journal text');
+  rendered.addEventListener('keydown', function (ev) {
+    if (ev.target !== rendered || (ev.key !== 'Enter' && ev.key !== ' ')) return;
+    ev.preventDefault();
+    showInput(true);
   });
 
   // Let other scripts (voice dictation) force the raw textarea back into view.
@@ -372,4 +423,8 @@
 
   // Expose the renderer for manual verification / future reuse.
   window.journalRender = render;
+  window.journalSetTaskIndex = function (index) {
+    TASK_INDEX = index && typeof index === 'object' ? index : {};
+    if (taskIndexEl) taskIndexEl.textContent = JSON.stringify(TASK_INDEX);
+  };
 })();

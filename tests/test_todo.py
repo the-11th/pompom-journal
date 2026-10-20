@@ -12,6 +12,21 @@ import pytest
 import todo
 
 
+def test_task_reference_index_covers_every_state_without_mutating_data():
+    data = todo._empty()
+    data['active'] = [{'id': 'a', 'title': 'Active review'}]
+    data['archive'] = [{'id': 'b', 'title': 'Done review'}]
+    data['expired'] = [{'id': 'c', 'title': 'Missed review'}]
+    assert todo.task_ref_index(data, {'a', 'b', 'c', 'missing'}) == {
+        'a': {'done': False, 'status': 'active', 'title': 'Active review'},
+        'b': {'done': True, 'status': 'done', 'title': 'Done review'},
+        'c': {'done': False, 'status': 'expired', 'title': 'Missed review'},
+        'missing': {'done': False, 'status': 'missing', 'title': ''},
+    }
+    assert todo.task_ref_index(data, set()) == {}
+    assert data['active'] == [{'id': 'a', 'title': 'Active review'}]
+
+
 # A fixed "current time" used as the reference point in all date tests.
 NOW = datetime(2026, 6, 15, 12, 0, 0)
 
@@ -28,6 +43,17 @@ def test_time_remaining_no_due():
 def test_time_remaining_more_than_one_day():
     due = (NOW + timedelta(days=3, hours=2)).isoformat()
     assert todo.time_remaining(due, now=NOW) == "3 day(s) left"
+
+
+@pytest.mark.parametrize("seconds, expected", [
+    (172800, "2 day(s) left"),
+    (172799, "47 hour(s) left"),
+    (129600, "36 hour(s) left"),
+    (86400, "24 hour(s) left"),
+])
+def test_time_remaining_hours_below_two_days(seconds, expected):
+    due = (NOW + timedelta(seconds=seconds)).isoformat()
+    assert todo.time_remaining(due, now=NOW) == expected
 
 
 def test_time_remaining_less_than_day_more_than_hour():
@@ -130,6 +156,17 @@ def test_add_task_empty_title_rejected():
     with pytest.raises(ValueError):
         todo.add_task(data, "   ")
     assert data["active"] == []   # nothing added
+
+
+def test_add_task_accepts_safe_client_id_and_rejects_collision():
+    data = todo._empty()
+    client_id = "12345678-1234-4abc-9def-1234567890ab"
+    todo.add_task(data, "offline", task_id=client_id)
+    assert data["active"][0]["id"] == client_id
+    with pytest.raises(ValueError):
+        todo.add_task(data, "duplicate", task_id=client_id)
+    with pytest.raises(ValueError):
+        todo.add_task(data, "unsafe", task_id="../bad")
 
 
 # --------------------------------------------------------------------------- #
@@ -643,12 +680,19 @@ def test_set_tag_color_bad_color_rejected():
 
 
 def test_set_tag_color_accepts_allowed_names():
-    # Names made of lowercase letters, digits, spaces, underscores and
-    # hyphens are allowed.
+    # Names made of Unicode letters/numbers, spaces, underscores, hyphens,
+    # and periods are allowed.
     data = todo._empty()
-    for name in ["work", "work item", "high-priority", "q1_2026", "a1 b2"]:
+    for name in ["work", "work item", "high-priority", "q1_2026", "a1 b2",
+                 "id.me office", "naïve", "中文"]:
         todo.set_tag_color(data, name, "#abc")
         assert name in data["tags"]
+
+
+def test_set_tag_color_normalizes_name_with_period():
+    data = todo._empty()
+    todo.set_tag_color(data, "ID.me Office", "#abcdef")
+    assert data["tags"] == {"id.me office": "#abcdef"}
 
 
 def test_set_tag_color_rejects_injection_chars():
@@ -656,7 +700,7 @@ def test_set_tag_color_rejects_injection_chars():
     # rejected so the no-injection invariant is explicit, not just relying
     # on Jinja escaping.
     data = todo._empty()
-    for bad in ["<script>", "a;b", "a{b}", 'a"b', "a'b", "a&b", "tag<", "naïve"]:
+    for bad in ["<script>", "a;b", "a{b}", 'a"b', "a'b", "a&b", "tag<"]:
         with pytest.raises(ValueError):
             todo.set_tag_color(data, bad, "#abc")
     assert data["tags"] == {}
@@ -1002,6 +1046,34 @@ def test_add_subtask_unknown_id_noop():
     tid = data["active"][0]["id"]
     todo.add_subtask(data, "ghost", "x")
     assert data["active"][0]["subtasks"] == []
+
+
+def test_replace_subtasks_validates_and_copies_rows():
+    data = todo._empty()
+    todo.add_task(data, "trip")
+    task_id = data["active"][0]["id"]
+    rows = [{"text": " Pack ", "done": True}]
+    todo.replace_subtasks(data, task_id, rows)
+    assert data["active"][0]["subtasks"] == [{"text": "Pack", "done": True}]
+    rows[0]["text"] = "mutated"
+    assert data["active"][0]["subtasks"][0]["text"] == "Pack"
+    with pytest.raises(ValueError):
+        todo.replace_subtasks(data, task_id, [{"text": "", "done": False}])
+
+
+def test_reopen_task_moves_completed_task_back_to_active():
+    data = todo._empty()
+    todo.add_task(data, "Reconsider this")
+    task_id = data["active"][0]["id"]
+    todo.refresh(data, [task_id], difficulties={task_id: "easy"})
+
+    todo.reopen_task(data, task_id)
+
+    task, status = todo.task_by_id(data, task_id)
+    assert status == "active"
+    assert task["title"] == "Reconsider this"
+    assert "completed" not in task
+    assert "difficulty" not in task
 
 
 def test_toggle_subtask_flips_done():

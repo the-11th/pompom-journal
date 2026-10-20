@@ -5,7 +5,7 @@ cases, and each aggregation helper over empty/sparse/normal data.
 """
 from datetime import datetime
 
-import usage
+from integrations import usage
 
 NOW = datetime(2026, 7, 7, 2, 5, 0)
 

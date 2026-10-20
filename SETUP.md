@@ -1,8 +1,8 @@
-# Setup
+# Datapom setup
 
 ## Running the app
 
-Double-click **TodoPup** in your dock. It opens the browser, and the server
+Double-click **Datapom** in your dock. It opens the browser, and the server
 auto-quits ~30 seconds after you close the last tab.
 
 To run manually from a terminal:
@@ -19,8 +19,8 @@ flask --app app run --port 5001
 ### 1. Clone the repo
 
 ```bash
-git clone <repo-url> ~/workspace/todo-cli
-cd ~/workspace/todo-cli
+git clone https://github.com/the-11th/pompom-journal.git ~/projects/datapom
+cd ~/projects/datapom
 ```
 
 ### 2. Create the virtual environment
@@ -31,17 +31,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Install the TodoPup dock app (Automator)
+### 3. Install the Datapom dock app (Automator)
 
-The Automator app lives at `/Applications/TodoPup.app`. The workflow file is
+The Automator app lives at `/Applications/Datapom.app`. The workflow file is
 stored in this repo at `docs/automator/document.wflow`.
 
 **Option A — Install from the repo (quickest):**
 
-Run this once; it copies the workflow into a fresh Automator app bundle:
+Run this once; it updates the existing launcher to **Datapom**, preserving its
+custom icon and Dock bookmark, or creates a new bundle on a fresh machine:
 
 ```bash
 bash docs/automator/install.sh
+```
+
+If a pinned Dock shortcut still shows the previous name after the rename, refresh
+that shortcut in its existing position:
+
+```bash
+.venv/bin/python docs/automator/rename_dock.py
 ```
 
 **Option B — Manual (Automator UI):**
@@ -52,29 +60,11 @@ bash docs/automator/install.sh
 4. Paste the script below into the action, replacing any existing content:
 
 ```bash
-cd /Users/<your-username>/workspace/todo-cli
-
-PORT=5001
-URL="http://127.0.0.1:${PORT}"
-
-EXISTING=$(lsof -ti "tcp:${PORT}" 2>/dev/null)
-if [ -n "$EXISTING" ]; then
-  kill $EXISTING 2>/dev/null
-  sleep 1
-  STILL=$(lsof -ti "tcp:${PORT}" 2>/dev/null)
-  [ -n "$STILL" ] && kill -9 $STILL 2>/dev/null
-fi
-
-.venv/bin/python start_server.py
-
-for i in $(seq 1 20); do
-  sleep 0.5
-  curl -s --max-time 1 "$URL" -o /dev/null && break
-done
-open "$URL"
+cd /Users/<your-username>/projects/datapom
+exec /bin/bash Datapom.command
 ```
 
-5. **File → Save** → save as **TodoPup** to `/Applications/`
+5. **File → Save** → save as **Datapom** to `/Applications/`
 6. Open **System Settings → Dock** (or drag the app) to add it to your dock
 
 ---
@@ -88,11 +78,11 @@ If the shell script inside the Automator app needs to change, update
 bash docs/automator/install.sh
 ```
 
-Or open `/Applications/TodoPup.app` in Automator, edit the script, and save.
+Or open `/Applications/Datapom.app` in Automator, edit the script, and save.
 Then commit the updated `docs/automator/document.wflow`:
 
 ```bash
-cp /Applications/TodoPup.app/Contents/document.wflow docs/automator/document.wflow
+cp /Applications/Datapom.app/Contents/document.wflow docs/automator/document.wflow
 git add docs/automator/document.wflow
 git commit -m "Update Automator workflow script"
 ```
@@ -105,3 +95,7 @@ git commit -m "Update Automator workflow script"
 - The Flask server has a watchdog thread (active when started via the dock app)
 - If no heartbeat arrives for 30 seconds, the server shuts itself down cleanly
 - Server logs are written to `data/server.log`
+
+For Android journal/task sync, use the USB helper documented in
+[`docs/PHONE_ACCESS.md`](docs/PHONE_ACCESS.md). It starts the localhost-only
+server when needed; the dock app reuses a healthy server without stopping it.

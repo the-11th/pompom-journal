@@ -6,7 +6,7 @@
 
 ## Summary
 
-Two related additions to the to-do side of TodoPup, built in one pass:
+Two related additions to the to-do side of Datapom, built in one pass:
 
 1. **Difficulty rating** — when a task is checked done (before Refresh archives
    it), an optional **easy / medium / hard** picker appears below it. The choice

@@ -1,0 +1,71 @@
+{
+  "original": {
+    "sha256": "4b41204ab9e6c965597844952f0171f2e622d6c15c7603b5ce9d777dd988b537",
+    "assets": {
+      "assets/journal/custom-select.js": "49ba2393781c885326c52c0ae9b4b1a34873d2be2edda6d389b00f9d0b635548",
+      "assets/journal/datetime-picker.js": "41f76b5648ced804ea1c8c000ae7cba1aaf090af90e6e547fce743c5674c6a97",
+      "assets/journal/img/1-pompom.gif": "a5791732cafd6566aba8de3870e5ac81a9e913f59ac3b52598dae2302c84b158",
+      "assets/journal/img/2-pompom.gif": "7293c6064f281c1b99e77fe87e4e7691dff03289b4a777c0da4fea6ffcb73b74",
+      "assets/journal/img/3-pompom.gif": "0b7d731adba7d4f48db282ba27b431608948ac4e03fb15b4adb83feabaa156dc",
+      "assets/journal/img/4-pompom.gif": "a417699a0ee35bef4fad6e7e4c38a7f97503fe44811ee0a52361b384add92352",
+      "assets/journal/img/5-pompom.gif": "f652504ef89ce634101c4490f1339f8b6ac96744faeab4f9439ab69f998cbd38",
+      "assets/journal/img/6-pompom.gif": "e29895b2bfbc5209e3785490e872d9ddff212c9e1b17ae0ab0c221b1d8a268d0",
+      "assets/journal/img/7-pompom.gif": "c9b159be42b64829a8722168dc67d35c010204af5e56f458737f52b72b113201",
+      "assets/journal/journal-richtext.js": "2de6a9b59d5483843f99e609969ee5d6b4a41348350aeac57483a2263af45176",
+      "assets/journal/location-analytics.js": "5928c4730bc0608cfc2f9d38ff041dacc2fba276348a06705d538cdad73773d9",
+      "assets/journal/location-day-view.js": "7c257182cd3ba35aa29d49071328978445555c7c6b88dc0df1c47498b2514b15",
+      "assets/journal/location-day.js": "05ad0c15697c887a9b62c221b0039def2db81cc6b5a037f928eaa0caaad06c6a",
+      "assets/journal/media-entry.js": "30ce09982e046a462d4fcbd8bd6c54cb522972bdebc2f81dbf90f5a6a968b7c9",
+      "assets/journal/media-settings.js": "5bb23b3a7623ccdc73e3c5091aa771464164f3286ad26c01f25f153df154edf0",
+      "assets/journal/media-ui.js": "c7b5bd6cc17b646e7333fc22b4dd45b9a93d251d31403df8a8880f2906020480",
+      "assets/journal/mobile-journal.html": "33c3d73ee9339bcd40a412468d81d52f07ed04850fe5bce4ab33d09501e26839",
+      "assets/journal/offline-map.js": "7cbd0ea408f9ed8c8770676df2f2e3cb2382eb78ad5ff3d2d70baa2a636650dd",
+      "assets/journal/photo-edit.js": "7d9aaa9fbce52078aff531f82e5908c054685358ea89771c0bd4506eb9ef798a",
+      "assets/journal/mobile-journal.js": "8ace3a5dad8de0bb7f09e1db032042aad0574dc3a8bcf6db8e222688838bfcc7",
+      "assets/journal/style.css": "f00b01755feb83019353ca77440b05d7b35c3650885c6a39717cfdeabf5806f1"
+    }
+  },
+  "qa": {
+    "sha256": "802ae3a18d0824f88b6040b9b19f88ae7aa1d9d933f9922159ccb77e4e639975",
+    "assets": {
+      "assets/journal/img/1-pompom.gif": "a5791732cafd6566aba8de3870e5ac81a9e913f59ac3b52598dae2302c84b158",
+      "assets/journal/img/2-pompom.gif": "7293c6064f281c1b99e77fe87e4e7691dff03289b4a777c0da4fea6ffcb73b74",
+      "assets/journal/img/3-pompom.gif": "0b7d731adba7d4f48db282ba27b431608948ac4e03fb15b4adb83feabaa156dc",
+      "assets/journal/img/4-pompom.gif": "a417699a0ee35bef4fad6e7e4c38a7f97503fe44811ee0a52361b384add92352",
+      "assets/journal/img/5-pompom.gif": "f652504ef89ce634101c4490f1339f8b6ac96744faeab4f9439ab69f998cbd38",
+      "assets/journal/img/6-pompom.gif": "e29895b2bfbc5209e3785490e872d9ddff212c9e1b17ae0ab0c221b1d8a268d0",
+      "assets/journal/img/7-pompom.gif": "c9b159be42b64829a8722168dc67d35c010204af5e56f458737f52b72b113201",
+      "assets/journal/location-day.js": "05ad0c15697c887a9b62c221b0039def2db81cc6b5a037f928eaa0caaad06c6a",
+      "assets/journal/mobile-journal.html": "b810de822b457e1b4455456e1f80c2e4a9de2a33fea36d7319e3cb16d809120f",
+      "assets/journal/custom-color.js": "3f22237624fc78146d961c950e3a1cf87ef7c99f76eb66d9844fa239fa0f25b8",
+      "assets/journal/location-day-view.js": "68f21578467bbbd35b0ca6a0052a6228cfb0f5fb1974680eb3ba48c0852f2cbc",
+      "assets/journal/photo-edit.js": "7872c779a668824ec75a4b0fe2b84b389bdaf0f3bc7aab603446c33160342988",
+      "assets/journal/custom-select.js": "2007b27c2e26f2d5d5e6fa5e2a33d3492578a049cf09546f35c8ebacde7834c0",
+      "assets/journal/datetime-picker.js": "858e49065c1974236e65668c77ea8df1c6996723704476782e77e292a81fde65",
+      "assets/journal/media-ui.js": "261858fdf6907704c3a2ecc327b1d57f88bc8c2b411c08c3996ca902cdda1691",
+      "assets/journal/mobile-journal.js": "7d343819b45b78175a3618f448c76db5adf911c3c4785443130cb8220d3e638c",
+      "assets/journal/journal-richtext.js": "36a5b1dc58d631c67fc0e810995fd07d6ed79b88ea6a2d8a23258338c1fa3a04",
+      "assets/journal/location-analytics.js": "b45c8a64c3bf58eec30b7c3660b025f7458e38e1ffd14ab67f2243312a896e00",
+      "assets/journal/media-settings.js": "161832972c17cb14a75a74a64f6866439581835a97f4c557b165ad30a61ae42d",
+      "assets/journal/offline-map.js": "830d7bd7f67f21c77770b4b8c1f8e0860020647a817d06cfb922d7b000bb9cbd",
+      "assets/journal/style.css": "5b0e8728eb88d32c05ed00c1595fc12cd814c1cfe1dde54868d0fbfa761c4395",
+      "assets/journal/media-entry.js": "bb125af813e6a7817d0e2ab88f11525518298834cac9e1a1541dd35743fb07bc"
+    }
+  },
+  "different_assets": [
+    "assets/journal/custom-color.js",
+    "assets/journal/custom-select.js",
+    "assets/journal/datetime-picker.js",
+    "assets/journal/journal-richtext.js",
+    "assets/journal/location-analytics.js",
+    "assets/journal/location-day-view.js",
+    "assets/journal/media-entry.js",
+    "assets/journal/media-settings.js",
+    "assets/journal/media-ui.js",
+    "assets/journal/mobile-journal.html",
+    "assets/journal/mobile-journal.js",
+    "assets/journal/offline-map.js",
+    "assets/journal/photo-edit.js",
+    "assets/journal/style.css"
+  ]
+}

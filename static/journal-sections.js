@@ -21,6 +21,31 @@
 
   var dragged = null;  // the chip element currently being dragged
 
+  // Compare against saved names, so edits in another unsaved form do not make
+  // an existing name appear available before its rename is committed.
+  var sectionNames = Array.from(document.querySelectorAll('.manage-section[data-section-name]')).map(function (section) {
+    return { id: section.dataset.section, name: section.dataset.sectionName.trim().toLowerCase() };
+  });
+  document.querySelectorAll('[data-unique-section-name]').forEach(function (input) {
+    var owner = input.closest('.manage-section');
+    function validateName() {
+      var value = input.value.trim().toLowerCase();
+      var duplicate = sectionNames.some(function (section) { return section.name === value && (!owner || section.id !== owner.dataset.section); });
+      input.setCustomValidity(duplicate ? 'Section name already exists.' : '');
+    }
+    input.addEventListener('input', validateName);
+    input.addEventListener('change', validateName);
+    if (input.form) input.form.addEventListener('reset', function () { setTimeout(validateName, 0); });
+    validateName();
+  });
+
+  function canDrop(zone) {
+    if (!dragged) return false;
+    var origin = dragged.closest('.tag-zone');
+    return origin && origin.getAttribute('data-section') === zone.getAttribute('data-section') &&
+      dragged.getAttribute('data-origin') !== zone.getAttribute('data-zone');
+  }
+
   function urlFor(zone, attr, tag) {
     var tpl = zone.getAttribute(attr);
     if (!tpl) return null;
@@ -39,7 +64,7 @@
   function onDrop(zone, ev) {
     ev.preventDefault();
     zone.classList.remove('drag-over');
-    if (!dragged) return;
+    if (!canDrop(zone)) return;
     var origin = dragged.getAttribute('data-origin');
     var target = zone.getAttribute('data-zone');
     var tag = dragged.getAttribute('data-tag');
@@ -62,6 +87,7 @@
     });
     chips[i].addEventListener('dragend', function () {
       this.classList.remove('dragging');
+      document.querySelectorAll('.tag-zone.drag-over').forEach(function (zone) { zone.classList.remove('drag-over'); });
       dragged = null;
     });
   }
@@ -70,11 +96,7 @@
   for (var z = 0; z < zones.length; z++) {
     (function (zone) {
       zone.addEventListener('dragover', function (ev) {
-        if (!dragged) return;
-        // Only highlight when the drop would actually do something.
-        if (dragged.getAttribute('data-origin') === zone.getAttribute('data-zone')) {
-          return;
-        }
+        if (!canDrop(zone)) return;
         ev.preventDefault();
         if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move';
         zone.classList.add('drag-over');

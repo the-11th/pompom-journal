@@ -33,27 +33,33 @@
 
   // ---- per-provider render functions (panel row) ----
   function renderSleep(panel, s) {
-    if (!s) return;
-    const dur = `${Math.floor(s.duration_min / 60)}h ${s.duration_min % 60}m`;
-    panel.replaceChildren(
-      icon("sleep"),
-      span("sleep-times", `${s.start} → ${s.end}`),
-      span("sleep-dur", dur),
-      span("sleep-qual", `Quality ${s.quality}`));
+    if (!s) { panel.replaceChildren(span("muted", "No sleep data for this day")); return; }
+    const kids = [icon("sleep")];
+    if (s.start && s.end) kids.push(span("sleep-times", `${s.start} → ${s.end}`));
+    if (Number.isFinite(s.duration_min)) {
+      const minutes = Math.round(s.duration_min);
+      kids.push(span("sleep-dur", `${Math.floor(minutes / 60)}h ${minutes % 60}m`));
+    }
+    if (Number.isFinite(s.quality)) kids.push(span("sleep-qual", `Quality ${s.quality}`));
+    panel.replaceChildren(...kids);
   }
   function renderRescuetime(panel, r) {
-    if (!r) return;
-    panel.replaceChildren(
-      icon("rescuetime"),
-      span("rt-pulse", `Pulse ${r.pulse}`),
-      span("rt-prod", `${Math.round(r.productive_min / 60 * 10) / 10}h productive`));
+    if (!r) { panel.replaceChildren(span("muted", "No RescueTime data for this day")); return; }
+    const kids = [icon("rescuetime")];
+    if (Number.isFinite(r.pulse)) kids.push(span("rt-pulse", `Pulse ${r.pulse}`));
+    if (Number.isFinite(r.productive_min)) {
+      const minutes = Math.round(r.productive_min);
+      kids.push(span("rt-prod", `${Math.floor(minutes / 60)}h ${minutes % 60}m productive`));
+    }
+    panel.replaceChildren(...kids);
   }
   function renderMusic(panel, m) {
-    if (!m) return;
+    if (!m) { panel.replaceChildren(span("muted", "No listening data for this day")); return; }
     const kids = [icon("music"),
                   span("music-min", `${m.minutes} min`),
                   span("music-tracks", `${m.tracks} tracks`)];
     if (m.top_artists && m.top_artists[0]) kids.push(span("music-artist", m.top_artists[0].name));
+    if (m.source === "history_import") kids.push(span("muted", "Imported history"));
     panel.replaceChildren(...kids);
   }
 
@@ -66,29 +72,62 @@
       syncPath: "/integrations/spotify/sync", render: renderMusic },
   ];
 
-  function sync(p, panel) {
+  function showStatus(p, panel, message) {
+    let status = document.getElementById(`${p.name}-sync-status`);
+    if (!status && message) {
+      status = document.createElement("p");
+      status.id = `${p.name}-sync-status`;
+      status.className = "integration-sync-status";
+      status.setAttribute("role", "status");
+      const card = p.buttons[0]?.closest(".integration-card");
+      if (card) card.appendChild(status);
+      else if (panel) panel.after(status);
+      else p.buttons[0]?.after(status);
+    }
+    if (status) { status.textContent = message; status.hidden = !message; }
+  }
+
+  function sync(p, panel, manual = false) {
+    if (p.pending) return p.pending;
     const date = panel ? panel.dataset.date : null;
     let url = `${p.syncPath}?days=7`;
-    if (date) url += `&date=${date}`;
-    return fetch(url, { method: "POST" })
-      .then((r) => r.json())
-      .then((body) => {
-        const bag = body[p.key];
-        if (date && bag && bag[date]) p.render(panel, bag[date]);
+    if (date) url += `&date=${encodeURIComponent(date)}`;
+    if (manual) url += "&force=1";
+    p.buttons.forEach(button => { button.disabled = true; button.textContent = "Syncing…"; });
+    showStatus(p, panel, "");
+    p.pending = fetch(url, { method: "POST" })
+      .then((r) => {
+        if (!r.ok) throw new Error("Sync failed");
+        return r.json();
       })
-      .catch(() => {});
+      .then((body) => {
+        if (!body || body.ok === false) throw new Error("Sync failed");
+        if (body.connected === false) { showStatus(p, panel, "Reconnect to sync"); return false; }
+        const bag = body[p.key];
+        if (date && bag && Object.prototype.hasOwnProperty.call(bag, date)) p.render(panel, bag[date]);
+        if (body.errors?.length) { showStatus(p, panel, "Some days could not sync · try again"); return false; }
+        if (panel) panel.dataset.lastSync = new Date().toISOString();
+        return true;
+      })
+      .catch(() => { showStatus(p, panel, "Sync failed · try again"); return false; })
+      .finally(() => {
+        p.pending = null;
+        p.buttons.forEach(button => { button.disabled = false; button.textContent = "Sync now"; });
+      });
+    return p.pending;
   }
 
   PROVIDERS.forEach((p) => {
     const panel = document.getElementById(p.panelId);
+    p.buttons = Array.from(document.querySelectorAll(`#${p.name}-sync-now`));
     if (panel && panel.dataset.connected === "1") {
       const last = panel.dataset.lastSync;
-      const stale = !last || (Date.now() - Date.parse(last)) > 3600 * 1000;
+      const stale = !Number.isFinite(Date.parse(last)) || (Date.now() - Date.parse(last)) > 3600 * 1000;
       if (stale) sync(p, panel);
     }
     // "Sync now" button on the settings page (and optional entry button).
-    document.querySelectorAll(`#${p.name}-sync-now`).forEach((b) =>
-      b.addEventListener("click", () => sync(p, panel).then(() => location.reload())));
+    p.buttons.forEach((b) =>
+      b.addEventListener("click", () => sync(p, panel, true).then((saved) => { if (saved) location.reload(); })));
   });
 
   // Entry form: collapse the tracked-data panels behind the caret next to

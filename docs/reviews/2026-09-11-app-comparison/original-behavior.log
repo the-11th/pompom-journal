@@ -1,0 +1,64 @@
+✖ saving added tags shows selected chips and keeps only permanent choices on other days (5821.982041ms)
+✖ tag save replies preserve newer typing and failed saves keep the chosen kind (5253.582125ms)
+✖ making a temporary tag permanent updates the existing chip without duplicating it (215.59475ms)
+✖ native journal task links use cached state and open the native task after saving (5130.611584ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 16902.899708
+
+✖ failing tests:
+
+test at tests/test_mobile_journal_ui.js:253:1
+✖ saving added tags shows selected chips and keeps only permanent choices on other days (5821.982041ms)
+  locator.waitFor: Timeout 5000ms exceeded.
+  Call log:
+  [2m  - waiting for locator('.media-entry-section').first().locator('.media-tag-chips input[value="new friend"]') to be visible[22m
+  
+      at TestContext.<anonymous> (/Users/juliaxi/projects/todo-journal/tests/test_mobile_journal_ui.js:263:21) {
+    name: 'TimeoutError',
+    log: [ `  - waiting for locator('.media-entry-section').first().locator('.media-tag-chips input[value="new friend"]') to be visible` ]
+  }
+
+test at tests/test_mobile_journal_ui.js:289:1
+✖ tag save replies preserve newer typing and failed saves keep the chosen kind (5253.582125ms)
+  locator.isChecked: Timeout 5000ms exceeded.
+  Call log:
+  [2m  - waiting for locator('.media-entry-section').first().locator('.media-tag-chips input[value="first friend"]')[22m
+  
+      at TestContext.<anonymous> (/Users/juliaxi/projects/todo-journal/tests/test_mobile_journal_ui.js:303:86) {
+    name: 'TimeoutError',
+    log: [ `  - waiting for locator('.media-entry-section').first().locator('.media-tag-chips input[value="first friend"]')` ]
+  }
+
+test at tests/test_mobile_journal_ui.js:318:1
+✖ making a temporary tag permanent updates the existing chip without duplicating it (215.59475ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  true !== false
+  
+      at TestContext.<anonymous> (/Users/juliaxi/projects/todo-journal/tests/test_mobile_journal_ui.js:329:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: true,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/test_mobile_journal_ui.js:573:1
+✖ native journal task links use cached state and open the native task after saving (5130.611584ms)
+  locator.waitFor: Timeout 5000ms exceeded.
+  Call log:
+  [2m  - waiting for getByRole('link', { name: 'Open task: Walk', exact: true }) to be visible[22m
+  
+      at TestContext.<anonymous> (/Users/juliaxi/projects/todo-journal/tests/test_mobile_journal_ui.js:576:86) {
+    name: 'TimeoutError',
+    log: [ "  - waiting for getByRole('link', { name: 'Open task: Walk', exact: true }) to be visible" ]
+  }

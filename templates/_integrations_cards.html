@@ -5,8 +5,7 @@
   <section class="integration-card">
     <h2>Google Health <span class="integration-status {{ 'on' if google_connected else 'off' }}">
       {{ 'Connected' if google_connected else 'Not connected' }}</span></h2>
-    <p class="muted">Auto-fills nightly sleep (bedtime, wake, duration, quality,
-      stages) into your journal. Register an OAuth app at
+    <p class="muted">Register an OAuth app at
       <code>console.cloud.google.com</code> with redirect URL
       <code>{{ google_redirect_uri }}</code> and scope
       <code>googlehealth.sleep.readonly</code>.</p>
@@ -30,11 +29,12 @@
   </section>
 
   <section class="integration-card">
-    <h2>RescueTime <span class="integration-status {{ 'on' if rescuetime_connected else 'off' }}">
+    <h2>Rescue<wbr>Time <span class="integration-status {{ 'on' if rescuetime_connected else 'off' }}">
       {{ 'Connected' if rescuetime_connected else 'Not connected' }}</span></h2>
-    <p class="muted">Auto-fills daily productivity (pulse, productive/distracting
-      time, top categories) into your journal. Get a key at
+    <p class="muted">Get an API key at
       <code>rescuetime.com/anapi/manage</code>.</p>
+    <p class="muted">Sync keeps every reported app and website, including short visits.
+      Explore hourly activity and available page details in Analytics → Digital → Productivity.</p>
     <form method="post" action="{{ url_for('rescuetime_key') }}" class="integration-creds">
       <label>API key <input name="api_key" type="password"></label>
       <button type="submit">Save key</button>
@@ -52,9 +52,7 @@
   <section class="integration-card">
     <h2>Spotify <span class="integration-status {{ 'on' if spotify_connected else 'off' }}">
       {{ 'Connected' if spotify_connected else 'Not connected' }}</span></h2>
-    <p class="muted">Auto-fills daily listening (tracks, minutes, top artists, and
-      — when available — audio features) into your journal, plus a taste view.
-      Register an app at <code>developer.spotify.com</code> with redirect URL
+    <p class="muted">Register an app at <code>developer.spotify.com</code> with redirect URL
       <code>{{ spotify_redirect_uri }}</code>.</p>
     <form method="post" action="{{ url_for('spotify_credentials') }}" class="integration-creds">
       <label>Client ID <input name="client_id" value="{{ spotify_client_id }}"></label>
@@ -71,18 +69,44 @@
                 data-confirm="Disconnect Spotify and remove stored tokens?">Disconnect</button>
       </form>
     {% endif %}
+    <form method="post" action="{{ url_for('spotify_history_import') }}"
+          enctype="multipart/form-data" class="integration-creds">
+      <label>History JSON <input type="file" name="history" accept=".json,application/json" required></label>
+      <button type="submit">Import history</button>
+    </form>
+    <p class="muted">Imported days use history totals. Live sync stays saved separately.</p>
+  </section>
+
+  <section class="integration-card">
+    <h2>Datapom mobile <span class="integration-status {{ 'on' if mobile_devices else 'off' }}">
+      {{ (mobile_devices | length) ~ ' paired' if mobile_devices else 'Not paired' }}</span></h2>
+    <p class="muted"><a href="{{ phone_apk_url }}" target="_blank" rel="noopener">
+      Download the Datapom Android app</a>, connect and unlock the phone with USB
+      debugging enabled, then run:</p>
+    <code class="phone-endpoint">scripts/sync_android_usb.sh</code>
+
+    {% if mobile_devices %}
+      <h3 class="mobile-device-heading">Paired devices</h3>
+      <ul class="mobile-device-list">
+        {% for device in mobile_devices %}
+          <li>
+            <span><strong>{{ device.name }}</strong>
+              <small class="muted">Last seen {{ device.last_seen or 'never' }}</small></span>
+            <form method="post" action="{{ url_for('mobile_device_revoke', device_id=device.id) }}">
+              <button type="submit" class="btn danger"
+                      data-confirm="Revoke Datapom access for {{ device.name }}?">Revoke</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
   </section>
 
   <section class="integration-card">
     <h2>Phone usage <span class="integration-status {{ 'on' if phone_connected else 'off' }}">
       {{ 'Connected' if phone_connected else 'Not connected' }}</span></h2>
-    <p class="muted">Auto-fills daily screen time, unlocks, and top apps from your
-      Android phone. The phone app <em>pushes</em> data here — there's nothing to
-      pull, so no "Sync now" is needed.</p>
-
-    <p class="muted">1. <a href="{{ phone_apk_url }}" class="phone-apk-link"
-        target="_blank" rel="noopener">Download the app</a>
-      (APK via GitHub Release) — or scan this on the phone:</p>
+    <p class="muted"><a href="{{ phone_apk_url }}" class="phone-apk-link"
+        target="_blank" rel="noopener">Download the app</a></p>
     {# Download QR: encodes the public APK URL. Rendered client-side by
        phone-qr.js from the vendored (MIT) QR lib — no server dep, no CDN. #}
     <figure class="phone-qr-fig">
@@ -91,34 +115,43 @@
       <figcaption class="muted">Download</figcaption>
     </figure>
 
-    <p class="muted">2. Endpoint URL (paste into the app):</p>
+    <p class="muted">USB sync endpoint</p>
     <code class="phone-endpoint">{{ phone_endpoint }}</code>
-
-    {% if phone_token %}
-      <p class="phone-token-reveal">New token (copy it now — shown once):
-        <code>{{ phone_token }}</code></p>
-      {# Config QR: encodes endpoint + token as a todopup:// deep link so the
-         app auto-fills both. Emitted ONLY in this once-only reveal path — the
-         token is never re-rendered from storage. #}
-      <figure class="phone-qr-fig">
-        <div class="phone-qr" aria-label="QR code to auto-configure the app"
-             data-qr="todopup://config?{{ {'url': phone_endpoint, 'token': phone_token} | urlencode }}"></div>
-        <figcaption class="muted">Scan to configure (URL + token)</figcaption>
-      </figure>
-    {% endif %}
-
-    <p class="muted">3.
-      <form method="post" action="{{ url_for('phone_token') }}" style="display:inline">
-        <button type="submit" class="btn">
-          {{ 'Rotate token' if phone_connected else 'Generate token' }}</button>
-      </form>
-    </p>
 
     {% if phone_connected %}
       <p class="muted">Last received: {{ phone_last_sync or 'never' }}</p>
       <form method="post" action="{{ url_for('phone_disconnect') }}" style="display:inline">
         <button type="submit" class="btn danger"
                 data-confirm="Disconnect phone usage and remove the stored token?">Disconnect</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="integration-card">
+    <h2>Xiaomi health <span class="integration-status {{ 'on' if health_connected else 'off' }}">
+      {{ 'Connected' if health_connected else 'Not connected' }}</span></h2>
+    <p class="muted">Requires a Health Connect importer or local bridge.</p>
+
+    <p class="muted">Endpoint URL (paste into the bridge):</p>
+    <code class="phone-endpoint">{{ health_endpoint }}</code>
+
+    {% if health_token %}
+      <p class="phone-token-reveal">New token (copy it now — shown once):
+        <code>{{ health_token }}</code></p>
+    {% endif %}
+
+    <div class="muted">
+      <form method="post" action="{{ url_for('health_token') }}" style="display:inline">
+        <button type="submit" class="btn">
+          {{ 'Rotate token' if health_connected else 'Generate token' }}</button>
+      </form>
+    </div>
+
+    {% if health_connected %}
+      <p class="muted">Last received: {{ health_last_sync or 'never' }}</p>
+      <form method="post" action="{{ url_for('health_disconnect') }}" style="display:inline">
+        <button type="submit" class="btn danger"
+                data-confirm="Disconnect Xiaomi health and remove the stored token?">Disconnect</button>
       </form>
     {% endif %}
   </section>

@@ -19,6 +19,82 @@ def test_empty_store_shape():
         "sections": [], "entries": [], "dismissed_suggestions": {}}
 
 
+@pytest.mark.parametrize("permanent", [True, False])
+def test_mobile_tag_archive_preserves_entries_and_restores(permanent):
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.upsert_entry(data, "2026-09-10", "History", "Met Alex",
+                         tags={section["id"]: ["alex"]}, now=NOW)
+    if permanent:
+        journal.add_section_tag(data, section["id"], "alex")
+    entries_before = json.dumps(data["entries"], sort_keys=True)
+
+    result = journal.mutate_mobile_tag(data, section["id"], " Alex ", "archive")
+    assert result == {"name": "alex", "section_id": section["id"],
+                      "color": "#123456", "archived": True}
+    assert section["tags"] == []
+    assert section["archived_tags"] == ["alex"]
+    assert "alex" not in journal.temporary_tags(data).get(section["id"], [])
+    assert journal.tag_section_index(data)["alex"] == section["id"]
+    journal.mutate_mobile_tag(data, section["id"], "alex", "archive")
+    assert section["archived_tags"] == ["alex"]
+    assert json.dumps(data["entries"], sort_keys=True) == entries_before
+
+    restored = journal.mutate_mobile_tag(data, section["id"], "alex")
+    assert restored["name"] == "alex"
+    assert section["tags"] == ["alex"]
+    assert section["archived_tags"] == []
+    assert json.dumps(data["entries"], sort_keys=True) == entries_before
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", None), ("name", ["alex"]), ("name", ""),
+    ("name", "bad;name"), ("name", "x" * 201),
+    ("section", None), ("section", []), ("section", "missing"),
+    ("action", None), ("action", []), ("action", "delete"),
+])
+def test_mobile_tag_mutation_validates_before_changing_store(field, value):
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.add_section_tag(data, section["id"], "alex")
+    before = json.dumps(data, sort_keys=True)
+    args = {"section": section["id"], "name": "alex", "action": "archive"}
+    args[field] = value
+    with pytest.raises(ValueError):
+        journal.mutate_mobile_tag(data, args["section"], args["name"], args["action"])
+    assert json.dumps(data, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("section_type,archived", [("numeric", False), ("tag", True)])
+def test_mobile_tag_mutation_rejects_unavailable_section(section_type, archived):
+    data = journal._empty()
+    section = journal.add_section(data, "section", section_type, "#123456")
+    section["archived"] = archived
+    before = json.dumps(data, sort_keys=True)
+    with pytest.raises(ValueError):
+        journal.mutate_mobile_tag(data, section["id"], "alex", "archive")
+    assert json.dumps(data, sort_keys=True) == before
+
+
+def test_mobile_temporary_tag_restore_reveals_history_without_promoting():
+    data = journal._empty()
+    section = journal.add_section(data, "people", "tag", "#123456")
+    journal.upsert_entry(data, "2026-09-10", "History", "",
+                         tags={section["id"]: ["alex"]}, now=NOW)
+    journal.archive_temporary_tag(data, section["id"], "alex")
+    entries = json.dumps(data["entries"], sort_keys=True)
+    result = journal.mutate_mobile_tag(data, section["id"], "alex", "restore_temporary")
+    assert result["archived"] is False
+    assert section["tags"] == []
+    assert section["archived_tags"] == []
+    assert journal.temporary_tags(data)[section["id"]] == ["alex"]
+    assert json.dumps(data["entries"], sort_keys=True) == entries
+    # This restore operation must not demote a separately promoted tag.
+    journal.add_section_tag(data, section["id"], "alex")
+    journal.mutate_mobile_tag(data, section["id"], "alex", "restore_temporary")
+    assert section["tags"] == ["alex"]
+
+
 def test_seeded_has_six_default_tag_sections():
     data = journal._seeded()
     names = [s["name"] for s in data["sections"]]
@@ -254,6 +330,13 @@ def test_add_section_tag_appends_normalized_unique():
     assert journal.section_by_id(data, s["id"])["tags"] == ["maya"]
 
 
+def test_add_section_tag_accepts_periods():
+    data = journal._empty()
+    section = journal.add_section(data, "places", "tag", "#fff")
+    journal.add_section_tag(data, section["id"], "ID.me Office")
+    assert section["tags"] == ["id.me office"]
+
+
 def test_add_section_tag_rejects_bad_name_and_numeric_section():
     data = journal._empty()
     tag_s = journal.add_section(data, "people", "tag", "#fff")
@@ -331,6 +414,23 @@ def test_upsert_validates_date_and_title():
         journal.upsert_entry(data, "bad-date", "t", "", now=NOW)
     with pytest.raises(ValueError):
         journal.upsert_entry(data, "2026-06-15", "   ", "", now=NOW)
+
+
+def test_suggest_entry_title_uses_first_meaningful_sentence():
+    assert journal.suggest_entry_title(
+        "\n**A really good morning** with @alex. More text."
+    ) == "A really good morning with alex"
+
+
+def test_suggest_entry_title_cleans_task_syntax_and_truncates():
+    assert journal.suggest_entry_title("[] call mom >tomorrow") == "Call mom"
+    title = journal.suggest_entry_title("word " * 30)
+    assert len(title) <= 60
+    assert not title.endswith(" ")
+
+
+def test_suggest_entry_title_empty_body_is_empty():
+    assert journal.suggest_entry_title("   \n") == ""
 
 
 def test_upsert_cleans_tags_and_numbers():
@@ -480,6 +580,40 @@ def test_entry_dates_sorted_unique():
     journal.upsert_entry(data, "2026-06-13", "b", "", now=NOW)
     assert journal.entry_dates(data) == ["2026-06-13", "2026-06-15"]
     assert journal.entry_dates(journal._empty()) == []
+
+
+@pytest.mark.parametrize("title", ["", "   ", "2026-06-15"])
+def test_entry_dates_omit_empty_entries(title):
+    data = journal._empty()
+    data["entries"] = [{"date": "2026-06-15", "title": title,
+                        "body": " \n", "tags": {"people": []},
+                        "numbers": {}, "mood": None}]
+    assert journal.entry_dates(data) == []
+
+
+@pytest.mark.parametrize("content", [
+    {"title": "A day"}, {"body": "Something happened"},
+    {"audio_transcript": "A voice note"}, {"mood": 4},
+    {"tags": {"people": ["alex"]}}, {"numbers": {"hours": 0}},
+])
+def test_entry_dates_keep_entries_with_content(content):
+    data = journal._empty()
+    data["entries"] = [{"date": "2026-06-15", "title": "2026-06-15",
+                        "body": "", **content}]
+    assert journal.entry_dates(data) == ["2026-06-15"]
+
+
+@pytest.mark.parametrize("provider", ["sleep", "rescuetime", "music", "usage", "health"])
+def test_entry_dates_omit_imported_data_only(provider):
+    data = journal._empty()
+    section = journal.add_section(data, "auto hours", "numeric", "#123456",
+                                  managed=provider, metric="hours")
+    entry = journal.upsert_entry(data, "2026-06-15", "2026-06-15", "",
+                                 numbers={section["id"]: 7}, now=NOW)
+    entry[provider] = {"total": 420}
+    assert journal.entry_dates(data) == []
+    entry["body"] = "Wrote something"
+    assert journal.entry_dates(data) == ["2026-06-15"]
 
 
 # --------------------------------------------------------------------------- #
@@ -861,6 +995,33 @@ def test_tag_section_index_normalizes_names():
 # Rich entries: @mention extraction
 # --------------------------------------------------------------------------- #
 
+@pytest.mark.parametrize('body,expected', [
+    ('__@alex__', {'people':['alex']}),
+    ('word__@alex__', {'people':['alex']}),
+    ('__@alex', {}),
+    ('@__proto__', {'people':['__proto__']}),
+    ('é@alex 文字@alex a@alex', {}),
+])
+def test_capture_underlined_mentions_preserves_literal_names_and_boundaries(body, expected):
+    assert journal.extract_mentions(body, {'alex':'people','__proto__':'people'}) == expected
+
+
+@pytest.mark.parametrize('body,expected', [
+    ('__#weight 5__', {'weight':5}),
+    ('word__#weight 5__', {'weight':5}),
+    ('__#weight 5', {}),
+    ('#__proto__ 3', {'special':3}),
+    ('é#weight 5 文字#weight 6 a#weight 3', {}),
+])
+def test_capture_underlined_numbers_preserves_literal_names_and_boundaries(body, expected):
+    assert journal.extract_numbers(body, {'weight':'weight','__proto__':'special'}) == expected
+
+
+def test_spawned_tasks_inherit_the_same_underlined_mentions():
+    tasks = journal.extract_task_lines('[] Review __@alex__ and @__proto__', {'alex':'people','__proto__':'people'}, lambda *_: None)
+    assert tasks[0]['tags'] == ['alex','__proto__']
+
+
 def test_extract_mentions_matches_word_boundary():
     index = {"maya": "S1"}
     out = journal.extract_mentions("had lunch with @maya today", index)
@@ -903,6 +1064,12 @@ def test_extract_mentions_underscore_matches_multiword_tag():
     index = {"alex dad": "S1"}
     out = journal.extract_mentions("hung with @alex_dad today", index)
     assert out == {"S1": ["alex dad"]}
+
+
+def test_extract_mentions_period_and_underscore_match_tag():
+    index = {"id.me office": "S1"}
+    out = journal.extract_mentions("worked at @ID.me_Office today", index)
+    assert out == {"S1": ["id.me office"]}
 
 
 def test_extract_mentions_literal_underscore_tag_wins():
@@ -1389,6 +1556,13 @@ def _entry_music(date, minutes, tracks=10, valence=None, artists=None):
                       "tempo": None, "source": "spotify", "fetched": "x"}}
 
 
+def _rich_music_entry(date, **music):
+    base = {"tracks": 0, "minutes": 0, "source": "spotify", "fetched": "x"}
+    base.update(music)
+    return {"date": date, "tags": {}, "numbers": {}, "body": "", "mood": None,
+            "sleep": None, "rescuetime": None, "music": base}
+
+
 def test_set_entry_music_create_update_clear():
     data = journal._seeded()
     journal.set_entry_music(data, "2026-06-29", {"tracks": 10, "minutes": 40})
@@ -1404,6 +1578,27 @@ def test_music_minutes_series_sorted():
     entries = [_entry_music("2026-06-29", 40), _entry_music("2026-06-28", 90)]
     assert journal.music_minutes_series(entries) == [
         {"date": "2026-06-28", "minutes": 90}, {"date": "2026-06-29", "minutes": 40}]
+
+
+def test_entry_music_accepts_minutes_without_tracks_and_imported_plays():
+    entries = [
+        _rich_music_entry("2026-06-28", tracks=0, minutes=35),
+        _rich_music_entry("2026-06-29", history=[
+            {"master_metadata_track_name": "Song A",
+             "master_metadata_album_artist_name": "Artist A",
+             "master_metadata_album_album_name": "Album A",
+             "ms_played": 180000},
+        ], source="spotify_import"),
+    ]
+    assert journal.music_minutes_series(entries) == [
+        {"date": "2026-06-28", "minutes": 35},
+        {"date": "2026-06-29", "minutes": 3},
+    ]
+    assert journal.music_tracks_series(entries)[1] == {"date": "2026-06-29", "tracks": 1}
+    assert journal.music_top_tracks(entries)[0] == {
+        "name": "Song A", "artist": "Artist A", "count": 1}
+    assert journal.music_top_albums(entries)[0] == {
+        "name": "Album A", "artist": "Artist A", "count": 1}
 
 
 def test_music_top_artists_aggregated():
@@ -1429,7 +1624,82 @@ def test_music_feature_averages_skip_none():
 
 
 def test_music_stats_empty():
-    assert journal.music_stats([]) == {"avg_minutes": None, "total_tracks": 0, "days": 0}
+    assert journal.music_stats([]) == {
+        "avg_minutes": None,
+        "total_tracks": 0,
+        "days": 0,
+        "total_minutes": 0,
+        "avg_tracks": None,
+        "distinct_tracks": 0,
+        "imported_days": 0,
+        "sources": {},
+    }
+
+
+def test_music_top_tracks_and_albums_aggregate_and_filter_dates():
+    entries = [
+        _rich_music_entry("2026-06-28", top_tracks=[
+            {"name": "Song A", "artist": "Artist A", "count": 2},
+        ], top_albums=[
+            {"name": "Album A", "artist": "Artist A", "count": 1},
+        ]),
+        _rich_music_entry("2026-06-29", top_tracks=[
+            {"name": "Song A", "artist": "Artist A", "count": 3},
+            {"name": "Song B", "artist": "Artist B", "count": 1},
+        ], top_albums=[
+            {"name": "Album A", "artist": "Artist A", "count": 4},
+        ]),
+    ]
+    assert journal.music_top_tracks(entries, start="2026-06-29") == [
+        {"name": "Song A", "artist": "Artist A", "count": 3},
+        {"name": "Song B", "artist": "Artist B", "count": 1},
+    ]
+    assert journal.music_top_albums(entries) == [
+        {"name": "Album A", "artist": "Artist A", "count": 5},
+    ]
+
+
+def test_music_imported_source_stats_and_music_stats():
+    entries = [
+        _rich_music_entry("2026-06-28", tracks=4, minutes=20, distinct=3, source="spotify"),
+        _rich_music_entry("2026-06-29", plays=[
+            {"track_id": "a", "name": "Song A", "duration_ms": 120000},
+            {"track_id": "b", "name": "Song B", "duration_ms": 180000},
+        ], source="spotify_import"),
+    ]
+    assert journal.music_source_stats(entries) == {
+        "days": 2,
+        "imported_days": 1,
+        "sources": {"spotify": 1, "spotify_import": 1},
+    }
+    assert journal.music_stats(entries) == {
+        "avg_minutes": 12,
+        "total_tracks": 6,
+        "days": 2,
+        "total_minutes": 25,
+        "avg_tracks": 3,
+        "distinct_tracks": 5,
+        "imported_days": 1,
+        "sources": {"spotify": 1, "spotify_import": 1},
+    }
+
+
+def test_music_mood_minutes_tracks_pairs_and_contexts():
+    e1 = _rich_music_entry("2026-06-28", tracks=8, minutes=42, contexts=[
+        {"name": "commute", "minutes": 20},
+        {"name": "focus", "minutes": 22},
+    ])
+    e1["mood"] = 6
+    e2 = _rich_music_entry("2026-06-29", tracks=3, minutes=12, contexts=[
+        {"name": "commute", "minutes": 12},
+    ])
+    e2["mood"] = None
+    assert journal.music_mood_minutes_pairs([e1, e2]) == [{"minutes": 42, "mood": 6}]
+    assert journal.music_mood_tracks_pairs([e1, e2]) == [{"tracks": 8, "mood": 6}]
+    assert journal.music_listening_contexts([e1, e2]) == [
+        {"name": "commute", "minutes": 32, "count": 2},
+        {"name": "focus", "minutes": 22, "count": 1},
+    ]
 
 
 def test_load_defaults_music(tmp_path):

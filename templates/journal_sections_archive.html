@@ -3,9 +3,7 @@
   <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
        width="56" height="56" alt="pompompurin">
 {% endblock %}
-{% block brand_title %}
-  <span class="site-title">journal</span>
-{% endblock %}
+{% block brand_title %}{% endblock %}
 {% block nav %}
   <a href="{{ url_for('journal_today') }}">New entry</a>
   <a href="{{ url_for('journal_analytics') }}">Analytics</a>
@@ -17,7 +15,6 @@
     <h2>Archive</h2>
     <a class="archive-link back-link" href="{{ url_for('journal_sections') }}">← Manage</a>
   </div>
-  <p class="hint">Restore a section or tag to make it active again.</p>
 
   {% if archived_sections %}
     <h3>Archived sections</h3>
@@ -34,7 +31,7 @@
         <form method="post"
               action="{{ url_for('journal_section_restore', section_id=s.id) }}"
               style="margin-top: 0.5rem;">
-          <button type="submit" class="restore-btn">restore section</button>
+          <button type="submit" class="restore-btn" aria-label="Restore {{ s.name }} section">restore section</button>
         </form>
       </div>
     {% endfor %}
@@ -54,7 +51,7 @@
           {% for tag in s.archived_tags %}
             <span class="perm-chip archived-chip">{{ tag }}
               <button form="restore-tag-{{ s.id }}-{{ loop.index }}" type="submit"
-                      class="restore-x" title="Restore tag">↩</button>
+                      class="restore-x" aria-label="Restore {{ tag }} to {{ s.name }}" title="Restore tag">↩</button>
             </span>
             <form id="restore-tag-{{ s.id }}-{{ loop.index }}" method="post"
                   action="{{ url_for('journal_section_tag_restore', section_id=s.id, tag=tag) }}"></form>

@@ -3,9 +3,7 @@
   <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
        width="56" height="56" alt="pompompurin">
 {% endblock %}
-{% block brand_title %}
-  <span class="site-title">journal</span>
-{% endblock %}
+{% block brand_title %}{% endblock %}
 {% block nav %}
   <a href="{{ url_for('journal_today') }}">New entry</a>
   <a href="{{ url_for('journal_analytics') }}">Analytics</a>
@@ -22,15 +20,17 @@
       <a href="#sec-suggest">Suggestions</a>
       <a href="#sec-add">Add</a>
       <a href="#sec-integrations">Integrations</a>
+      <a href="{{ url_for('media_settings') }}">Photos & places</a>
     </nav>
     <a class="archive-link" href="{{ url_for('journal_sections_archive') }}">Archive</a>
   </div>
 
   {% macro render_section(s, temporary_tags) %}
     {% set fg = text_color_for(s.color) %}
-    <section class="manage-section" style="--tag-bg: {{ s.color }}; --tag-fg: {{ fg }};">
+    <section class="manage-section" aria-label="{{ s.name }} section" data-section="{{ s.id }}" data-section-name="{{ s.name }}" style="--tag-bg: {{ s.color }}; --tag-fg: {{ fg }};">
 
       <button type="button" class="configure-btn" data-section="{{ s.id }}" data-name="{{ s.name }}"
+              aria-label="Configure charts for {{ s.name }}"
               title="Choose which analytics charts include this section">
         <svg class="configure-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -42,8 +42,9 @@
 
       <form class="manage-head tag-preview-group" method="post" id="section-form-{{ s.id }}"
             action="{{ url_for('journal_section_edit', section_id=s.id) }}">
-        <input class="tag-name-input" type="text" name="name" value="{{ s.name }}" required>
-        <input class="tag-color-input" type="color" name="color" value="{{ s.color }}">
+        <input class="tag-name-input" type="text" name="name" value="{{ s.name }}" aria-label="Section name" required data-unique-section-name
+               pattern="[\p{L}\p{N} ._\-]*[\p{L}\p{N}._\-][\p{L}\p{N} ._\-]*" data-validation-message="use letters, numbers, spaces, . _ or -.">
+        <input class="tag-color-input" type="color" name="color" value="{{ s.color }}" aria-label="Color for {{ s.name }}">
         <span class="tag-preview title-highlight" style="--tag-bg: {{ s.color }};">{{ s.name }}</span>
         <span class="pill">{{ s.type }}</span>
         {% if s.managed %}
@@ -52,7 +53,7 @@
         {% endif %}
         {% if s.type == "numeric" %}
           <input class="unit-input" type="text" name="unit"
-                 value="{{ s.unit or '' }}" placeholder="unit label">
+                 value="{{ s.unit or '' }}" placeholder="unit label" aria-label="Unit for {{ s.name }}">
         {% endif %}
       </form>
 
@@ -67,7 +68,7 @@
               <span class="perm-chip" draggable="true"
                     data-tag="{{ tag }}" data-origin="permanent">{{ tag }}
                 <button form="rm-{{ s.id }}-{{ loop.index }}" type="submit"
-                        class="x" title="Remove from future entries (existing entries unaffected)">×</button>
+                        class="x" aria-label="Archive {{ tag }} from {{ s.name }}" title="Remove from future entries (existing entries unaffected)">×</button>
               </span>
               <form id="rm-{{ s.id }}-{{ loop.index }}" method="post"
                     action="{{ url_for('journal_section_tag_remove', section_id=s.id, tag=tag) }}"></form>
@@ -78,7 +79,8 @@
           </div>
           <form class="addrow" method="post"
                 action="{{ url_for('journal_section_tag_add', section_id=s.id) }}">
-            <input type="text" name="tag" placeholder="add permanent tag…" required>
+            <input type="text" name="tag" placeholder="add permanent tag…" aria-label="Add permanent tag to {{ s.name }}" required
+                   pattern="[\p{L}\p{N} ._\-]*[\p{L}\p{N}._\-][\p{L}\p{N} ._\-]*" data-validation-message="use letters, numbers, spaces, . _ or -.">
             <button type="submit">add</button>
           </form>
         </div>
@@ -91,7 +93,7 @@
               <span class="perm-chip temp-chip" draggable="true"
                     data-tag="{{ tag }}" data-origin="temporary">{{ tag }}
                 <button form="archtemp-{{ s.id }}-{{ loop.index }}" type="submit"
-                        class="x" title="Archive this tag (drag up to make it permanent)">×</button>
+                        class="x" aria-label="Archive {{ tag }} from {{ s.name }}" title="Archive this tag (drag up to make it permanent)">×</button>
               </span>
               <form id="archtemp-{{ s.id }}-{{ loop.index }}" method="post"
                     action="{{ url_for('journal_section_tag_archive_temp', section_id=s.id, tag=tag) }}"></form>
@@ -107,12 +109,13 @@
         <form class="delete-section" method="post"
               action="{{ url_for('journal_section_delete', section_id=s.id) }}">
           <button type="submit" class="delete"
+                  aria-label="Archive {{ s.name }} section"
                   data-confirm="Archive this section? Existing entries keep their data."
                   data-confirm-label="Archive">
             archive section
           </button>
         </form>
-        <button type="submit" form="section-form-{{ s.id }}">save</button>
+        <button type="submit" form="section-form-{{ s.id }}" aria-label="Save {{ s.name }} section">save</button>
       </div>
 
     </section>
@@ -139,20 +142,19 @@
   <h3 id="sec-add" class="manage-subhead">Add a section</h3>
   <form class="addrow tag-preview-group" method="post"
         action="{{ url_for('journal_sections_add') }}">
-    <input class="tag-name-input" type="text" name="name" placeholder="section name" required>
+    <input class="tag-name-input" type="text" name="name" placeholder="section name" aria-label="Section name" required data-unique-section-name
+           pattern="[\p{L}\p{N} ._\-]*[\p{L}\p{N}._\-][\p{L}\p{N} ._\-]*" data-validation-message="use letters, numbers, spaces, . _ or -.">
     <select name="type">
       <option value="tag">tag</option>
       <option value="numeric">numeric</option>
     </select>
-    <input class="tag-color-input" type="color" name="color" value="#e0a955">
+    <input class="tag-color-input" type="color" name="color" value="#e0a955" aria-label="New section color">
     <span class="tag-preview title-highlight" style="--tag-bg: #e0a955;">preview</span>
     <input class="unit-input" type="text" name="unit" placeholder="unit (numeric only)">
     <button type="submit">+ add section</button>
   </form>
 
   <h3 id="sec-integrations" class="manage-subhead">Integrations</h3>
-  <p class="muted">Connect a tracker or service to auto-fill each journal day.
-    See the README for per-service setup steps.</p>
   {% include "_integrations_cards.html" %}
 
   <script type="application/json" id="section-chart-opts-data">{{ chart_options | tojson }}</script>

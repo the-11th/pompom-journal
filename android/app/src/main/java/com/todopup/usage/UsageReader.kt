@@ -22,7 +22,9 @@ data class DayUsage(
     val unlocks: Int,
     val topApps: List<AppUsage>,
     val firstUse: String?,          // HH:MM local, or null
-    val lastUse: String?            // HH:MM local, or null
+    val lastUse: String?,           // HH:MM local, or null
+    val detailsAvailable: Boolean = true,
+    val recovered: Boolean = false
 )
 
 /**
@@ -35,17 +37,36 @@ class UsageReader(private val context: Context) {
     private val usm: UsageStatsManager =
         context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-    /** The last [count] *full* days ending yesterday (per Decision 8: 3). */
+    /** The last [count] *full* days ending yesterday. */
     fun readLastDays(count: Int = 3, now: Instant = Instant.now(),
                      zone: ZoneId = ZoneId.systemDefault()): List<DayUsage> =
         Dates.lastFullDays(now, count, zone).map { readDay(it, zone) }
 
+    /** Recover only retained DAILY intervals; never expand weekly/monthly totals into days. */
+    fun readAvailableDays(now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()): List<DayUsage> {
+        val today = now.atZone(zone).toLocalDate()
+        val retained = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, 0, now.toEpochMilli())
+            ?: throw IllegalStateException("Unlock the phone before collecting usage")
+        return retained.filter {
+            it.lastTimeStamp >= it.firstTimeStamp &&
+                it.lastTimeStamp - it.firstTimeStamp <= 27 * 60 * 60 * 1000L
+        }.mapNotNull { stats ->
+            UsageHistoryPolicy.completedDay(stats.firstTimeStamp, now, zone)?.let { it to stats }
+        }.groupBy({ it.first }, { it.second }).toSortedMap().map { (date, stats) ->
+            val minutes = stats.distinctBy { it.firstTimeStamp to it.packageName }.groupBy { it.packageName }
+                .mapValues { (_, rows) -> rows.sumOf { it.totalTimeInForeground } }
+            readDay(date, zone, minutes).copy(recovered = date < today.minusDays(2))
+        }
+    }
+
     /** Read a single local day. */
-    fun readDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault()): DayUsage {
+    fun readDay(day: LocalDate, zone: ZoneId = ZoneId.systemDefault(),
+                dailyMinutes: Map<String, Long>? = null): DayUsage {
         val (start, end) = Dates.dayBounds(day, zone)
 
         // Foreground time per package.
-        val agg = usm.queryAndAggregateUsageStats(start, end)
+        val agg = dailyMinutes ?: usm.queryAndAggregateUsageStats(start, end)
+            .mapValues { it.value.totalTimeInForeground }
 
         // Unlocks + first/last use + per-app opens from the event stream.
         var unlocks = 0
@@ -53,9 +74,12 @@ class UsageReader(private val context: Context) {
         var lastMs = Long.MIN_VALUE
         val opensByPkg = HashMap<String, Int>()   // per-package foreground launches
         val events = usm.queryEvents(start, end)
+            ?: throw IllegalStateException("Unlock the phone before collecting usage")
+        var eventCount = 0
         val e = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(e)
+            eventCount++
             when (e.eventType) {
                 UsageEvents.Event.KEYGUARD_HIDDEN -> unlocks++
                 UsageEvents.Event.ACTIVITY_RESUMED,
@@ -71,8 +95,8 @@ class UsageReader(private val context: Context) {
 
         // Merge foreground minutes with the opens tally (an app with minutes but
         // no resume event -> opens 0).
-        val apps = agg.entries.mapNotNull { (pkg, stats) ->
-            val minutes = (stats.totalTimeInForeground / 60000L).toInt()
+        val apps = agg.entries.mapNotNull { (pkg, foregroundMs) ->
+            val minutes = (foregroundMs / 60000L).toInt()
             if (minutes <= 0) null
             else AppUsage(pkg, labelFor(pkg), minutes, opensByPkg[pkg] ?: 0)
         }
@@ -84,7 +108,7 @@ class UsageReader(private val context: Context) {
             firstUseMs = if (firstMs == Long.MAX_VALUE) null else firstMs,
             lastUseMs = if (lastMs == Long.MIN_VALUE) null else lastMs,
             zone = zone
-        )
+        ).copy(detailsAvailable = eventCount > 0)
     }
 
     private fun labelFor(pkg: String): String = try {
@@ -117,7 +141,7 @@ class UsageReader(private val context: Context) {
 
         fun build(date: String, apps: List<AppUsage>, unlocks: Int,
                   firstUseMs: Long?, lastUseMs: Long?, zone: ZoneId): DayUsage {
-            val sorted = apps.sortedByDescending { it.min }
+            val sorted = apps.sortedWith(compareByDescending<AppUsage> { it.min }.thenBy { it.name })
             val screen = sorted.sumOf { it.min }
             return DayUsage(
                 date = date,

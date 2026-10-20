@@ -6,22 +6,31 @@ Post/Redirect/Get pattern so a browser refresh never re-submits a form.
 """
 
 import os
+import json
 import secrets
 import signal
 import threading
 import time
+from contextlib import nullcontext
+from copy import deepcopy
 from datetime import datetime, timedelta
+from functools import wraps
+from urllib.parse import urlencode
 
 from flask import (Flask, flash, jsonify, redirect, render_template, request,
-                   session, url_for)
+                   session, url_for, g)
 
-import google_health
-import integrations
+from integrations import google_health
+from integrations import health
+from integrations import store as integrations
 import journal
-import rescuetime
-import spotify
+from integrations import music_history
+import places
+from integrations import provider_sync
+from integrations import rescuetime
+from integrations import spotify
 import todo
-import usage
+from integrations import usage
 
 app = Flask(__name__)
 
@@ -60,6 +69,80 @@ app.config["INTEGRATIONS_FILE"] = os.path.join(
 
 def integrations_file():
     return app.config["INTEGRATIONS_FILE"]
+
+
+_mobile_lock = threading.RLock()
+_provider_sync_locks = {name: threading.RLock() for name in ('google', 'rescuetime', 'spotify')}
+
+
+@app.before_request
+def _serialize_store_transactions():
+    # Old form routes, integrations, and new autosaves must share a transaction
+    # boundary. Atomic replacement alone cannot prevent a lost update between
+    # concurrent load/modify/save sequences. Binary streams and the independently
+    # locked Discord pull do not hold up journal work.
+    if request.endpoint in {'static', 'heartbeat', 'quit', 'media_file_web',
+                            'media_file_mobile', 'media_map_file', 'mobile_map_file',
+                            'discord_pull', 'google_sync_route', 'rescuetime_sync_route', 'spotify_sync_route',
+                            'spotify_analytics', 'rescuetime_detail'}:
+        return
+    _mobile_lock.acquire()
+    g.datapom_store_locked = True
+
+
+@app.teardown_request
+def _release_store_transaction(error=None):
+    if g.pop('datapom_store_locked', False):
+        _mobile_lock.release()
+
+
+
+def _mobile_error(code, message, status=400, **extra):
+    body = {"ok": False, "error": {"code": code, "message": message}, **extra}
+    return jsonify(body), status
+
+
+def _mobile_authenticated(view):
+    """Authenticate a distinct per-device mobile bearer token."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        # Waitress is threaded. Keep each authenticated mobile request's auth,
+        # idempotency receipt, and JSON load-modify-save sequence ordered so two
+        # WorkManager retries cannot race one another inside this process.
+        with _mobile_lock:
+            header = request.headers.get("Authorization", "")
+            token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+            store = integrations.load(integrations_file())
+            device = integrations.authenticate_mobile_device(store, token) if token else None
+            if device is None:
+                return _mobile_error("unauthorized", "A valid mobile device token is required", 401)
+            integrations.save(integrations_file(), store)
+            return view(device, *args, **kwargs)
+    return wrapped
+
+
+def _mobile_payload():
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else None
+
+
+def _mobile_cached(device, payload):
+    request_id = payload.get("request_id") if payload else None
+    if not isinstance(request_id, str) or not request_id.strip():
+        return None, _mobile_error(
+            "validation_error", "request_id is required for mobile writes", 400)
+    store = integrations.load(integrations_file())
+    receipt = integrations.mobile_request_receipt(store, device["id"], request_id)
+    if receipt:
+        return request_id, (jsonify(receipt["body"]), receipt["status"])
+    return request_id, None
+
+
+def _mobile_remember(device, request_id, status, body):
+    store = integrations.load(integrations_file())
+    integrations.remember_mobile_request(
+        store, device["id"], request_id, status, body)
+    integrations.save(integrations_file(), store)
 
 
 # Local single-user dev app: pick up template edits without restarting the
@@ -221,7 +304,7 @@ app.jinja_env.globals["is_registered_tag"] = journal.is_registered_tag
 @app.context_processor
 def inject_section_context():
     endpoint = request.endpoint or ""
-    return {"in_journal": endpoint.startswith("journal")}
+    return {"in_journal": endpoint.startswith("journal") or request.path.startswith("/journal/")}
 
 
 @app.route("/heartbeat")
@@ -276,6 +359,7 @@ def index():
     return render_template(
         "active.html",
         tasks=tasks,
+        completed=todo.filter_by_tags(data["archive"], selected),
         expired=data.get("expired", []),
         all_tags=data.get("tags", {}),
         selected_tags=selected,
@@ -338,7 +422,7 @@ def refresh():
     data = todo.load(data_file())
     todo.refresh(data, completed_ids, difficulties=difficulties)
     todo.save(data_file(), data)
-    return redirect(url_for("index"))
+    return _task_page_redirect(data)
 
 
 @app.route("/delete/<task_id>", methods=["POST"])
@@ -373,7 +457,26 @@ def set_task_difficulty(task_id):
     data = todo.load(data_file())
     todo.set_difficulty(data, task_id, request.form.get("difficulty", ""))
     todo.save(data_file(), data)
-    return redirect(url_for("archive"))
+    return _task_page_redirect(data, default="archive", history=True)
+
+
+def _task_page_redirect(data, default="index", history=False):
+    """Allowlisted task destination and known filter values after a form POST."""
+    endpoint = "index" if request.form.get("return_to") == "tasks" else default
+    selected = [name for name in _selected_tags(request.form.get("tags"))
+                if name in data.get("tags", {})]
+    values = {"tags": ",".join(selected)} if selected else {}
+    if history and endpoint == "index":
+        values["_anchor"] = "completed-tasks"
+    return redirect(url_for(endpoint, **values))
+
+
+@app.route("/task/<task_id>/reopen", methods=["POST"])
+def reopen_task(task_id):
+    data = todo.load(data_file())
+    todo.reopen_task(data, task_id)
+    todo.save(data_file(), data)
+    return _task_page_redirect(data)
 
 
 # --------------------------------------------------------------------------- #
@@ -391,7 +494,10 @@ def task_notes(task_id):
     data = todo.load(data_file())
     if _find_active(data, task_id) is None:
         return jsonify({"error": "unknown task"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     todo.set_task_notes(data, task_id, text)
     todo.save(data_file(), data)
     return jsonify({"notes": _find_active(data, task_id)["notes"]})
@@ -402,7 +508,10 @@ def task_add_subtask(task_id):
     data = todo.load(data_file())
     if _find_active(data, task_id) is None:
         return jsonify({"error": "unknown task"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     try:
         todo.add_subtask(data, task_id, text)
     except ValueError:
@@ -432,7 +541,10 @@ def task_edit_subtask(task_id, index):
         return jsonify({"error": "unknown task"}), 404
     if not (0 <= index < len(task.get("subtasks") or [])):
         return jsonify({"error": "subtask index out of range"}), 404
-    text = (request.get_json(silent=True) or {}).get("text", "")
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("text"), str):
+        return jsonify(error="Text must be a string"), 400
+    text = body["text"]
     try:
         todo.edit_subtask(data, task_id, index, text)
     except ValueError:
@@ -460,13 +572,11 @@ def task_reorder_subtask(task_id):
     task = _find_active(data, task_id)
     if task is None:
         return jsonify({"error": "unknown task"}), 404
-    body = request.get_json(silent=True) or {}
+    body = request.get_json(silent=True)
     n = len(task.get("subtasks") or [])
-    try:
-        from_index = int(body.get("from"))
-        to_index = int(body.get("to"))
-    except (TypeError, ValueError):
+    if not isinstance(body, dict) or any(type(body.get(field)) is not int for field in ("from", "to")):
         return jsonify({"error": "invalid indices"}), 400
+    from_index, to_index = body["from"], body["to"]
     if not (0 <= from_index < n and 0 <= to_index < n):
         return jsonify({"error": "subtask index out of range"}), 404
     todo.reorder_subtask(data, task_id, from_index, to_index)
@@ -514,9 +624,26 @@ def _mention_index(data):
     """{name: {"section_id": ..., "color": ...}} for client-side mention
     coloring. Built from journal.tag_section_index + each section's color."""
     return {
-        name: {"section_id": sid, "color": journal.section_color(data, sid)}
+        name: {"section_id": sid, "color": journal.section_color(data, sid),
+               "section_name": (journal.section_by_id(data, sid) or {}).get("name", "")}
         for name, sid in journal.tag_section_index(data).items()
     }
+
+
+def _tag_voice_catalog(data):
+    """Flat active tag catalog for offline voice-command matching."""
+    out = []
+    temporary = journal.temporary_tags(data)
+    for section in journal.active_sections(data):
+        if section.get("type") != "tag":
+            continue
+        for name in section.get("tags", []):
+            out.append({"name": name, "section_id": section["id"],
+                        "section_name": section["name"]})
+        for name in temporary.get(section["id"], []):
+            out.append({"name": name, "section_id": section["id"],
+                        "section_name": section["name"]})
+    return out
 
 
 def _numeric_index(data):
@@ -543,20 +670,7 @@ def _task_ref_index(entry):
     ids = journal.linked_task_ids((entry or {}).get("body", ""))
     if not ids:
         return {}
-    tdata = todo.load(data_file())
-    by_id = {}
-    for t in tdata.get("active", []):
-        by_id[t.get("id")] = ("active", False, t)
-    for t in tdata.get("archive", []):
-        by_id[t.get("id")] = ("done", True, t)
-    for t in tdata.get("expired", []):
-        by_id[t.get("id")] = ("expired", False, t)
-    out = {}
-    for tid in ids:
-        status, done, t = by_id.get(tid, ("missing", False, None))
-        out[tid] = {"done": done, "status": status,
-                    "title": (t or {}).get("title", "")}
-    return out
+    return todo.task_ref_index(todo.load(data_file()), ids)
 
 
 def _render_entry(data, date):
@@ -565,9 +679,12 @@ def _render_entry(data, date):
     return render_template(
         "journal_entry.html", data=data,
         entry=entry,
+        entry_edit_revision=journal.edit_revision(data, entry),
         date=date, sections=journal.active_sections(data),
-        entry_dates=journal.entry_dates(data),
+        entry_dates=journal.calendar_dates(data),
+        occupied_dates=journal.stored_entry_dates(data),
         mention_index=_mention_index(data),
+        tag_voice_catalog=_tag_voice_catalog(data),
         numeric_index=_numeric_index(data),
         task_ref_index=_task_ref_index(entry),
         google_connected=integrations.is_connected(istore, "google"),
@@ -581,6 +698,8 @@ def _render_entry(data, date):
         music=(entry or {}).get("music"),
         phone_connected=integrations.is_connected(istore, "phone"),
         usage=(entry or {}).get("usage"),
+        health_connected=integrations.is_connected(istore, "health"),
+        health=(entry or {}).get("health"),
     )
 
 
@@ -612,12 +731,11 @@ def journal_analytics_data():
     on window focus; the client filters by date and renders."""
     payload = journal.analytics_payload(journal.load(journal_file()))
     payload["tasks"] = todo.task_payload(todo.load(data_file()))
-    # Widen the shared date range so the date filter spans both domains.
-    jr, tr = payload["date_range"], payload["tasks"]["date_range"]
-    mins = [d for d in (jr.get("min"), tr.get("min")) if d]
-    maxs = [d for d in (jr.get("max"), tr.get("max")) if d]
-    payload["date_range"] = {"min": min(mins) if mins else None,
-                             "max": max(maxs) if maxs else None}
+    payload["rescuetime_connected"] = integrations.is_connected(integrations.load(integrations_file()), "rescuetime")
+    payload["date_range"] = journal.analytics_date_range(
+        payload["date_range"], payload["tasks"]["date_range"],
+        places.manifest(os.path.join(os.path.dirname(journal_file()), "tracking"), skip_invalid=True),
+    )
     return jsonify(payload)
 
 
@@ -703,9 +821,6 @@ def journal_save():
     if not journal._valid_date(date):
         flash("Could not save entry: please pick a valid date.")
         return redirect(url_for("journal_today"))
-    if not title.strip():
-        flash("Could not save entry: a title is required.")
-        return redirect(url_for("journal_entry", date=date))
     mood_raw = request.form.get("mood", "").strip()
     mood = mood_raw or None   # "" -> None; otherwise let upsert_entry validate
     data = journal.load(journal_file())
@@ -737,6 +852,15 @@ def journal_save():
         body_numbers = journal.extract_numbers(body, nidx)
         for sid, val in body_numbers.items():
             base_numbers.setdefault(sid, val)   # explicit field value wins
+        title = title.strip()
+        if not title:
+            if existing is not None:
+                title = existing.get("title") or date
+            elif base_tags or base_numbers or mood is not None:
+                title = date
+            else:
+                flash("Could not save entry: a title is required.")
+                return redirect(url_for("journal_entry", date=date))
         # Inline [] task spawning: each fresh `[]` line becomes an active task,
         # then its marker is rewritten to a linked [task:<id>] token so it never
         # re-spawns. The line's @mentions tag the task too (unified by name).
@@ -763,7 +887,7 @@ def journal_save():
         flash("Could not save entry: check the date, title, tags, and numbers.")
         return redirect(url_for("journal_entry", date=date) if journal._valid_date(date)
                         else url_for("journal_today"))
-    return redirect(url_for("journal_entry", date=date))
+    return redirect(url_for("journal_entry", date=date, saved=1))
 
 
 @app.route("/journal/entry/<entry_id>/move", methods=["POST"])
@@ -954,67 +1078,46 @@ def journal_section_tag_archive_temp(section_id, tag):
 
 
 def _recent_dates(days, now=None):
-    today = (now or datetime.now()).date()
-    return [(today - timedelta(days=i)).isoformat() for i in range(days)]
+    return integrations.sync_dates(days, now=now)
+
+
+def _run_provider_sync(provider, fetch, **kwargs):
+    # Sync routes fetch outside the shared store lock. Legacy OAuth callbacks
+    # already hold that lock, so they must not acquire locks in reverse order.
+    provider_lock = nullcontext() if g.get('datapom_store_locked', False) else _provider_sync_locks[provider]
+    with provider_lock:
+        with _mobile_lock:
+            initial_integrations = integrations.load(integrations_file())
+            initial_journal = journal.load(journal_file())
+        fetched_integrations = deepcopy(initial_integrations)
+        fetched_journal = deepcopy(initial_journal)
+        result = fetch(fetched_integrations, fetched_journal, **kwargs)
+        if not result['connected']:
+            return result
+        with _mobile_lock:
+            current_integrations = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial_integrations, current_integrations, provider):
+                return {'connected': integrations.is_connected(current_integrations, provider),
+                        'synced': [], 'errors': ['Connection changed during sync. Run sync again.']}
+            current_journal = journal.load(journal_file())
+            result = provider_sync.reconcile(provider, initial_integrations, fetched_integrations,
+                current_integrations, initial_journal, fetched_journal, current_journal, result, now=kwargs.get('now'))
+            journal.save(journal_file(), current_journal)
+            integrations.save(integrations_file(), current_integrations)
+        return result
 
 
 def _google_sync(days=7, force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "google"):
-        return {"connected": False, "synced": [], "errors": []}
-    gh = integrations.get_provider(istore, "google")
-    tokens = gh["tokens"]
-    cid, csecret = gh.get("client_id"), gh.get("client_secret")
-
-    if google_health.token_expired(tokens) and tokens.get("refresh_token") and cid:
-        try:
-            tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
-            integrations.set_tokens(istore, "google", tokens)
-        except Exception:  # noqa: BLE001
-            pass
-
-    jdata = journal.load(journal_file())
-    # Backfill managed sleep-metric numeric sections from already-synced days
-    # (the per-date `entry.sleep` guard below skips them). Idempotent — no
-    # timestamp churn on repeated syncs. The single save at the end persists it.
-    for entry in jdata.get("entries", []):
-        if entry.get("sleep"):
-            journal.apply_sleep_metrics(jdata, entry["date"], entry["sleep"])
-    synced, errors = [], []
-    for date in _recent_dates(days, now=now):
-        existing = journal.get_entry_by_date(jdata, date)
-        if not force and existing is not None and existing.get("sleep"):
-            continue
-        try:
-            try:
-                raw = google_health.fetch_sleep(tokens["access_token"], date)
-            except PermissionError:
-                if cid and tokens.get("refresh_token"):
-                    tokens = google_health.refresh_tokens(cid, csecret, tokens["refresh_token"], prev=tokens)
-                    integrations.set_tokens(istore, "google", tokens)
-                    raw = google_health.fetch_sleep(tokens["access_token"], date)
-                else:
-                    raise
-            sleep = google_health.parse_sleep(raw)
-            if sleep:
-                journal.set_entry_sleep(jdata, date, sleep)
-                journal.apply_sleep_metrics(jdata, date, sleep)
-                synced.append(date)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{date}: {exc}")
-
-    journal.save(journal_file(), jdata)
-    integrations.set_last_sync(istore, "google",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
+    return _run_provider_sync("google", provider_sync.google_sync, days=days, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/google/sync", methods=["POST"])
 def google_sync_route():
     days = request.args.get("days", type=int) or 7
     focus = request.args.get("date")
-    result = _google_sync(days=days, focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _google_sync(days=days, focus_date=focus, force=request.args.get("force") == "1")
     sleep = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
@@ -1049,22 +1152,272 @@ def _integrations_context():
         phone_last_sync=integrations.last_sync(data, "phone"),
         phone_endpoint=_phone_endpoint(),
         phone_apk_url=PHONE_APK_URL,
-        # Revealed exactly once, right after generation (never read from storage).
-        phone_token=session.pop("phone_token_once", None),
+        health_connected=integrations.is_connected(data, "health"),
+        health_last_sync=integrations.last_sync(data, "health"),
+        health_endpoint=_health_endpoint(),
+        mobile_devices=integrations.mobile_devices(data),
+        health_token=session.pop("health_token_once", None),
     )
 
 
-# Always-latest debug APK, published by .github/workflows/android.yml as a
-# GitHub Release asset named phone-usage.apk. Reachable from the phone anywhere.
+# Always-latest Datapom APK. Keep the legacy download alias so this also works
+# with releases published before the workflow introduced datapom.apk.
 PHONE_APK_URL = (
-    "https://github.com/jxi-idme/todo-cli/releases/latest/download/phone-usage.apk"
+    "https://github.com/the-11th/pompom-journal/releases/latest/download/phone-usage.apk"
 )
 
 
 def _phone_endpoint():
-    """This request's origin + the ingest path, for display in the card and the
-    phone's config."""
-    return request.host_url.rstrip("/") + url_for("phone_ingest")
+    """USB-loopback ingest endpoint configured by the Mac helper."""
+    return "http://127.0.0.1:5001" + url_for("phone_ingest")
+
+
+def _health_endpoint():
+    return "http://127.0.0.1:5001" + url_for("health_ingest")
+
+
+# Android journal/task API ------------------------------------------------- #
+
+@app.route("/integrations/mobile/usb", methods=["POST"])
+def mobile_usb_provision():
+    # The USB helper shares this local server's trust boundary and transaction
+    # lock. Forwarded headers cannot grant access to a remote requester.
+    origin = request.headers.get("Origin")
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if (request.remote_addr not in {"127.0.0.1", "::1"}
+            or (origin is not None and origin != request.host_url.rstrip("/"))
+            or (fetch_site is not None and fetch_site not in {"same-origin", "none"})):
+        response = jsonify(ok=False, message="USB setup requires a local request")
+        response.status_code = 403
+    else:
+        payload = request.get_json(silent=True) if request.is_json else None
+        if not isinstance(payload, dict):
+            response = jsonify(ok=False, message="Expected a JSON object")
+            response.status_code = 400
+        else:
+            data = integrations.load(integrations_file())
+            before = deepcopy(data)
+            try:
+                result = integrations.provision_usb(data, payload.get("token", ""))
+            except ValueError as exc:
+                response = jsonify(ok=False, message=str(exc))
+                response.status_code = 400
+            else:
+                if data != before:
+                    integrations.save(integrations_file(), data)
+                response = jsonify(ok=True, **result)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/integrations/mobile/devices/<device_id>/revoke", methods=["POST"])
+def mobile_device_revoke(device_id):
+    data = integrations.load(integrations_file())
+    integrations.revoke_mobile_device(data, device_id)
+    integrations.save(integrations_file(), data)
+    return redirect(url_for("journal_sections") + "#sec-integrations")
+
+
+@app.route("/api/mobile/config")
+@_mobile_authenticated
+def mobile_config(device):
+    jdata = journal.load(journal_file())
+    tdata = todo.load(data_file())
+    mention_tags = {}
+    for name, section_id in journal.tag_section_index(jdata).items():
+        mention_tags.setdefault(section_id, []).append(name)
+    sections = []
+    for section in journal.active_sections(jdata):
+        item = {key: section.get(key) for key in (
+            "id", "name", "type", "color", "tags", "archived_tags", "unit", "managed", "metric")}
+        item["mention_tags"] = mention_tags.get(section.get("id"), [])
+        sections.append(item)
+    return jsonify({
+        "ok": True, "device": device, "mood_scale": {"min": 1, "max": 7},
+        "sections": sections, "task_tags": tdata.get("tags", {}),
+        "entry_dates": journal.entry_dates(jdata),
+        "stored_entry_dates": journal.stored_entry_dates(jdata),
+        "empty_edit_revision": journal.edit_revision(jdata, None),
+        "calendar_dates": journal.calendar_dates(jdata),
+        "capabilities": ["journal", "tags", "numbers", "audio_transcript", "tasks", "journal_tag_archive"],
+    })
+
+
+@app.route("/api/mobile/journal/<date>", methods=["GET", "PUT"])
+@_mobile_authenticated
+def mobile_journal(device, date):
+    if not journal._valid_date(date):
+        return _mobile_error("validation_error", "date must be YYYY-MM-DD", 400)
+    data = journal.load(journal_file())
+    if request.method == "GET":
+        return jsonify({"ok": True, "entry": journal.entry_view(data, journal.get_entry_by_date(data, date))})
+
+    payload = _mobile_payload()
+    if payload is None:
+        return _mobile_error("invalid_json", "A JSON object is required", 400)
+    request_id, cached = _mobile_cached(device, payload)
+    if cached:
+        return cached
+    previous = journal.get_entry_by_date(data, date)
+    previous_updated = previous.get("updated") if previous else None
+    try:
+        import journal_commands
+        import journal_media
+        from pathlib import Path
+        media_data = journal_media.load(Path(journal_file()).parent / "media.json")
+        if payload.get("autosave"):
+            entry = journal.autosave_entry(data, date, payload, media_data)
+        else:
+            task_data = todo.load(data_file())
+            entry = journal_commands.commit(data, task_data, date, payload, media_data)
+            todo.save(data_file(), task_data)
+        if not payload.get("autosave") or (entry and entry.get("updated") != previous_updated):
+            journal.save(journal_file(), data)
+    except journal.EntryConflictError as exc:
+        body = {"ok": False, "error": {
+            "code": "conflict", "message": "Entry changed since it was loaded"},
+            "current": journal.entry_view(data, exc.current)}
+        _mobile_remember(device, request_id, 409, body)
+        return jsonify(body), 409
+    except (TypeError, ValueError) as exc:
+        return _mobile_error("validation_error", str(exc), 400)
+    body = {"ok": True, "entry": journal.entry_view(data, entry)}
+    _mobile_remember(device, request_id, 200, body)
+    return jsonify(body)
+
+
+@app.route("/api/mobile/tags", methods=["POST"])
+@app.route("/api/mobile/tags/archive", methods=["POST"], defaults={"tag_action": "archive"})
+@app.route("/api/mobile/tags/restore-temporary", methods=["POST"], defaults={"tag_action": "restore_temporary"})
+@_mobile_authenticated
+def mobile_tag_add(device, tag_action=None):
+    payload = _mobile_payload()
+    if payload is None:
+        return _mobile_error("invalid_json", "A JSON object is required", 400)
+    request_id, cached = _mobile_cached(device, payload)
+    if cached:
+        return cached
+    try:
+        domain = payload.get("domain", "journal")
+        action = tag_action or payload.get("action", "add")
+        if tag_action and payload.get("action", tag_action) != tag_action:
+            raise ValueError("Tag action does not match the requested endpoint")
+        if domain not in ("journal", "task"):
+            raise ValueError("Choose the journal or task tag domain")
+        if domain == "task":
+            if action != "add":
+                raise ValueError("Only journal tags support archive or temporary restore")
+            data = todo.load(data_file())
+            todo.set_tag_color(data, payload.get("name"), payload.get("color"))
+            todo.save(data_file(), data)
+            tag = {"name": payload.get("name", "").strip().lower(),
+                   "color": payload.get("color")}
+        else:
+            data = journal.load(journal_file())
+            tag = journal.mutate_mobile_tag(data, payload.get("section_id"), payload.get("name"), action)
+            journal.save(journal_file(), data)
+    except (TypeError, ValueError) as exc:
+        return _mobile_error("validation_error", str(exc), 400)
+    body = {"ok": True, "tag": tag}
+    status = 201 if action == "add" else 200
+    _mobile_remember(device, request_id, status, body)
+    return jsonify(body), status
+
+
+@app.route("/api/mobile/tasks", methods=["GET", "POST"])
+@_mobile_authenticated
+def mobile_tasks(device):
+    data = todo.load(data_file())
+    if request.method == "GET":
+        return jsonify({"ok": True, "tasks": todo.mobile_tasks(data)})
+    payload = _mobile_payload()
+    if payload is None:
+        return _mobile_error("invalid_json", "A JSON object is required", 400)
+    request_id, cached = _mobile_cached(device, payload)
+    if cached:
+        return cached
+    try:
+        todo.add_task(data, payload.get("title"), due=payload.get("due"),
+                      recurrence=payload.get("recurrence"), tags=payload.get("tags"),
+                      task_id=payload.get("client_id"))
+        task = data["active"][-1]
+        todo.set_task_notes(data, task["id"], payload.get("notes", ""))
+        if "subtasks" in payload:
+            todo.replace_subtasks(data, task["id"], payload.get("subtasks"))
+        if payload.get("done") is True:
+            todo.refresh(data, [task["id"]], difficulties={
+                task["id"]: payload.get("difficulty")})
+        todo.save(data_file(), data)
+    except todo.TaskIdConflictError as exc:
+        return _mobile_error("id_conflict", str(exc), 409,
+                             current=todo.mobile_task_view(data, payload.get("client_id")))
+    except (TypeError, ValueError) as exc:
+        return _mobile_error("validation_error", str(exc), 400)
+    body = {"ok": True, "task": todo.mobile_task_view(data, task["id"])}
+    _mobile_remember(device, request_id, 201, body)
+    return jsonify(body), 201
+
+
+@app.route("/api/mobile/tasks/<task_id>", methods=["PATCH", "DELETE"])
+@_mobile_authenticated
+def mobile_task(device, task_id):
+    payload = _mobile_payload()
+    if payload is None:
+        return _mobile_error("invalid_json", "A JSON object is required", 400)
+    request_id, cached = _mobile_cached(device, payload)
+    if cached:
+        return cached
+    data = todo.load(data_file())
+    current, status = todo.task_by_id(data, task_id)
+    try:
+        if "base" in payload:
+            todo.validate_mobile_task_base(data, task_id, payload["base"],
+                                           None if request.method == "DELETE" else payload)
+        if current is None:
+            return _mobile_error("not_found", "Task was not found", 404)
+        if request.method == "DELETE":
+            todo.delete_task(data, task_id)
+            task_view = None
+        else:
+            if payload.get("done") is False and status == "completed":
+                todo.reopen_task(data, task_id)
+                current, status = todo.task_by_id(data, task_id)
+            editable = any(key in payload for key in (
+                "title", "due", "recurrence", "tags"))
+            if editable:
+                if status != "active":
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
+                todo.edit_task(
+                    data, task_id, payload.get("title", current.get("title")),
+                    due=payload.get("due", current.get("due")),
+                    recurrence=payload.get("recurrence", current.get("recurrence")),
+                    tags=payload.get("tags", current.get("tags")))
+            if "notes" in payload:
+                if status != "active":
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
+                todo.set_task_notes(data, task_id, payload.get("notes"))
+            if "subtasks" in payload:
+                if status != "active":
+                    return _mobile_error("conflict", "Only active tasks can be edited", 409,
+                                         current=todo.mobile_task_view(data, task_id))
+                todo.replace_subtasks(data, task_id, payload.get("subtasks"))
+            if payload.get("done") is True and status == "active":
+                todo.refresh(data, [task_id], difficulties={
+                    task_id: payload.get("difficulty")})
+            task_view = todo.mobile_task_view(data, task_id)
+        todo.save(data_file(), data)
+    except todo.TaskConflictError as exc:
+        body = {"ok": False, "error": {"code": "conflict", "message": str(exc)},
+                "current": exc.current}
+        _mobile_remember(device, request_id, 409, body)
+        return jsonify(body), 409
+    except (TypeError, ValueError) as exc:
+        return _mobile_error("validation_error", str(exc), 400)
+    body = {"ok": True, "task": task_view}
+    _mobile_remember(device, request_id, 200, body)
+    return jsonify(body)
 
 
 @app.route("/integrations")
@@ -1136,78 +1489,67 @@ def google_disconnect():
 
 
 def _spotify_sync(force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "spotify"):
-        return {"connected": False, "synced": [], "errors": []}
-    sp = integrations.get_provider(istore, "spotify")
-    tokens = sp["tokens"]
-    cid, csecret = sp.get("client_id"), sp.get("client_secret")
-    errors = []
-
-    if spotify.token_expired(tokens) and tokens.get("refresh_token") and cid:
-        try:
-            tokens = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
-            integrations.set_tokens(istore, "spotify", tokens)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def _recent():
-        try:
-            return spotify.fetch_recently_played(tokens["access_token"])
-        except PermissionError:
-            if cid and tokens.get("refresh_token"):
-                new = spotify.refresh_tokens(cid, csecret, tokens["refresh_token"])
-                tokens.update(new)
-                integrations.set_tokens(istore, "spotify", tokens)
-                return spotify.fetch_recently_played(tokens["access_token"])
-            raise
-
-    jdata = journal.load(journal_file())
-    synced = []
-    try:
-        plays = spotify.parse_recently_played(_recent())
-        buffer = spotify.merge_plays(
-            integrations.get_plays_buffer(istore, "spotify"), plays, now=now)
-        integrations.set_plays_buffer(istore, "spotify", buffer)
-        for date, by_ts in buffer.items():
-            day_plays = list(by_ts.values())
-            ids = [p["track_id"] for p in day_plays if p.get("track_id")]
-            try:
-                feats = spotify.fetch_audio_features(tokens["access_token"], ids)
-            except Exception as exc:  # noqa: BLE001
-                feats, _ = None, errors.append(f"features {date}: {exc}")
-            journal.set_entry_music(jdata, date, spotify.summarize_day(day_plays, feats, now=now))
-            synced.append(date)
-        journal.save(journal_file(), jdata)
-    except Exception as exc:  # noqa: BLE001
-        errors.append(str(exc))
-
-    # Taste snapshot (best-effort).
-    try:
-        terms = ("short_term", "medium_term", "long_term")
-        tops = {"tracks": {}, "artists": {}}
-        for kind in ("tracks", "artists"):
-            for term in terms:
-                tops[kind][term] = spotify.fetch_top(tokens["access_token"], kind, term)
-        integrations.set_taste(istore, "spotify", spotify.build_taste(tops, now=now))
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"taste: {exc}")
-
-    integrations.set_last_sync(istore, "spotify",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
+    return _run_provider_sync("spotify", provider_sync.spotify_sync, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/spotify/sync", methods=["POST"])
 def spotify_sync_route():
     focus = request.args.get("date")
-    result = _spotify_sync(focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _spotify_sync(focus_date=focus, force=request.args.get("force") == "1")
     music = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
         music = {focus: (entry or {}).get("music")}
     return jsonify({"ok": True, **result, "music": music})
+
+
+@app.route("/integrations/spotify/analytics", methods=["GET", "POST"])
+def spotify_analytics():
+    with _provider_sync_locks['spotify']:
+        with _mobile_lock:
+            initial = integrations.load(integrations_file())
+        fetched = deepcopy(initial)
+        result = provider_sync.spotify_analytics(fetched)
+        if not result['connected']:
+            return jsonify({key: value for key, value in result.items() if key != 'updated'})
+        with _mobile_lock:
+            current = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial, current, 'spotify'):
+                return jsonify(ok=False, connected=integrations.is_connected(current, 'spotify'),
+                    analytics=integrations.get_analytics(current, 'spotify'),
+                    errors=['Connection changed during sync. Run sync again.'])
+            before = deepcopy(current)
+            result = provider_sync.reconcile_spotify_analytics(initial, fetched, current, result)
+            if current != before:
+                integrations.save(integrations_file(), current)
+        return jsonify(result)
+
+
+@app.route("/integrations/spotify/history/import", methods=["POST"])
+def spotify_history_import():
+    uploaded = request.files.get("history")
+    if not uploaded:
+        flash("Choose a Spotify history JSON file to import.")
+        return redirect(url_for("integrations_page"))
+    try:
+        content = uploaded.read()
+        if content.startswith(b"PK") or (uploaded.filename or "").lower().endswith(".zip"):
+            raise ValueError("Extract the ZIP and choose a Spotify history JSON file")
+        raw = json.loads(content.decode("utf-8-sig"))
+        plays = spotify.parse_streaming_history(raw)
+        data = journal.load(journal_file())
+        result = music_history.import_plays(data, plays)
+        if result["days"]:
+            journal.save(journal_file(), data)
+    except Exception as exc:  # noqa: BLE001 - surface as validation feedback
+        flash(f"Spotify history import failed: {exc}")
+        return redirect(url_for("integrations_page"))
+
+    count = len(result["days"])
+    flash(f"Imported Spotify history for {count} day{'s' if count != 1 else ''}." if count else "This Spotify history is already imported.")
+    return redirect(url_for("integrations_page"))
 
 
 def _spotify_redirect_uri():
@@ -1298,66 +1640,44 @@ def rescuetime_disconnect():
 
 
 def _rescuetime_sync(force=False, focus_date=None, now=None):
-    istore = integrations.load(integrations_file())
-    if not integrations.is_connected(istore, "rescuetime"):
-        return {"connected": False, "synced": [], "errors": []}
-    key = integrations.get_provider(istore, "rescuetime").get("api_key")
-    jdata = journal.load(journal_file())
-    synced, errors = [], []
-    try:
-        rows = rescuetime.fetch_daily_summary(key)
-    except Exception as exc:  # noqa: BLE001
-        return {"connected": True, "synced": [], "errors": [str(exc)]}
-    for row in rows:
-        try:
-            day = rescuetime.parse_day(row, now=now)
-            date = day.get("date")
-            if not date:
-                continue
-            existing = journal.get_entry_by_date(jdata, date)
-            ex_rt = existing.get("rescuetime") if existing else None
-            write_summary = force or not ex_rt
-            # Backfill the per-activity breakdown onto days synced before this
-            # feature existed (they have a rescuetime dict but no top_activities).
-            backfill_only = (not write_summary) and not (ex_rt or {}).get("top_activities")
-            if not write_summary and not backfill_only:
-                continue
-            # Best-effort per-activity (website/app) breakdown; a failure here
-            # must not lose the day's summary, so it's isolated.
-            activities = None
-            try:
-                activities = rescuetime.parse_activities(
-                    rescuetime.fetch_activities(key, date))
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"{date} activities: {exc}")
-            if write_summary:
-                if activities is not None:
-                    day["top_activities"] = activities
-                journal.set_entry_rescuetime(jdata, date, day)
-                synced.append(date)
-            elif activities is not None:
-                merged = dict(ex_rt)
-                merged["top_activities"] = activities
-                journal.set_entry_rescuetime(jdata, date, merged)
-                synced.append(date)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{row.get('date')}: {exc}")
-    journal.save(journal_file(), jdata)
-    integrations.set_last_sync(istore, "rescuetime",
-                               (now or datetime.now()).replace(microsecond=0).isoformat())
-    integrations.save(integrations_file(), istore)
-    return {"connected": True, "synced": synced, "errors": errors}
+    return _run_provider_sync("rescuetime", provider_sync.rescuetime_sync, force=force, focus_date=focus_date, now=now)
 
 
 @app.route("/integrations/rescuetime/sync", methods=["POST"])
 def rescuetime_sync_route():
     focus = request.args.get("date")
-    result = _rescuetime_sync(focus_date=focus)
+    if focus and not journal._valid_date(focus):
+        return jsonify(ok=False, error="Choose a valid sync date"), 400
+    result = _rescuetime_sync(focus_date=focus, force=request.args.get("force") == "1")
     data = {}
     if focus and result["connected"]:
         entry = journal.get_entry_by_date(journal.load(journal_file()), focus)
         data = {focus: (entry or {}).get("rescuetime")}
     return jsonify({"ok": True, **result, "data": data})
+
+
+@app.route("/integrations/rescuetime/detail", methods=["POST"])
+def rescuetime_detail():
+    date = request.args.get("date")
+    if not journal._valid_date(date):
+        return jsonify(ok=False, error="Choose a valid report date"), 400
+    with _provider_sync_locks["rescuetime"]:
+        with _mobile_lock:
+            initial = integrations.load(integrations_file())
+        fetched = deepcopy(initial)
+        result = provider_sync.rescuetime_detail(fetched, date, force=request.args.get("force") == "1")
+        if not result["connected"]:
+            return jsonify(result)
+        with _mobile_lock:
+            current = integrations.load(integrations_file())
+            if not provider_sync.same_connection(initial, current, "rescuetime"):
+                return jsonify(ok=False, connected=integrations.is_connected(current, "rescuetime"),
+                               error="Connection changed during sync. Load the day again.")
+            details = integrations.get_analytics(fetched, "rescuetime")
+            if details != integrations.get_analytics(current, "rescuetime"):
+                integrations.set_analytics(current, "rescuetime", details)
+                integrations.save(integrations_file(), current)
+        return jsonify(result)
 
 
 # --------------------------------------------------------------------------- #
@@ -1375,29 +1695,21 @@ def phone_ingest():
     if not stored or not supplied or not secrets.compare_digest(supplied, stored):
         return jsonify({"ok": False, "error": "unauthorized"}), 401
     days = usage.parse_push(request.get_json(silent=True))
+    if not days:
+        return jsonify(ok=False, error="Include at least one valid YYYY-MM-DD day"), 400
     jdata = journal.load(journal_file())
     written = []
     for day in days:
-        journal.set_entry_usage(jdata, day["date"], day)
+        previous = journal.get_entry_by_date(jdata, day["date"])
+        value = usage.merge_day((previous or {}).get("usage"), day)
+        if value != (previous or {}).get("usage"):
+            journal.set_entry_usage(jdata, day["date"], value)
         written.append(day["date"])
     journal.save(journal_file(), jdata)
     integrations.set_last_sync(istore, "phone",
                                datetime.now().replace(microsecond=0).isoformat())
     integrations.save(integrations_file(), istore)
     return jsonify({"ok": True, "dates": written})
-
-
-@app.route("/integrations/phone/token", methods=["POST"])
-def phone_token():
-    data = integrations.load(integrations_file())
-    token = secrets.token_urlsafe(24)
-    integrations.set_token(data, "phone", token)
-    integrations.save(integrations_file(), data)
-    # Reveal once via the next Manage-page render (never stored in the URL/log).
-    session["phone_token_once"] = token
-    flash("Phone-usage token generated — copy it into the app now; "
-          "it won't be shown again.")
-    return redirect(url_for("integrations_page"))
 
 
 @app.route("/integrations/phone/disconnect", methods=["POST"])
@@ -1407,6 +1719,59 @@ def phone_disconnect():
     integrations.save(integrations_file(), data)
     flash("Phone usage disconnected.")
     return redirect(url_for("integrations_page"))
+
+
+# --------------------------------------------------------------------------- #
+# Health data (Xiaomi / Health Connect push, shared bearer token; no OAuth).
+# A bridge POSTs daily steps and heart-rate samples to /integrations/health/ingest.
+# --------------------------------------------------------------------------- #
+
+@app.route("/integrations/health/ingest", methods=["POST"])
+def health_ingest():
+    istore = integrations.load(integrations_file())
+    stored = integrations.get_token(istore, "health")
+    header = request.headers.get("Authorization", "")
+    supplied = header[7:] if header.startswith("Bearer ") else ""
+    if not stored or not supplied or not secrets.compare_digest(supplied, stored):
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    days = health.parse_push(request.get_json(silent=True))
+    if not days:
+        return jsonify(ok=False, error="Include at least one valid YYYY-MM-DD day"), 400
+    jdata = journal.load(journal_file())
+    written = []
+    for day in days:
+        journal.set_entry_health(jdata, day["date"], day)
+        written.append(day["date"])
+    journal.save(journal_file(), jdata)
+    integrations.set_last_sync(istore, "health",
+                               datetime.now().replace(microsecond=0).isoformat())
+    integrations.save(integrations_file(), istore)
+    return jsonify({"ok": True, "dates": written})
+
+
+@app.route("/integrations/health/token", methods=["POST"])
+def health_token():
+    data = integrations.load(integrations_file())
+    token = secrets.token_urlsafe(24)
+    integrations.set_token(data, "health", token)
+    integrations.save(integrations_file(), data)
+    session["health_token_once"] = token
+    flash("Health-data token generated — copy it into the Xiaomi/Health bridge now; "
+          "it won't be shown again.")
+    return redirect(url_for("integrations_page"))
+
+
+@app.route("/integrations/health/disconnect", methods=["POST"])
+def health_disconnect():
+    data = integrations.load(integrations_file())
+    integrations.clear_provider(data, "health")
+    integrations.save(integrations_file(), data)
+    flash("Health data disconnected.")
+    return redirect(url_for("integrations_page"))
+
+
+import media_routes
+media_routes.register(app, journal_file, _mobile_authenticated, _mobile_lock, data_file)
 
 
 if __name__ == "__main__":

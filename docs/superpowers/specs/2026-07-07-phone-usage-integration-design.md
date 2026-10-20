@@ -80,9 +80,8 @@ integration inverts the flow: the **phone pushes** to the app instead of the app
 5. **Distribution = GitHub Actions build → GitHub Release APK.** The phone
    downloads from GitHub (reachable anywhere, no tunnel needed just to install).
    The Manage page shows the release link + a client-rendered **QR code**.
-6. **Daily push reachability = user's choice, Tailscale recommended.** Home-Wi-Fi
-   local IP works only at home; Tailscale "just works" anywhere; documented, not
-   enforced.
+6. **Daily push reachability = authorized USB only.** The Mac helper creates an
+   ADB reverse loopback tunnel and triggers the upload on connection.
 7. **Entry field = `usage`** (domain-named like `sleep`/`music`, not provider-
    named); **provider key = `phone`** in `integrations.json`.
 8. **Backfill last 3 days per push (resolves Open Question 1).** The worker sends
@@ -172,8 +171,8 @@ signing ceremony), and upload the APK as a **GitHub Release asset** (tag like
 `phone-app-vN`) and a workflow artifact.
 
 **Download onto the phone:** the phone opens the **GitHub Release** APK URL and
-installs it (allow "install unknown apps" once). GitHub is reachable from the
-phone anywhere — no Tailscale/tunnel needed just to install.
+installs it (allow "install unknown apps" once). GitHub distribution remains
+independent from the USB sync transport.
 
 **Discoverability from the app:** the Manage page **Integrations** section gains
 a **Phone usage** card with:
@@ -185,9 +184,8 @@ a **Phone usage** card with:
   **generated token** to copy into the app (or encode in the config QR).
 
 **Alternative if GitHub Actions is undesirable:** commit a prebuilt
-`android/dist/phone-usage.apk` and serve it at `GET /integrations/phone/apk`
-(the phone must reach the Flask app — home Wi-Fi/Tailscale). Documented as a
-fallback; the Release path is preferred because it's reachable anywhere.
+`android/dist/phone-usage.apk` and copy it over USB. The Release path remains the
+preferred distribution route.
 
 ---
 
@@ -270,13 +268,8 @@ here but sets the baseline) and the Flask app running.
 **Prerequisites**
 1. On your computer, open the journal **Manage** page → **Integrations** →
    **Phone usage** card. Click **Generate token** — copy the token and note the
-   **endpoint URL** shown (e.g. `http://192.168.x.x:5001/integrations/phone/ingest`,
-   or your Tailscale hostname).
-2. Decide reachability for the *daily* push:
-   - **Home Wi-Fi only:** the endpoint's LAN IP works when the phone is home.
-   - **Anywhere (recommended):** install **Tailscale** on both the Mac and the
-     phone, sign into the same tailnet, and use the Mac's Tailscale hostname in
-     the endpoint URL.
+   USB helper script location.
+2. Enable USB debugging and authorize this Mac on the unlocked phone.
 
 **Install the app**
 3. On the phone, open the **Download the app** link on the Manage-page card
@@ -287,32 +280,28 @@ here but sets the baseline) and the Flask app running.
 
 **Grant permissions (one time)**
 5. Open the app. Tap **Grant Usage access** → it deep-links to
-   *Settings → Special access → Usage access* → toggle **TodoPup Usage** on.
-6. Tap **Exclude from battery optimization** (or *Settings → Apps → TodoPup
+   *Settings → Special access → Usage access* → toggle **Datapom Usage** on.
+6. Tap **Exclude from battery optimization** (or *Settings → Apps → Datapom
    Usage → Battery → Unrestricted*). **Do not skip this** — Samsung Device Care
    will otherwise sleep the app and the daily push stops after a few days.
 7. On Android 13+, allow notifications if prompted (optional status pings).
 
 **Configure + verify**
-8. In the app, paste the **endpoint URL** and **token** from step 1 (or scan the
-   Manage-page **config QR** to auto-fill both).
+8. Run `scripts/sync_android_usb.sh`; it configures the endpoint and credentials.
 9. Tap **Send test now**. The status line should show a success time. Refresh
    today's (or yesterday's) journal entry on the computer — the **usage** panel
    should show screen time + top app, and the **Phone usage** analytics tab
    should populate.
 
 **Done — it's automatic**
-10. `WorkManager` now pushes **yesterday + the prior 2 days** roughly once a day
-    (best-effort within a 24h window), retrying on failure and surviving reboots.
-    Nothing to plug in. If a night is missed (phone off Wi-Fi / server asleep),
-    the next successful push backfills it (Decision 8).
+10. Each USB connection pushes **yesterday + the prior 2 days**. If a day is
+    missed, the next successful cable sync backfills it (Decision 8).
 
 **Troubleshooting**
 - *No data after a day or two:* re-check the battery-optimization exclusion
   (step 6) — the #1 cause on Samsung.
-- *Test push fails:* the phone can't reach the endpoint — confirm same Wi-Fi /
-  Tailscale up, and that a browser tab is open (server is running; it auto-quits
-  when the last tab closes).
+- *Test push fails:* reconnect the unlocked phone, confirm USB debugging
+  authorization, and rerun the helper.
 - *401:* token mismatch — regenerate on the Manage page and re-paste.
 
 ## Testing
@@ -333,8 +322,8 @@ here but sets the baseline) and the Flask app running.
 1. **RESOLVED (Decision 8).** Auto-quit stays; the worker pushes the **last 3
    days** each run and `parse_push` accepts a list, so a missed night self-heals
    on the next push. No always-on daemon.
-2. **Reachability of the daily push.** Tailscale recommended; document home-Wi-Fi
-   fallback. (Download is separate and always reachable via the GitHub Release.)
+2. **Reachability of the daily push.** Resolved with the authorized ADB reverse
+   USB tunnel. Download remains separate via the GitHub Release.
 3. **APK build environment.** Requires the Android SDK — hence GitHub Actions (or
    a local Android Studio build). The Flask repo itself never builds it.
 4. **`top_apps` labels** need `PackageManager`; some system packages won't

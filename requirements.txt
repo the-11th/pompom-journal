@@ -1,2 +1,6 @@
 flask==3.1.0
 pytest==8.3.4
+waitress==3.0.2
+Pillow==12.3.0
+pillow-heif==1.7.0
+cryptography==50.0.1
