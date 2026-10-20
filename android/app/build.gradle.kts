@@ -4,6 +4,7 @@ plugins {
 }
 
 android {
+    // Keep the installed identity so Datapom updates preserve existing phone data.
     namespace = "com.todopup.usage"
     compileSdk = 34
     testBuildType = providers.gradleProperty("testBuildType").getOrElse("debug")
@@ -17,7 +18,8 @@ android {
         testInstrumentationRunner = providers.gradleProperty("testRunner")
             .getOrElse("com.todopup.usage.StorageInstrumentation")
         manifestPlaceholders["appLabel"] = "@string/app_name"
-        manifestPlaceholders["appScheme"] = "todopup"
+        manifestPlaceholders["appScheme"] = "datapom"
+        manifestPlaceholders["legacyAppScheme"] = "todopup"
     }
 
     buildTypes {
@@ -31,7 +33,8 @@ android {
             applicationIdSuffix = ".qa"
             matchingFallbacks += "debug"
             manifestPlaceholders["appLabel"] = "Datapom QA"
-            manifestPlaceholders["appScheme"] = "todopup-qa"
+            manifestPlaceholders["appScheme"] = "datapom-qa"
+            manifestPlaceholders["legacyAppScheme"] = "todopup-qa"
         }
     }
 

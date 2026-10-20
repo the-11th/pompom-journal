@@ -35,16 +35,16 @@ import java.time.LocalDate
 import java.time.Instant
 import java.util.UUID
 
-/** TodoPup's offline-first phone shell: journal, tasks, and private Mac setup. */
+/** Datapom's offline-first phone shell: journal, tasks, and private Mac setup. */
 class MainActivity : AppCompatActivity() {
-    private val bg = Color.parseColor(TodoPupUi.BACKGROUND)
-    private val panel = Color.parseColor(TodoPupUi.PANEL)
-    private val text = Color.parseColor(TodoPupUi.TEXT)
-    private val muted = Color.parseColor(TodoPupUi.MUTED)
-    private val border = Color.parseColor(TodoPupUi.BORDER)
-    private val accent = Color.parseColor(TodoPupUi.ACCENT)
-    private val danger = Color.parseColor(TodoPupUi.DANGER)
-    private val green = Color.parseColor(TodoPupUi.SUCCESS)
+    private val bg = Color.parseColor(DatapomUi.BACKGROUND)
+    private val panel = Color.parseColor(DatapomUi.PANEL)
+    private val text = Color.parseColor(DatapomUi.TEXT)
+    private val muted = Color.parseColor(DatapomUi.MUTED)
+    private val border = Color.parseColor(DatapomUi.BORDER)
+    private val accent = Color.parseColor(DatapomUi.ACCENT)
+    private val danger = Color.parseColor(DatapomUi.DANGER)
+    private val green = Color.parseColor(DatapomUi.SUCCESS)
     private val density by lazy { resources.displayMetrics.density }
     private lateinit var repository: MobileRepository
     private lateinit var content: FrameLayout
@@ -205,7 +205,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isConnectionIntent(intent: Intent): Boolean = intent.data?.let { data ->
-        TodoPupUi.acceptsDeepLink(packageName, data.scheme) && data.host in setOf("config", "sync", "usage")
+        DatapomUi.acceptsDeepLink(packageName, data.scheme) && data.host in setOf("config", "sync", "usage")
     } == true
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -274,7 +274,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSyncStatus(view: TextView, state: SyncUiState, detail: String? = null) {
-        view.text = "●  ${TodoPupUi.syncMessage(state, detail)}"
+        view.text = "●  ${DatapomUi.syncMessage(state, detail)}"
         view.setTextColor(when (state) {
             SyncUiState.CONNECTED -> green
             SyncUiState.FAILED -> danger
@@ -289,10 +289,10 @@ class MainActivity : AppCompatActivity() {
         nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(dp(TodoPupUi.SPACE_XS_DP))
+            setPadding(dp(DatapomUi.SPACE_XS_DP))
             background = box(panel, 0f, border)
         }
-        root.addView(nav, LinearLayout.LayoutParams(-1, dp(TodoPupUi.NAV_HEIGHT_DP)))
+        root.addView(nav, LinearLayout.LayoutParams(-1, dp(DatapomUi.NAV_HEIGHT_DP)))
         return root
     }
 
@@ -323,10 +323,10 @@ class MainActivity : AppCompatActivity() {
             .forEach { (screen, title) ->
                 val button = action(title, screen == currentScreen || screen == Screen.SETTINGS && currentScreen == Screen.MEDIA_SETTINGS) { show(screen) }
                 button.textSize = 12f
-                button.setPadding(dp(TodoPupUi.SPACE_XS_DP), 0, dp(TodoPupUi.SPACE_XS_DP), 0)
-                nav.addView(button, LinearLayout.LayoutParams(0, dp(TodoPupUi.CONTROL_HEIGHT_DP), 1f).apply {
-                    marginStart = dp(TodoPupUi.SPACE_XS_DP)
-                    marginEnd = dp(TodoPupUi.SPACE_XS_DP)
+                button.setPadding(dp(DatapomUi.SPACE_XS_DP), 0, dp(DatapomUi.SPACE_XS_DP), 0)
+                nav.addView(button, LinearLayout.LayoutParams(0, dp(DatapomUi.CONTROL_HEIGHT_DP), 1f).apply {
+                    marginStart = dp(DatapomUi.SPACE_XS_DP)
+                    marginEnd = dp(DatapomUi.SPACE_XS_DP)
                 })
             }
     }
@@ -349,7 +349,7 @@ class MainActivity : AppCompatActivity() {
 
         val date = input(day, "Date").apply {
             tag = UiControl.JOURNAL_DATE.name
-            contentDescription = TodoPupUi.calendarDayDescription(
+            contentDescription = DatapomUi.calendarDayDescription(
                 day,
                 day in repository.entryDates(),
             )
@@ -364,7 +364,7 @@ class MainActivity : AppCompatActivity() {
         }
         column.addView(date)
         val titleField = input(snapshot.draft.title, "Title (optional)").apply {
-            contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_TITLE)
+            contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_TITLE)
         }
         column.addView(titleField)
 
@@ -372,7 +372,7 @@ class MainActivity : AppCompatActivity() {
         val moodStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_MOOD)
+            contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_MOOD)
         }
         fun drawMoods() {
             moodStrip.removeAllViews()
@@ -384,11 +384,11 @@ class MainActivity : AppCompatActivity() {
                     contentDescription = "Mood $n of 7"
                     background = if (mood == n) box(panel, 12f, accent) else null
                     alpha = if (mood == null || mood == n) 1f else .38f
-                    setPadding(dp(TodoPupUi.SPACE_XS_DP))
+                    setPadding(dp(DatapomUi.SPACE_XS_DP))
                     setOnClickListener { mood = if (mood == n) null else n; drawMoods(); persistDraft() }
                 }
                 moodStrip.addView(image, LinearLayout.LayoutParams(0, dp(58), 1f).apply {
-                    if (n < 7) marginEnd = dp(TodoPupUi.SPACE_XS_DP)
+                    if (n < 7) marginEnd = dp(DatapomUi.SPACE_XS_DP)
                 })
             }
         }
@@ -396,20 +396,20 @@ class MainActivity : AppCompatActivity() {
 
         val tagsHost = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_TAGS)
+            contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_TAGS)
         }
         var renderTags: () -> Unit = {}
         column.addView(sectionTitle("What happened?"))
         val bodyField = input(snapshot.draft.body, "Write, speak, or use @tags · #numbers · [] tasks", true).apply {
-            contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_BODY)
+            contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_BODY)
             minLines = 8
             gravity = Gravity.TOP
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setPadding(
-                dp(TodoPupUi.CONTROL_PADDING_DP),
-                dp(TodoPupUi.CONTROL_PADDING_DP),
-                dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP),
-                dp(TodoPupUi.CONTROL_PADDING_DP),
+                dp(DatapomUi.CONTROL_PADDING_DP),
+                dp(DatapomUi.CONTROL_PADDING_DP),
+                dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP),
+                dp(DatapomUi.CONTROL_PADDING_DP),
             )
             layoutParams = FrameLayout.LayoutParams(-1, -2)
         }
@@ -421,12 +421,12 @@ class MainActivity : AppCompatActivity() {
                     renderTags(); persistDraft()
                 }
             }
-            }, FrameLayout.LayoutParams(dp(TodoPupUi.RECORD_SIZE_DP), dp(TodoPupUi.RECORD_SIZE_DP), Gravity.END or Gravity.TOP).apply {
-                topMargin = dp(TodoPupUi.RECORD_INSET_DP)
-                marginEnd = dp(TodoPupUi.RECORD_INSET_DP)
+            }, FrameLayout.LayoutParams(dp(DatapomUi.RECORD_SIZE_DP), dp(DatapomUi.RECORD_SIZE_DP), Gravity.END or Gravity.TOP).apply {
+                topMargin = dp(DatapomUi.RECORD_INSET_DP)
+                marginEnd = dp(DatapomUi.RECORD_INSET_DP)
             })
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+                bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
             }
         }
         journalBody = bodyField
@@ -441,9 +441,9 @@ class MainActivity : AppCompatActivity() {
                 val selected = selectedTags[section.id].orEmpty()
                 row.addView(label(if (selected.isEmpty()) "—" else selected.joinToString(" · "), text, 13f), LinearLayout.LayoutParams(0, -2, 1f))
                 row.addView(action("+") { tagDialog(section, selectedTags) { renderTags(); persistDraft() } },
-                    LinearLayout.LayoutParams(dp(48), dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)))
+                    LinearLayout.LayoutParams(dp(48), dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)))
                 tagsHost.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
-                    bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+                    bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
                 })
             }
         }
@@ -453,7 +453,7 @@ class MainActivity : AppCompatActivity() {
             SyncState.SYNCED -> green
             else -> muted
         }, 12f).apply {
-            setPadding(0, dp(TodoPupUi.SPACE_MD_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+            setPadding(0, dp(DatapomUi.SPACE_MD_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
         }
         column.addView(sync)
         if (MobileConfig.isVerified(this)) {
@@ -471,8 +471,8 @@ class MainActivity : AppCompatActivity() {
                     } else renderSyncStatus(sync, state, detail)
                 }
             }.apply {
-                contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_SYNC)
-            }, fullActionParams(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP))
+                contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_SYNC)
+            }, fullActionParams(DatapomUi.COMPACT_CONTROL_HEIGHT_DP))
         }
         fun currentDraft() = snapshot.draft.copy(
             date = date.text.toString(), title = titleField.text.toString().trim(),
@@ -540,7 +540,7 @@ class MainActivity : AppCompatActivity() {
                     }.setNegativeButton("Cancel", null).create()
                 styleDialog(dialog)
                 dialog.show()
-            }, fullActionParams(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP))
+            }, fullActionParams(DatapomUi.COMPACT_CONTROL_HEIGHT_DP))
         }
         column.addView(action("Save entry", true) {
             var draft = currentDraft()
@@ -580,7 +580,7 @@ class MainActivity : AppCompatActivity() {
                 is SaveResult.Failed -> { sync.text = "●  ${result.message}"; sync.setTextColor(danger) }
             }
         }.apply {
-            contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_SAVE)
+            contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_SAVE)
         }, fullActionParams())
         return scroll(column)
     }
@@ -595,7 +595,7 @@ class MainActivity : AppCompatActivity() {
                 setOnCheckedChangeListener { _, yes ->
                     if (yes && tag !in selected) selected.add(tag) else if (!yes) selected.remove(tag)
                 }
-            }, LinearLayout.LayoutParams(-1, dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)))
+            }, LinearLayout.LayoutParams(-1, dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)))
         }
         val custom = input("", "Add a new ${section.name} tag")
         holder.addView(custom)
@@ -628,7 +628,7 @@ class MainActivity : AppCompatActivity() {
         val capture = VoiceCommands.parse(words, sections)
         val holder = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.DIALOG_PADDING_DP))
+            setPadding(dp(DatapomUi.DIALOG_PADDING_DP))
         }
         val transcript = input(capture.text, "Dictated text", true)
         holder.addView(transcript)
@@ -642,10 +642,10 @@ class MainActivity : AppCompatActivity() {
             capture.commands.forEach { command ->
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
-                    setPadding(0, dp(TodoPupUi.SPACE_XS_DP), 0, dp(TodoPupUi.SPACE_XS_DP))
+                    setPadding(0, dp(DatapomUi.SPACE_XS_DP), 0, dp(DatapomUi.SPACE_XS_DP))
                 }
                 row.addView(label(command.name, if (command.status in setOf("new", "suggested")) accent else text, 13f),
-                    LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.SPACE_SM_DP) })
+                    LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.SPACE_SM_DP) })
                 val controls = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
@@ -666,11 +666,11 @@ class MainActivity : AppCompatActivity() {
                         styleDialog(picker)
                         picker.show()
                     }.apply { contentDescription = "Choose section for ${command.name}" },
-                        LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(TodoPupUi.CONTENT_GAP_DP) })
+                        LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = dp(DatapomUi.CONTENT_GAP_DP) })
                 } else if (!command.keepAsText) {
                     val section = sections.firstOrNull { it.id == command.sectionId }?.name.orEmpty()
                     controls.addView(label(section, muted, 12f), LinearLayout.LayoutParams(0, -2, 1f).apply {
-                        marginEnd = dp(TodoPupUi.CONTENT_GAP_DP)
+                        marginEnd = dp(DatapomUi.CONTENT_GAP_DP)
                     })
                 }
                 val ignoreLabel = if (command.source == "detected") "Ignore tag" else "Keep words"
@@ -679,7 +679,7 @@ class MainActivity : AppCompatActivity() {
                     renderCommands()
                 }.apply { setSingleLine(false); maxLines = 3; ellipsize = null }, LinearLayout.LayoutParams(0, -2, 1f))
                 commandHost.addView(row, LinearLayout.LayoutParams(-1, -2).apply {
-                    bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+                    bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
                 })
             }
             dialog?.let { openDialog ->
@@ -739,7 +739,7 @@ class MainActivity : AppCompatActivity() {
         }
         val holder = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.DIALOG_PADDING_DP))
+            setPadding(dp(DatapomUi.DIALOG_PADDING_DP))
         }
         val state = label("Starting microphone…", accent, 12f)
         val preview = input("", "Your transcript will appear here", true).apply {
@@ -748,7 +748,7 @@ class MainActivity : AppCompatActivity() {
             isCursorVisible = false
         }
         holder.addView(state, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+            bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
         })
         holder.addView(preview)
         val dialog = AlertDialog.Builder(this)
@@ -810,18 +810,18 @@ class MainActivity : AppCompatActivity() {
         tagSuggestionPopup?.dismiss()
         val list = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.SPACE_XS_DP))
-            background = box(panel, TodoPupUi.CONTROL_RADIUS_DP.toFloat(), border)
+            setPadding(dp(DatapomUi.SPACE_XS_DP))
+            background = box(panel, DatapomUi.CONTROL_RADIUS_DP.toFloat(), border)
         }
         suggestions.forEach { suggestion ->
             val section = sections.firstOrNull { it.id == suggestion.sectionId }?.name.orEmpty()
             list.addView(label("@${suggestion.name.replace(' ', '_')}   $section", text, 13f).apply {
-                setPadding(dp(TodoPupUi.CONTROL_PADDING_DP))
+                setPadding(dp(DatapomUi.CONTROL_PADDING_DP))
                 isClickable = true
                 isFocusable = true
                 contentDescription = "Complete tag ${suggestion.name}"
                 setOnClickListener { applyTagSuggestion(field, suggestion) }
-            }, LinearLayout.LayoutParams(-1, dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)))
+            }, LinearLayout.LayoutParams(-1, dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)))
         }
         tagSuggestionPopup = PopupWindow(
             list,
@@ -830,8 +830,8 @@ class MainActivity : AppCompatActivity() {
             false,
         ).apply {
             isOutsideTouchable = true
-            elevation = dp(TodoPupUi.SPACE_SM_DP).toFloat()
-            showAsDropDown(field, 0, -dp(TodoPupUi.CONTENT_GAP_DP))
+            elevation = dp(DatapomUi.SPACE_SM_DP).toFloat()
+            showAsDropDown(field, 0, -dp(DatapomUi.CONTENT_GAP_DP))
         }
     }
 
@@ -897,11 +897,11 @@ class MainActivity : AppCompatActivity() {
         // Match the journal's compact heading, 18dp gutters and 12dp top inset.
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.PAGE_GUTTER_DP), dp(TodoPupUi.SPACE_MD_DP),
-                dp(TodoPupUi.PAGE_GUTTER_DP), dp(TodoPupUi.PAGE_BOTTOM_DP))
+            setPadding(dp(DatapomUi.PAGE_GUTTER_DP), dp(DatapomUi.SPACE_MD_DP),
+                dp(DatapomUi.PAGE_GUTTER_DP), dp(DatapomUi.PAGE_BOTTOM_DP))
             addView(label("Tasks", accent, 16f).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(TodoPupUi.SPACE_XS_DP), 0, dp(TodoPupUi.SPACE_MD_DP))
+                setPadding(0, dp(DatapomUi.SPACE_XS_DP), 0, dp(DatapomUi.SPACE_MD_DP))
                 androidx.core.view.ViewCompat.setAccessibilityHeading(this, true)
             }, LinearLayout.LayoutParams(-1, -2))
         }
@@ -915,11 +915,11 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL
         }
         column.addView(label("New task", muted, 12f).apply {
-            setPadding(0, 0, 0, dp(TodoPupUi.SPACE_XS_DP))
+            setPadding(0, 0, 0, dp(DatapomUi.SPACE_XS_DP))
         })
         val newTask = input(taskQuickAdd, "What needs doing?").apply {
             tag = "task-quick-add"
-            contentDescription = TodoPupUi.controlDescription(UiControl.TASK_QUICK_ADD)
+            contentDescription = DatapomUi.controlDescription(UiControl.TASK_QUICK_ADD)
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { taskQuickAdd = s.toString() }
@@ -930,9 +930,9 @@ class MainActivity : AppCompatActivity() {
         addRow.addView(action("Add") {
             createTaskEditor(newTask.text.toString().trim())
         }.apply {
-            contentDescription = TodoPupUi.controlDescription(UiControl.TASK_CREATE)
-        }, LinearLayout.LayoutParams(-2, dp(TodoPupUi.CONTROL_HEIGHT_DP)).apply {
-            marginStart = dp(TodoPupUi.CONTENT_GAP_DP)
+            contentDescription = DatapomUi.controlDescription(UiControl.TASK_CREATE)
+        }, LinearLayout.LayoutParams(-2, dp(DatapomUi.CONTROL_HEIGHT_DP)).apply {
+            marginStart = dp(DatapomUi.CONTENT_GAP_DP)
         })
         column.addView(addRow)
         runCatching { repository.taskConflicts() }.onSuccess { conflicts ->
@@ -940,13 +940,13 @@ class MainActivity : AppCompatActivity() {
             conflicts.forEach { column.addView(taskConflictCard(it)) }
         }.onFailure { error ->
             column.addView(label(error.message ?: "Could not read saved task changes.", danger, 13f).apply {
-                setPadding(0, dp(TodoPupUi.CONTENT_GAP_DP), 0, 0)
+                setPadding(0, dp(DatapomUi.CONTENT_GAP_DP), 0, 0)
             })
         }
         val active = tasks.filter { it.status == "active" }
         column.addView(taskSectionTitle("Active · ${active.size}"))
         if (active.isEmpty()) column.addView(label("No active tasks", muted, 14f).apply {
-            setPadding(0, dp(TodoPupUi.CONTENT_GAP_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+            setPadding(0, dp(DatapomUi.CONTENT_GAP_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
         })
         active.forEach { task -> column.addView(taskCard(task)) }
         val completed = tasks.filter { it.status == "completed" }
@@ -960,14 +960,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun taskSectionTitle(value: String) = label(value, muted, 12f).apply {
-        setPadding(0, dp(TodoPupUi.SECTION_TOP_GAP_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+        setPadding(0, dp(DatapomUi.SECTION_TOP_GAP_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
         androidx.core.view.ViewCompat.setAccessibilityHeading(this, true)
     }
 
     private fun completedTasks(tasks: List<TaskDraft>): View {
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(TodoPupUi.CONTENT_GAP_DP), 0, 0)
+            setPadding(0, dp(DatapomUi.CONTENT_GAP_DP), 0, 0)
             addView(View(this@MainActivity).apply { setBackgroundColor(border) }, LinearLayout.LayoutParams(-1, dp(1)))
         }
         val list = LinearLayout(this).apply {
@@ -975,7 +975,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             tasks.forEach { addView(taskCard(it)) }
             if (tasks.isEmpty()) addView(label("No completed tasks yet", muted, 14f).apply {
-                setPadding(0, dp(TodoPupUi.CONTENT_GAP_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+                setPadding(0, dp(DatapomUi.CONTENT_GAP_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
             })
         }
         val toggle = action("") {}.apply {
@@ -983,7 +983,7 @@ class MainActivity : AppCompatActivity() {
             background = null
             gravity = Gravity.CENTER_VERTICAL
             typeface = Typeface.MONOSPACE
-            setPadding(0, dp(TodoPupUi.CONTENT_GAP_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+            setPadding(0, dp(DatapomUi.CONTENT_GAP_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
         }
         fun render() {
             list.visibility = if (completedTasksExpanded) View.VISIBLE else View.GONE
@@ -1001,10 +1001,10 @@ class MainActivity : AppCompatActivity() {
     private fun taskCard(task: TaskDraft): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.CARD_PADDING_DP))
-            background = box(panel, TodoPupUi.CONTROL_RADIUS_DP.toFloat(), border)
+            setPadding(dp(DatapomUi.CARD_PADDING_DP))
+            background = box(panel, DatapomUi.CONTROL_RADIUS_DP.toFloat(), border)
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-                bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+                bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
             }
         }
         val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -1017,7 +1017,7 @@ class MainActivity : AppCompatActivity() {
                 runTaskAction { replaceTask(task, task.copy(done = done, status = if (done) "completed" else "active")) }
             }
         }
-        top.addView(check, LinearLayout.LayoutParams(dp(TodoPupUi.CONTROL_HEIGHT_DP), dp(TodoPupUi.CONTROL_HEIGHT_DP)))
+        top.addView(check, LinearLayout.LayoutParams(dp(DatapomUi.CONTROL_HEIGHT_DP), dp(DatapomUi.CONTROL_HEIGHT_DP)))
         top.addView(label(task.title, if (task.done || task.status == "expired") muted else text, 16f).apply {
             tag = "task-title:${task.id}"
             isFocusableInTouchMode = true
@@ -1026,11 +1026,11 @@ class MainActivity : AppCompatActivity() {
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; isBaselineAligned = false; gravity = Gravity.END
         }
-        if (TodoPupUi.canEditTask(task.status)) actions.addView(taskAction("Edit") { taskEditor(task) }.apply {
-            contentDescription = "${TodoPupUi.controlDescription(UiControl.TASK_EDIT)}: ${task.title}"
+        if (DatapomUi.canEditTask(task.status)) actions.addView(taskAction("Edit") { taskEditor(task) }.apply {
+            contentDescription = "${DatapomUi.controlDescription(UiControl.TASK_EDIT)}: ${task.title}"
             minWidth = dp(58)
-        }, LinearLayout.LayoutParams(-2, dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)).apply {
-            marginEnd = dp(TodoPupUi.CONTENT_GAP_DP)
+        }, LinearLayout.LayoutParams(-2, dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)).apply {
+            marginEnd = dp(DatapomUi.CONTENT_GAP_DP)
         })
         actions.addView(taskAction("×") {
             themedDialog("Delete task?", label("“${task.title}” will be removed from the phone and Mac.", text, 14f), "Delete", destructive = true) {
@@ -1038,38 +1038,38 @@ class MainActivity : AppCompatActivity() {
             }
         }.apply {
             setTextColor(danger)
-            contentDescription = "${TodoPupUi.controlDescription(UiControl.TASK_DELETE)}: ${task.title}"
-        }, LinearLayout.LayoutParams(dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP), dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)))
+            contentDescription = "${DatapomUi.controlDescription(UiControl.TASK_DELETE)}: ${task.title}"
+        }, LinearLayout.LayoutParams(dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP), dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)))
         card.addView(top)
         if (task.tags.isNotEmpty()) card.addView(label(task.tags.joinToString("  ") { "#$it" }, accent, 12f).apply {
-            setPadding(dp(TodoPupUi.CONTROL_HEIGHT_DP), 0, 0, dp(TodoPupUi.SPACE_XS_DP))
+            setPadding(dp(DatapomUi.CONTROL_HEIGHT_DP), 0, 0, dp(DatapomUi.SPACE_XS_DP))
         })
         task.due?.takeIf(String::isNotBlank)?.let { due ->
             card.addView(label("due ${due.take(10)}", accent, 12f).apply {
                 tag = "task-due:${task.id}"
-                setPadding(dp(TodoPupUi.CONTROL_HEIGHT_DP), 0, 0, dp(TodoPupUi.SPACE_XS_DP))
+                setPadding(dp(DatapomUi.CONTROL_HEIGHT_DP), 0, 0, dp(DatapomUi.SPACE_XS_DP))
                 if (task.status == "active" && !task.done) taskCountdowns.add(this to due)
             })
         }
         if (task.notes.isNotBlank()) card.addView(label(task.notes, muted, 12f).apply {
-            setPadding(dp(TodoPupUi.CONTROL_HEIGHT_DP), 0, 0, dp(TodoPupUi.CONTENT_GAP_DP))
+            setPadding(dp(DatapomUi.CONTROL_HEIGHT_DP), 0, 0, dp(DatapomUi.CONTENT_GAP_DP))
         })
         task.subtasks.forEachIndexed { index, sub ->
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP), 0, 0, 0)
+                setPadding(dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP), 0, 0, 0)
             }
             row.addView(TagCheckBox(this).apply {
                 isChecked = sub.done
-                isEnabled = TodoPupUi.canEditTask(task.status)
+                isEnabled = DatapomUi.canEditTask(task.status)
                 alpha = if (isEnabled) 1f else .45f
                 contentDescription = "Subtask ${sub.text}"
                 setOnCheckedChangeListener { _, yes ->
                     val subs = task.subtasks.toMutableList(); subs[index] = sub.copy(done = yes)
                     runTaskAction { replaceTask(task, task.copy(subtasks = subs)) }
                 }
-            }, LinearLayout.LayoutParams(dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP), dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)))
+            }, LinearLayout.LayoutParams(dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP), dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)))
             row.addView(label(sub.text, if (sub.done) muted else text, 13f), LinearLayout.LayoutParams(0, -2, 1f))
             card.addView(row)
         }
@@ -1093,7 +1093,7 @@ class MainActivity : AppCompatActivity() {
         themedDialog("Edit task", form, "Save", validate = { validateTaskTitle(title, error) }) {
             val subs = task.subtasks.toMutableList()
             subtask.text.toString().trim().takeIf(String::isNotBlank)?.let { subs.add(SubtaskDraft(it, false)) }
-            replaceTask(task, task.copy(title = title.text.toString().trim(), due = TodoPupUi.taskDueValue(due.text.toString(), task.due), notes = notes.text.toString(),
+            replaceTask(task, task.copy(title = title.text.toString().trim(), due = DatapomUi.taskDueValue(due.text.toString(), task.due), notes = notes.text.toString(),
                 tags = tags.text.toString().split(',').map { it.trim().lowercase() }.filter { it.isNotBlank() }, subtasks = subs))
         }
     }
@@ -1108,7 +1108,7 @@ class MainActivity : AppCompatActivity() {
         form.addView(title); form.addView(dueRow(due)); form.addView(notes); form.addView(tags); form.addView(error)
         themedDialog("New task", form, "Add task", validate = { validateTaskTitle(title, error) }) {
             val value = title.text.toString().trim()
-            val created = TaskDraft(UUID.randomUUID().toString(), value, due = TodoPupUi.taskDueValue(due.text.toString(), null),
+            val created = TaskDraft(UUID.randomUUID().toString(), value, due = DatapomUi.taskDueValue(due.text.toString(), null),
                 tags = tags.text.toString().split(',').map { it.trim().lowercase() }.filter(String::isNotBlank),
                 notes = notes.text.toString())
             repository.saveTask(created, null); taskQuickAdd = ""; show(Screen.TASKS)
@@ -1127,23 +1127,23 @@ class MainActivity : AppCompatActivity() {
     private fun dueRow(field: EditText): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP) }
+        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.CONTENT_GAP_DP) }
         addView(field, LinearLayout.LayoutParams(0, -2, 1f))
         addView(action("×") { field.setText("") }.apply {
             contentDescription = "Clear task due date"
-        }, LinearLayout.LayoutParams(dp(TodoPupUi.CONTROL_HEIGHT_DP), dp(TodoPupUi.CONTROL_HEIGHT_DP)).apply {
-            marginStart = dp(TodoPupUi.CONTENT_GAP_DP)
+        }, LinearLayout.LayoutParams(dp(DatapomUi.CONTROL_HEIGHT_DP), dp(DatapomUi.CONTROL_HEIGHT_DP)).apply {
+            marginStart = dp(DatapomUi.CONTENT_GAP_DP)
         })
     }
 
     private fun taskFormError() = label("", danger, 13f).apply {
         visibility = View.GONE
         accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        setPadding(0, 0, 0, dp(TodoPupUi.CONTENT_GAP_DP))
+        setPadding(0, 0, 0, dp(DatapomUi.CONTENT_GAP_DP))
     }
 
     private fun validateTaskTitle(field: EditText, error: TextView): Boolean {
-        val message = TodoPupUi.taskTitleError(field.text.toString())
+        val message = DatapomUi.taskTitleError(field.text.toString())
         error.text = message.orEmpty()
         error.visibility = if (message == null) View.GONE else View.VISIBLE
         if (message != null) field.requestFocus()
@@ -1165,15 +1165,15 @@ class MainActivity : AppCompatActivity() {
         val task = conflict.local ?: conflict.remote
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(TodoPupUi.CARD_PADDING_DP))
-            background = box(panel, TodoPupUi.CONTROL_RADIUS_DP.toFloat(), border)
-            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP) }
+            setPadding(dp(DatapomUi.CARD_PADDING_DP))
+            background = box(panel, DatapomUi.CONTROL_RADIUS_DP.toFloat(), border)
+            layoutParams = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.CONTENT_GAP_DP) }
         }
         row.addView(label(task?.title ?: "Deleted task", text, 14f), LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(action("Review") { reviewTaskConflict(conflict) }.apply {
             contentDescription = "Review task conflict: ${task?.title ?: "Deleted task"}"
             minWidth = dp(78)
-        }, LinearLayout.LayoutParams(-2, dp(TodoPupUi.CONTROL_HEIGHT_DP)).apply { marginStart = dp(TodoPupUi.CONTENT_GAP_DP) })
+        }, LinearLayout.LayoutParams(-2, dp(DatapomUi.CONTROL_HEIGHT_DP)).apply { marginStart = dp(DatapomUi.CONTENT_GAP_DP) })
         return row
     }
 
@@ -1186,10 +1186,10 @@ class MainActivity : AppCompatActivity() {
         val fields = (listOf("title") + conflict.fields).map { if (it == "done") "status" else it }.distinct()
         fun version(name: String, task: TaskDraft?) {
             form.addView(sectionTitle(name).apply {
-                if (form.childCount == 0) setPadding(0, 0, 0, dp(TodoPupUi.CONTENT_GAP_DP))
+                if (form.childCount == 0) setPadding(0, 0, 0, dp(DatapomUi.CONTENT_GAP_DP))
             })
             if (task == null) { form.addView(label("Deleted", muted, 14f).apply {
-                setPadding(0, 0, 0, dp(TodoPupUi.CONTENT_GAP_DP))
+                setPadding(0, 0, 0, dp(DatapomUi.CONTENT_GAP_DP))
             }); return }
             fields.forEach { key ->
                 val value = when (key) {
@@ -1204,7 +1204,7 @@ class MainActivity : AppCompatActivity() {
                     else -> null
                 }
                 value?.let { form.addView(label(it, text, 14f).apply {
-                    setPadding(0, 0, 0, dp(TodoPupUi.CONTENT_GAP_DP))
+                    setPadding(0, 0, 0, dp(DatapomUi.CONTENT_GAP_DP))
                 }) }
             }
         }
@@ -1227,7 +1227,7 @@ class MainActivity : AppCompatActivity() {
         form.addView(action(keepLabel, conflict.local != null) { resolve(true) }.apply {
             if (conflict.local == null) setTextColor(danger)
             setSingleLine(false); maxLines = 3; ellipsize = null
-            setPadding(dp(TodoPupUi.SPACE_SM_DP), dp(TodoPupUi.SPACE_SM_DP), dp(TodoPupUi.SPACE_SM_DP), dp(TodoPupUi.SPACE_SM_DP))
+            setPadding(dp(DatapomUi.SPACE_SM_DP), dp(DatapomUi.SPACE_SM_DP), dp(DatapomUi.SPACE_SM_DP), dp(DatapomUi.SPACE_SM_DP))
         }, fullActionParams().apply { height = ViewGroup.LayoutParams.WRAP_CONTENT })
         form.addView(action("Use Mac") { resolve(false) }, fullActionParams())
         styleDialog(dialog); dialog.show()
@@ -1239,9 +1239,9 @@ class MainActivity : AppCompatActivity() {
         val column = page("connect", "Private two-way sync over USB")
         column.addView(sectionTitle("USB connection"))
         val configured = MobileConfig.isConfigured(this)
-        val connection = TodoPupUi.connectionStatus(configured, MobileConfig.verifiedAt(this))
+        val connection = DatapomUi.connectionStatus(configured, MobileConfig.verifiedAt(this))
         val connectionStatus = label(connection.message, muted, 13f).apply {
-            setPadding(0, 0, 0, dp(TodoPupUi.SPACE_MD_DP))
+            setPadding(0, 0, 0, dp(DatapomUi.SPACE_MD_DP))
         }
         val syncActionHost = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         lateinit var startExplicitSync: () -> Unit
@@ -1249,7 +1249,7 @@ class MainActivity : AppCompatActivity() {
             syncActionHost.removeAllViews()
             if (connection.canSync) {
                 syncActionHost.addView(action(if (syncing) "Syncing…" else "Sync now", true) { startExplicitSync() }.apply {
-                    contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_SYNC)
+                    contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_SYNC)
                     isEnabled = !syncing
                     alpha = if (syncing) .6f else 1f
                 }, fullActionParams())
@@ -1291,15 +1291,15 @@ class MainActivity : AppCompatActivity() {
         column.addView(sectionTitle("Phone usage sync"))
         column.addView(label(
             "Usage is saved daily on this phone, even while unplugged. USB sync sends every unsent day.", muted, 12f,
-        ).apply { setPadding(0, 0, 0, dp(TodoPupUi.CONTENT_GAP_DP)) })
+        ).apply { setPadding(0, 0, 0, dp(DatapomUi.CONTENT_GAP_DP)) })
         column.addView(action("Grant usage access") {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }, fullActionParams(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP))
+        }, fullActionParams(DatapomUi.COMPACT_CONTROL_HEIGHT_DP))
         if (Config.isConfigured(this)) column.addView(action("Send usage now") {
             sendTestNow()
-        }, fullActionParams(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP))
+        }, fullActionParams(DatapomUi.COMPACT_CONTROL_HEIGHT_DP))
         column.addView(label("", muted, 12f).apply {
-            setPadding(0, dp(TodoPupUi.SPACE_MD_DP), 0, 0)
+            setPadding(0, dp(DatapomUi.SPACE_MD_DP), 0, 0)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             fun refresh() {
                 val last = Config.getLastPush(this@MainActivity)
@@ -1324,7 +1324,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleConfigDeepLink(intent: Intent?) {
         val data: Uri = intent?.data ?: return
-        if (!TodoPupUi.acceptsDeepLink(packageName, data.scheme)) return
+        if (!DatapomUi.acceptsDeepLink(packageName, data.scheme)) return
         if (data.host == "usage") {
             if (Config.isConfigured(this)) enqueueUsageNow()
             return
@@ -1367,22 +1367,22 @@ class MainActivity : AppCompatActivity() {
     private fun page(title: String, subtitle: String) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(
-            dp(TodoPupUi.PAGE_GUTTER_DP),
-            dp(TodoPupUi.PAGE_GUTTER_DP),
-            dp(TodoPupUi.PAGE_GUTTER_DP),
-            dp(TodoPupUi.PAGE_BOTTOM_DP),
+            dp(DatapomUi.PAGE_GUTTER_DP),
+            dp(DatapomUi.PAGE_GUTTER_DP),
+            dp(DatapomUi.PAGE_GUTTER_DP),
+            dp(DatapomUi.PAGE_BOTTOM_DP),
         )
         val brand = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         brand.addView(ImageView(this@MainActivity).apply { setImageResource(R.drawable.pompom_icon); contentDescription = "Datapom"; scaleType = ImageView.ScaleType.CENTER_CROP }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val words = LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.SPACE_MD_DP), 0, 0, 0)
+            setPadding(dp(DatapomUi.SPACE_MD_DP), 0, 0, 0)
         }
         words.addView(label(title, accent, 22f).apply { typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) })
         words.addView(label(subtitle, muted, 11f))
         brand.addView(words)
         addView(brand, LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(TodoPupUi.SPACE_LG_DP)
+            bottomMargin = dp(DatapomUi.SPACE_LG_DP)
         })
     }
 
@@ -1392,19 +1392,19 @@ class MainActivity : AppCompatActivity() {
     }
     private fun sectionTitle(value: String) = label(value.uppercase(), accent, 12f).apply {
         typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-        setPadding(0, dp(TodoPupUi.SECTION_TOP_GAP_DP), 0, dp(TodoPupUi.CONTENT_GAP_DP))
+        setPadding(0, dp(DatapomUi.SECTION_TOP_GAP_DP), 0, dp(DatapomUi.CONTENT_GAP_DP))
     }
     private fun input(value: String, hintText: String, multiline: Boolean = false) = CursorAwareEditText(this).apply {
         setText(value); hint = hintText; setTextColor(this@MainActivity.text); setHintTextColor(muted); textSize = 14f; typeface = Typeface.MONOSPACE
-        setPadding(dp(TodoPupUi.CONTROL_PADDING_DP))
-        background = box(panel, (if (multiline) TodoPupUi.TEXTAREA_RADIUS_DP else TodoPupUi.CONTROL_RADIUS_DP).toFloat(), border)
-        minHeight = dp(TodoPupUi.CONTROL_HEIGHT_DP)
+        setPadding(dp(DatapomUi.CONTROL_PADDING_DP))
+        background = box(panel, (if (multiline) DatapomUi.TEXTAREA_RADIUS_DP else DatapomUi.CONTROL_RADIUS_DP).toFloat(), border)
+        minHeight = dp(DatapomUi.CONTROL_HEIGHT_DP)
         inputType = InputType.TYPE_CLASS_TEXT or if (multiline)
             InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             else InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         if (multiline) { gravity = Gravity.TOP; minLines = 3 } else setSingleLine(true)
         layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+            bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
         }
     }
     private fun action(value: String, selected: Boolean = false, click: () -> Unit) = TextView(this).apply {
@@ -1415,56 +1415,56 @@ class MainActivity : AppCompatActivity() {
         setSingleLine(true)
         ellipsize = TextUtils.TruncateAt.END
         contentDescription = value
-        setPadding(dp(TodoPupUi.SPACE_SM_DP), 0, dp(TodoPupUi.SPACE_SM_DP), 0)
-        minWidth = dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)
-        minHeight = dp(TodoPupUi.COMPACT_CONTROL_HEIGHT_DP)
+        setPadding(dp(DatapomUi.SPACE_SM_DP), 0, dp(DatapomUi.SPACE_SM_DP), 0)
+        minWidth = dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)
+        minHeight = dp(DatapomUi.COMPACT_CONTROL_HEIGHT_DP)
         isClickable = true
         isFocusable = true
         foreground = selectableItemBackgroundBorderless()
-        background = box(if (selected) accent else panel, TodoPupUi.CONTROL_RADIUS_DP.toFloat(), if (selected) accent else border); setOnClickListener { click() }
+        background = box(if (selected) accent else panel, DatapomUi.CONTROL_RADIUS_DP.toFloat(), if (selected) accent else border); setOnClickListener { click() }
     }
 
     private fun recordButton(click: () -> Unit) = FrameLayout(this).apply {
         NativeAccessibility.button(this)
-        contentDescription = TodoPupUi.controlDescription(UiControl.JOURNAL_VOICE)
+        contentDescription = DatapomUi.controlDescription(UiControl.JOURNAL_VOICE)
         isClickable = true
         isFocusable = true
         foreground = selectableItemBackgroundBorderless()
         background = oval(panel, border)
         addView(View(this@MainActivity).apply {
             background = oval(muted, muted, 0)
-        }, FrameLayout.LayoutParams(dp(TodoPupUi.RECORD_DOT_DP), dp(TodoPupUi.RECORD_DOT_DP), Gravity.CENTER))
+        }, FrameLayout.LayoutParams(dp(DatapomUi.RECORD_DOT_DP), dp(DatapomUi.RECORD_DOT_DP), Gravity.CENTER))
         setOnClickListener { click() }
     }
     private fun emptyState(value: String) = label(value, muted, 13f).apply {
         gravity = Gravity.CENTER
-        setPadding(dp(TodoPupUi.CARD_PADDING_DP))
-        background = box(panel, TodoPupUi.SPACE_MD_DP.toFloat(), border)
+        setPadding(dp(DatapomUi.CARD_PADDING_DP))
+        background = box(panel, DatapomUi.SPACE_MD_DP.toFloat(), border)
     }
     private fun infoCard(mark: String, title: String, body: String): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(TodoPupUi.CARD_PADDING_DP))
-            background = box(panel, TodoPupUi.SPACE_MD_DP.toFloat(), border)
+            setPadding(dp(DatapomUi.CARD_PADDING_DP))
+            background = box(panel, DatapomUi.SPACE_MD_DP.toFloat(), border)
         }
         row.addView(label(mark, accent, 20f), LinearLayout.LayoutParams(dp(48), dp(48)))
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         copy.addView(label(title, text, 14f).apply { typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD) })
-        copy.addView(label(body, muted, 12f).apply { setPadding(0, dp(TodoPupUi.SPACE_XS_DP), 0, 0) })
+        copy.addView(label(body, muted, 12f).apply { setPadding(0, dp(DatapomUi.SPACE_XS_DP), 0, 0) })
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         row.layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-            bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+            bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
         }
         return row
     }
     private fun fullActionParams(
-        heightDp: Int = TodoPupUi.CONTROL_HEIGHT_DP,
+        heightDp: Int = DatapomUi.CONTROL_HEIGHT_DP,
     ) = LinearLayout.LayoutParams(-1, dp(heightDp)).apply {
-        bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+        bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
     }
     private fun dialogContent(view: View) = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(TodoPupUi.DIALOG_PADDING_DP))
+        setPadding(dp(DatapomUi.DIALOG_PADDING_DP))
         addView(ScrollView(this@MainActivity).apply { addView(view) }, LinearLayout.LayoutParams(-1, -2))
     }
     private fun showDatePicker(initial: LocalDate, selected: (LocalDate) -> Unit) {

@@ -21,30 +21,30 @@ internal object NativeDialogTheme {
         fun dp(value: Int) = (value * density + .5f).toInt()
         dialog.window?.apply {
             setBackgroundDrawable(GradientDrawable().apply {
-                setColor(Color.parseColor(TodoPupUi.PANEL))
-                cornerRadius = dp(TodoPupUi.SPACE_MD_DP).toFloat()
-                setStroke(dp(1), Color.parseColor(TodoPupUi.BORDER))
+                setColor(Color.parseColor(DatapomUi.PANEL))
+                cornerRadius = dp(DatapomUi.SPACE_MD_DP).toFloat()
+                setStroke(dp(1), Color.parseColor(DatapomUi.BORDER))
             })
         }
         followWindowSize(dialog)
         val titleId = context.resources.getIdentifier("alertTitle", "id", "android")
         dialog.findViewById<TextView>(titleId)?.apply {
-            setTextColor(Color.parseColor(TodoPupUi.TEXT))
+            setTextColor(Color.parseColor(DatapomUi.TEXT))
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             textSize = 18f
         }
         dialog.findViewById<TextView>(android.R.id.message)?.apply {
-            setTextColor(Color.parseColor(TodoPupUi.TEXT))
+            setTextColor(Color.parseColor(DatapomUi.TEXT))
             typeface = Typeface.MONOSPACE
             textSize = 14f
         }
         listOf(AlertDialog.BUTTON_POSITIVE, AlertDialog.BUTTON_NEGATIVE, AlertDialog.BUTTON_NEUTRAL).forEach { which ->
             dialog.getButton(which)?.apply {
-                setTextColor(Color.parseColor(if (which == AlertDialog.BUTTON_POSITIVE) TodoPupUi.ACCENT else TodoPupUi.MUTED))
+                setTextColor(Color.parseColor(if (which == AlertDialog.BUTTON_POSITIVE) DatapomUi.ACCENT else DatapomUi.MUTED))
                 typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
                 textSize = 13f
                 isAllCaps = false
-                minHeight = dp(TodoPupUi.CONTROL_HEIGHT_DP)
+                minHeight = dp(DatapomUi.CONTROL_HEIGHT_DP)
             }
         }
     }
@@ -57,7 +57,7 @@ internal object NativeDialogTheme {
         fun resize() {
             if (!dialog.isShowing) return
             val metrics = context.resources.displayMetrics
-            val gutter = (2 * TodoPupUi.PAGE_GUTTER_DP * metrics.density + .5f).toInt()
+            val gutter = (2 * DatapomUi.PAGE_GUTTER_DP * metrics.density + .5f).toInt()
             val current = if (Build.VERSION.SDK_INT >= 30) window.windowManager.currentWindowMetrics else null
             val insets = if (Build.VERSION.SDK_INT >= 30) current?.windowInsets?.getInsetsIgnoringVisibility(
                 WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()) else null

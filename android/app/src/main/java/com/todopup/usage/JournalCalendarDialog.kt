@@ -25,11 +25,11 @@ class JournalCalendarDialog(
     private val onCancel: (() -> Unit)? = null,
     private val onSelect: (LocalDate) -> Unit,
 ) {
-    private val panel = Color.parseColor(TodoPupUi.PANEL)
-    private val text = Color.parseColor(TodoPupUi.TEXT)
-    private val muted = Color.parseColor(TodoPupUi.MUTED)
-    private val border = Color.parseColor(TodoPupUi.BORDER)
-    private val accent = Color.parseColor(TodoPupUi.ACCENT)
+    private val panel = Color.parseColor(DatapomUi.PANEL)
+    private val text = Color.parseColor(DatapomUi.TEXT)
+    private val muted = Color.parseColor(DatapomUi.MUTED)
+    private val border = Color.parseColor(DatapomUi.BORDER)
+    private val accent = Color.parseColor(DatapomUi.ACCENT)
     private val density = context.resources.displayMetrics.density
     private var selected = initialDate
     private var month = YearMonth.from(initialDate)
@@ -40,8 +40,8 @@ class JournalCalendarDialog(
     fun show() {
         val content = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(TodoPupUi.DIALOG_PADDING_DP), dp(TodoPupUi.SPACE_MD_DP),
-                dp(TodoPupUi.DIALOG_PADDING_DP), dp(TodoPupUi.SPACE_SM_DP))
+            setPadding(dp(DatapomUi.DIALOG_PADDING_DP), dp(DatapomUi.SPACE_MD_DP),
+                dp(DatapomUi.DIALOG_PADDING_DP), dp(DatapomUi.SPACE_SM_DP))
             setBackgroundColor(panel)
         }
         val header = LinearLayout(context).apply {
@@ -127,7 +127,7 @@ class JournalCalendarDialog(
                     background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(accent) }
                 }, FrameLayout.LayoutParams(dp(4), dp(4), Gravity.CENTER))
             }, LinearLayout.LayoutParams(-1, dp(10)))
-            grid.addView(cell, cellParams(dp(TodoPupUi.CONTROL_HEIGHT_DP)))
+            grid.addView(cell, cellParams(dp(DatapomUi.CONTROL_HEIGHT_DP)))
         }
     }
 

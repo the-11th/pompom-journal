@@ -24,15 +24,15 @@ class MediaJournalView(private val activity: MainActivity, date: String, setting
     private val lifecycle = JournalViewLifecycle()
     private class BridgeError(val payload: JSONObject) : IllegalStateException(payload.optString("message"))
     init {
-        setBackgroundColor(android.graphics.Color.parseColor(TodoPupUi.BACKGROUND))
-        web.setBackgroundColor(android.graphics.Color.parseColor(TodoPupUi.BACKGROUND))
+        setBackgroundColor(android.graphics.Color.parseColor(DatapomUi.BACKGROUND))
+        web.setBackgroundColor(android.graphics.Color.parseColor(DatapomUi.BACKGROUND))
         web.settings.javaScriptEnabled = true; web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = false; web.settings.allowContentAccess = false
         web.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         web.settings.setSupportMultipleWindows(false)
         if (activity.packageName.endsWith(".qa")) web.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-                android.util.Log.d("TodoPupQa", "${message.message()} (${message.sourceId()}:${message.lineNumber()})")
+                android.util.Log.d("DatapomQa", "${message.message()} (${message.sourceId()}:${message.lineNumber()})")
                 return true
             }
         }
@@ -48,7 +48,7 @@ class MediaJournalView(private val activity: MainActivity, date: String, setting
             }
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
                 return runCatching { serve(request) }.getOrElse {
-                    if (activity.packageName.endsWith(".qa")) android.util.Log.w("TodoPupQa", "Resource unavailable: ${request.url.path}", it)
+                    if (activity.packageName.endsWith(".qa")) android.util.Log.w("DatapomQa", "Resource unavailable: ${request.url.path}", it)
                     response("text/plain", "Unavailable".byteInputStream(), 404, "Not Found")
                 }
             }

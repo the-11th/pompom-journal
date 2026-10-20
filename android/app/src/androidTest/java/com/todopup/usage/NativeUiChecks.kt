@@ -11,17 +11,17 @@ internal object NativeUiChecks {
     fun run(context: Context) {
         GallerySelectionChecks.run(context)
         UsageUploadChecks.run()
-        val theme = ContextThemeWrapper(context, R.style.Theme_TodoPupUsage)
+        val theme = ContextThemeWrapper(context, R.style.Theme_Datapom)
         val dialogTheme = TypedValue()
         check(theme.theme.resolveAttribute(android.R.attr.alertDialogTheme, dialogTheme, true))
         val dialogContext = ContextThemeWrapper(theme, dialogTheme.resourceId)
         val attrs = dialogContext.obtainStyledAttributes(intArrayOf(
             android.R.attr.textColorPrimary, android.R.attr.textColorSecondary, android.R.attr.fontFamily))
         try {
-            check(attrs.getColor(0, 0) == Color.parseColor(TodoPupUi.TEXT)) {
+            check(attrs.getColor(0, 0) == Color.parseColor(DatapomUi.TEXT)) {
                 "Native dialog and list text must use the mobile text token"
             }
-            check(attrs.getColor(1, 0) == Color.parseColor(TodoPupUi.MUTED)) {
+            check(attrs.getColor(1, 0) == Color.parseColor(DatapomUi.MUTED)) {
                 "Native dialog secondary text must use the mobile muted token"
             }
             check(attrs.getString(2) == "monospace") { "Native dialog lists must use monospace" }

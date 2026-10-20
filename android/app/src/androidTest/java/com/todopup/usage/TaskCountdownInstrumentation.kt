@@ -78,7 +78,7 @@ class TaskCountdownInstrumentation : Instrumentation() {
             checkMain {
                 callActivityOnResume(current)
                 check(label("resume").text.endsWith(" · overdue")) { "Resume did not update the overdue badge" }
-                check(label("resume").currentTextColor == Color.parseColor(TodoPupUi.DANGER))
+                check(label("resume").currentTextColor == Color.parseColor(DatapomUi.DANGER))
                 check(tickingLabel.text.endsWith("due soon"))
             }
             // Let the production timer fire while the activity stays on Tasks.
@@ -86,7 +86,7 @@ class TaskCountdownInstrumentation : Instrumentation() {
             checkMain {
                 check(label("tick") === tickingLabel) { "Timer replaced the task card" }
                 check(tickingLabel.text.endsWith(" · overdue")) { "Visible countdown did not tick" }
-                check(tickingLabel.currentTextColor == Color.parseColor(TodoPupUi.DANGER))
+                check(tickingLabel.currentTextColor == Color.parseColor(DatapomUi.DANGER))
                 check(label("boundary").text.endsWith("47 hour(s) left"))
                 check(!label("completed").text.contains("overdue"))
                 check(draft.text.toString() == "Keep this unfinished task")

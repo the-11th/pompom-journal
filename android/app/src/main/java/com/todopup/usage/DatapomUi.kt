@@ -25,7 +25,7 @@ enum class UiControl {
 }
 
 /** Android mirror of the theme tokens in static/style.css. */
-object TodoPupUi {
+object DatapomUi {
     const val BACKGROUND = "#14161a"
     const val PANEL = "#1c1f26"
     const val TEXT = "#e6e6e6"
@@ -70,7 +70,8 @@ object TodoPupUi {
     fun canEditTask(status: String): Boolean = status == "active"
 
     fun acceptsDeepLink(packageName: String, scheme: String?): Boolean =
-        scheme == if (packageName.endsWith(".qa")) "todopup-qa" else "todopup"
+        scheme in if (packageName.endsWith(".qa")) setOf("datapom-qa", "todopup-qa")
+                  else setOf("datapom", "todopup")
 
     fun connectionStatus(configured: Boolean, verifiedAt: String,
                          zone: ZoneId = ZoneId.systemDefault()): ConnectionUi {

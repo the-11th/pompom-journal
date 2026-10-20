@@ -31,7 +31,7 @@
         android:label="${appLabel}"
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
-        android:theme="@style/Theme.TodoPupUsage">
+        android:theme="@style/Theme.Datapom">
 
         <activity
             android:name=".MainActivity"
@@ -43,22 +43,25 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- USB helper deep links configure loopback journal and usage tokens. -->
+            <!-- Datapom links and legacy USB helpers share the same handlers. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="${appScheme}" android:host="config" />
+                <data android:scheme="${legacyAppScheme}" android:host="config" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="${appScheme}" android:host="sync" />
+                <data android:scheme="${legacyAppScheme}" android:host="sync" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="${appScheme}" android:host="usage" />
+                <data android:scheme="${legacyAppScheme}" android:host="usage" />
             </intent-filter>
         </activity>
         <service android:name=".LocationTrackingService" android:exported="false" android:foregroundServiceType="location" />

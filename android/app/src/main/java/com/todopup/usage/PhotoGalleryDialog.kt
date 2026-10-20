@@ -31,10 +31,10 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
     private var showAll = day == null
     private val tabs = LinearLayout(context).apply { isBaselineAligned = false }
     private val selected = linkedSetOf<Uri>()
-    private val accent = Color.parseColor(TodoPupUi.ACCENT)
-    private val panel = Color.parseColor(TodoPupUi.PANEL)
-    private val muted = Color.parseColor(TodoPupUi.MUTED)
-    private val border = Color.parseColor(TodoPupUi.BORDER)
+    private val accent = Color.parseColor(DatapomUi.ACCENT)
+    private val panel = Color.parseColor(DatapomUi.PANEL)
+    private val muted = Color.parseColor(DatapomUi.MUTED)
+    private val border = Color.parseColor(DatapomUi.BORDER)
     private val body = object : LinearLayout(context) {
         override fun onConfigurationChanged(newConfig: Configuration) {
             super.onConfigurationChanged(newConfig)
@@ -42,13 +42,13 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
         }
     }.apply {
         orientation = LinearLayout.VERTICAL
-        val padding = dp(TodoPupUi.DIALOG_PADDING_DP)
+        val padding = dp(DatapomUi.DIALOG_PADDING_DP)
         setPadding(padding, padding, padding, padding)
         background = GradientDrawable().apply {
-            setColor(panel); cornerRadius = dp(TodoPupUi.SPACE_MD_DP).toFloat(); setStroke(dp(1), border)
+            setColor(panel); cornerRadius = dp(DatapomUi.SPACE_MD_DP).toFloat(); setStroke(dp(1), border)
         }
     }
-    private val title = label("Photo gallery", Color.parseColor(TodoPupUi.TEXT)).apply {
+    private val title = label("Photo gallery", Color.parseColor(DatapomUi.TEXT)).apply {
         textSize = 18f; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD); minHeight = dp(32)
     }
     private val header = LinearLayout(context).apply { isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL }
@@ -59,7 +59,7 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
     private var generation = 0
     private val grid = GridView(context).apply {
         numColumns = GridView.AUTO_FIT; columnWidth = dp(96)
-        horizontalSpacing = dp(TodoPupUi.SPACE_XS_DP); verticalSpacing = dp(TodoPupUi.SPACE_XS_DP)
+        horizontalSpacing = dp(DatapomUi.SPACE_XS_DP); verticalSpacing = dp(DatapomUi.SPACE_XS_DP)
         stretchMode = GridView.STRETCH_COLUMN_WIDTH
         setSelector(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
     }
@@ -74,7 +74,7 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
                 addView(ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }, FrameLayout.LayoutParams(-1, -1))
                 addView(View(context),
                     FrameLayout.LayoutParams(dp(24), dp(24), Gravity.TOP or Gravity.END).apply {
-                        topMargin = dp(TodoPupUi.SPACE_XS_DP); marginEnd = dp(TodoPupUi.SPACE_XS_DP)
+                        topMargin = dp(DatapomUi.SPACE_XS_DP); marginEnd = dp(DatapomUi.SPACE_XS_DP)
                     })
             }
             cell.layoutParams.height = grid.columnWidth.takeIf { it > 0 } ?: dp(114)
@@ -102,17 +102,17 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
         header.addView(title); header.addView(tools)
         tools.addView(action("Photo access", chooseMore), LinearLayout.LayoutParams(0, -1, 1f))
         tools.addView(action("Other gallery") { completed = true; dismiss(); systemPicker() },
-            LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = dp(TodoPupUi.CONTENT_GAP_DP) })
-        body.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP) })
+            LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = dp(DatapomUi.CONTENT_GAP_DP) })
+        body.addView(header, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.CONTENT_GAP_DP) })
         if (day != null) {
             for ((label, all) in listOf("This day" to false, "All photos" to true)) {
                 tabs.addView(action(label) { showAll = all; filterPhotos() }, LinearLayout.LayoutParams(0, -2, 1f).apply {
-                    if (all) marginStart = dp(TodoPupUi.CONTENT_GAP_DP)
+                    if (all) marginStart = dp(DatapomUi.CONTENT_GAP_DP)
                 })
             }
-            body.addView(tabs, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP) })
+            body.addView(tabs, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.CONTENT_GAP_DP) })
         }
-        body.addView(status, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP) })
+        body.addView(status, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(DatapomUi.CONTENT_GAP_DP) })
         arrangeHeader()
         grid.adapter = adapter
         grid.setOnItemClickListener { _, _, position, _ ->
@@ -122,8 +122,8 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
         body.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f))
         val actions = LinearLayout(context).apply { isBaselineAligned = false; gravity = Gravity.CENTER_VERTICAL }
         actions.addView(action("Cancel") { finish(emptyList()) }, LinearLayout.LayoutParams(0, -1, 1f))
-        actions.addView(add, LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = dp(TodoPupUi.CONTENT_GAP_DP) })
-        body.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(TodoPupUi.CONTENT_GAP_DP) })
+        actions.addView(add, LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = dp(DatapomUi.CONTENT_GAP_DP) })
+        body.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(DatapomUi.CONTENT_GAP_DP) })
         setContentView(body)
         setOnDismissListener { io.shutdownNow(); if (!completed) result(emptyList()) }
         updateSelection()
@@ -138,7 +138,7 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
         val landscape = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         header.orientation = if (landscape) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
         title.layoutParams = LinearLayout.LayoutParams(if (landscape) 0 else -1, -2, if (landscape) 1f else 0f).apply {
-            if (landscape) marginEnd = dp(TodoPupUi.SPACE_MD_DP) else bottomMargin = dp(TodoPupUi.CONTENT_GAP_DP)
+            if (landscape) marginEnd = dp(DatapomUi.SPACE_MD_DP) else bottomMargin = dp(DatapomUi.CONTENT_GAP_DP)
         }
         tools.layoutParams = LinearLayout.LayoutParams(if (landscape) 0 else -1, -2, if (landscape) 2f else 0f)
     }
@@ -171,7 +171,7 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
             val tab = tabs.getChildAt(i)
             tab.isSelected = (i == 1) == showAll
             tab.background = GradientDrawable().apply {
-                setColor(if (tab.isSelected) Color.parseColor(TodoPupUi.BACKGROUND) else panel)
+                setColor(if (tab.isSelected) Color.parseColor(DatapomUi.BACKGROUND) else panel)
                 cornerRadius = dp(4).toFloat(); setStroke(dp(1), if (tab.isSelected) accent else border)
             }
         }
@@ -180,7 +180,7 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
     private fun updateSelection() {
         add.isEnabled = selected.isNotEmpty(); add.alpha = if (add.isEnabled) 1f else .45f
         add.text = if (selected.isEmpty()) "Add photos" else "Add ${selected.size} photo" + if (selected.size == 1) "" else "s"
-        val message = TodoPupUi.galleryMessage(photos.size, hasPhotoAccess(context), hasLocationAccess(context))
+        val message = DatapomUi.galleryMessage(photos.size, hasPhotoAccess(context), hasLocationAccess(context))
         status.text = if (!showAll && day != null) {
             if (photos.isEmpty() && hasPhotoAccess(context)) "No photos taken on $day. Try All photos."
             else listOfNotNull("Taken on $day", message).joinToString(" · ")
@@ -196,9 +196,9 @@ class PhotoGalleryDialog(context: Context, private val chooseMore: () -> Unit,
         NativeAccessibility.button(this)
         gravity = Gravity.CENTER; includeFontPadding = false; isClickable = true; isFocusable = true
         textSize = 13f; typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-        minHeight = dp(TodoPupUi.CONTROL_HEIGHT_DP)
+        minHeight = dp(DatapomUi.CONTROL_HEIGHT_DP)
         background = GradientDrawable().apply { setColor(panel); cornerRadius = dp(4).toFloat(); setStroke(dp(1), border) }
-        setPadding(dp(6), dp(TodoPupUi.SPACE_XS_DP), dp(6), dp(TodoPupUi.SPACE_XS_DP)); setOnClickListener { click() }
+        setPadding(dp(6), dp(DatapomUi.SPACE_XS_DP), dp(6), dp(DatapomUi.SPACE_XS_DP)); setOnClickListener { click() }
     }
     companion object {
         fun permissions(): Array<String> = buildList {

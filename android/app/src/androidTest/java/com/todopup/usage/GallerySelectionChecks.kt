@@ -26,7 +26,7 @@ internal object GallerySelectionChecks {
         try {
             for (fontScale in listOf(1f, 2f)) {
                 val config = Configuration(context.resources.configuration).apply { this.fontScale = fontScale }
-                val themed = ContextThemeWrapper(context.createConfigurationContext(config), R.style.Theme_TodoPupUsage)
+                val themed = ContextThemeWrapper(context.createConfigurationContext(config), R.style.Theme_Datapom)
                 val dialog = PhotoGalleryDialog(themed, {}, {}, {})
                 fun field(name: String): Any = PhotoGalleryDialog::class.java.getDeclaredField(name).apply { isAccessible = true }.get(dialog)!!
                 try {
@@ -46,7 +46,7 @@ internal object GallerySelectionChecks {
                             view.draw(Canvas(bitmap))
                             val captureKey = fontScale to cell.isSelected
                             if (captureFile != null && captureKey !in captures) captures[captureKey] = bitmap.copy(Bitmap.Config.ARGB_8888, false)
-                            val accent = Color.parseColor(TodoPupUi.ACCENT)
+                            val accent = Color.parseColor(DatapomUi.ACCENT)
                             val radius = 8 * themed.resources.displayMetrics.density
                             return buildList {
                                 for (y in 0 until size) for (x in 0 until size) {
@@ -88,7 +88,7 @@ internal object GallerySelectionChecks {
                 val sheet = Bitmap.createBitmap(size * 2 + gap * 3, size * 2 + gap * 3, Bitmap.Config.ARGB_8888)
                 try {
                     val canvas = Canvas(sheet)
-                    canvas.drawColor(Color.parseColor(TodoPupUi.PANEL))
+                    canvas.drawColor(Color.parseColor(DatapomUi.PANEL))
                     for ((row, scale) in listOf(1f, 2f).withIndex()) for ((column, selected) in listOf(false, true).withIndex()) {
                         canvas.drawBitmap(captures.getValue(scale to selected), (gap + column * (size + gap)).toFloat(), (gap + row * (size + gap)).toFloat(), null)
                     }
@@ -103,7 +103,7 @@ internal object GallerySelectionChecks {
         val day = LocalDate.parse("2026-09-24")
         val start = day.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val end = day.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val themed = ContextThemeWrapper(context, R.style.Theme_TodoPupUsage)
+        val themed = ContextThemeWrapper(context, R.style.Theme_Datapom)
         val dialog = PhotoGalleryDialog(themed, {}, {}, {}, day)
         fun field(name: String): Any = PhotoGalleryDialog::class.java.getDeclaredField(name).apply { isAccessible = true }.get(dialog)!!
         try {
