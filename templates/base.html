@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>To-Do</title>
+  <title>Datapom</title>
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/pompom-icon.png') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/pompom-icon.png') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -63,6 +63,7 @@
         var isCustom = select.value === 'custom';
         customInput.hidden = !isCustom;
         customInput.disabled = !isCustom;  // don't submit a stray value
+        customInput.required = isCustom;
       }
       select.addEventListener('change', sync);
       sync();  // set correct state on page load
@@ -95,37 +96,16 @@
       }
       if (nameInput) nameInput.addEventListener('input', sync);
       colorInput.addEventListener('input', sync);
+      if (colorInput.form) colorInput.form.addEventListener('reset', function () { setTimeout(sync, 0); });
       sync();  // initial render
     });
-
-    // Custom title validation for journal-form (replaces browser tooltip).
-    (function () {
-      var form = document.getElementById('journal-form');
-      if (!form) return;
-      var titleInput = form.querySelector('input[name="title"]');
-      var titleError = document.getElementById('title-error');
-      if (!titleInput || !titleError) return;
-      form.addEventListener('submit', function (e) {
-        if (!titleInput.value.trim()) {
-          e.preventDefault();
-          titleInput.classList.add('input-invalid');
-          titleError.hidden = false;
-          titleInput.focus();
-        }
-      });
-      titleInput.addEventListener('input', function () {
-        if (titleInput.value.trim()) {
-          titleInput.classList.remove('input-invalid');
-          titleError.hidden = true;
-        }
-      });
-    }());
 
     // Global dark confirm modal — available as window.confirmModal(msg, label).
     // Any button with data-confirm="message" is auto-wired: clicking it shows
     // the modal and only submits its form if the user confirms.
     (function () {
       var _overlay = null;
+      var _cancelPending = null;
 
       function _build() {
         var ov = document.createElement('div');
@@ -137,6 +117,8 @@
         box.setAttribute('aria-modal', 'true');
         var msg = document.createElement('p');
         msg.className = 'modal-msg';
+        msg.id = 'confirm-modal-message';
+        box.setAttribute('aria-labelledby', msg.id);
         var actions = document.createElement('div');
         actions.className = 'modal-actions';
         var cancelBtn = document.createElement('button');
@@ -157,27 +139,47 @@
       }
 
       window.confirmModal = function (message, confirmLabel) {
+        if (_cancelPending) _cancelPending();
         if (!_overlay) _overlay = _build();
         var o = _overlay;
+        var previousFocus = document.activeElement;
+        var previousOverflow = document.body.style.overflow;
         o.msg.textContent = message;
         o.confirmBtn.textContent = confirmLabel || 'Continue';
         o.overlay.hidden = false;
+        document.body.style.overflow = 'hidden';
         return new Promise(function (resolve) {
           function cleanup() {
+            _cancelPending = null;
             o.overlay.hidden = true;
+            document.body.style.overflow = previousOverflow;
             o.cancelBtn.removeEventListener('click', onCancel);
             o.confirmBtn.removeEventListener('click', onConfirm);
             o.overlay.removeEventListener('click', onOv);
-            document.removeEventListener('keydown', onEsc);
+            document.removeEventListener('keydown', onKey, true);
+            if (previousFocus && previousFocus.isConnected) previousFocus.focus();
           }
           function onConfirm() { cleanup(); resolve(true); }
           function onCancel()  { cleanup(); resolve(false); }
           function onOv(e) { if (e.target === o.overlay) { cleanup(); resolve(false); } }
-          function onEsc(e) { if (e.key === 'Escape') { cleanup(); resolve(false); } }
+          function onKey(e) {
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              onCancel();
+            } else if (e.key === 'Tab') {
+              e.preventDefault();
+              var atCancel = document.activeElement === o.cancelBtn;
+              var atConfirm = document.activeElement === o.confirmBtn;
+              (atCancel ? o.confirmBtn : atConfirm ? o.cancelBtn : e.shiftKey ? o.confirmBtn : o.cancelBtn).focus();
+            }
+          }
+          _cancelPending = onCancel;
           o.cancelBtn.addEventListener('click', onCancel);
           o.confirmBtn.addEventListener('click', onConfirm);
           o.overlay.addEventListener('click', onOv);
-          document.addEventListener('keydown', onEsc);
+          document.addEventListener('keydown', onKey, true);
+          o.cancelBtn.focus();
         });
       };
 
@@ -216,8 +218,17 @@
         radio.addEventListener('mousedown', function () {
           radio._wasChecked = radio.checked;
         });
+        radio.addEventListener('keydown', function (event) {
+          if (event.key !== ' ') return;
+          event.preventDefault();
+          if (event.repeat) return;
+          radio.checked = !radio.checked;
+          radio._wasChecked = false;
+          radio.dispatchEvent(new Event('change', { bubbles: true }));
+        });
         radio.addEventListener('click', function () {
           if (radio._wasChecked) radio.checked = false;
+          radio._wasChecked = false;
         });
       });
     });
@@ -280,6 +291,9 @@
         // Only bare ⌘ (Cmd) combos — leave ⌥/⌃/⇧ variants to the browser.
         if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
         var k = (e.key || '').toLowerCase();
+        if ((k === 'k' || k === 'j') && Array.from(document.querySelectorAll('[role="dialog"][aria-modal="true"]')).some(function (dialog) { return dialog.getClientRects().length; })) {
+          e.preventDefault(); return;
+        }
         if (k === 'k') {
           e.preventDefault();
           goSearch();
@@ -304,8 +318,12 @@
   <script src="{{ url_for('static', filename='custom-select.js') }}" defer></script>
   <!-- Themed datetime picker: enhances every datetime-local input. -->
   <script src="{{ url_for('static', filename='datetime-picker.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='custom-color.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='form-validation.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='form-submit.js') }}" defer></script>
   <!-- Unified tag popover: any .tag-pop-trigger (data-tagpop) opens it. -->
   <script src="{{ url_for('static', filename='tag-popup.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='laptop-location.js') }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>
