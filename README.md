@@ -478,8 +478,7 @@ pytest -k time_remaining                 # single test by name substring
 
 Tests are written first (TDD). Pure logic lives in Flask-free modules
 (`todo.py`, `journal.py`, integration clients) with an injectable clock; the HTTP
-layer in `app.py` stays thin. See `CLAUDE.md` for the full architecture and
-conventions.
+layer in `app.py` stays thin.
 
 ### Building the phone-usage app
 
