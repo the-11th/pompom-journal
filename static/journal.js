@@ -47,6 +47,8 @@
   var entryDatesEl = document.getElementById('entry-dates-data');
   if (!entryDatesEl) return;  // not on a journal entry page, bail out
   var entryDatesSet = new Set(JSON.parse(entryDatesEl.textContent || '[]'));
+  var occupiedDatesEl = document.getElementById('occupied-dates-data');
+  var occupiedDatesSet = new Set(JSON.parse((occupiedDatesEl || entryDatesEl).textContent || '[]'));
 
   var calField = document.querySelector('.cal-field');
   if (!calField) return;
@@ -61,9 +63,33 @@
   var moveBtn   = document.querySelector('.move-btn');
   var moveInput = document.querySelector('.move-input');
   var moveForm  = document.getElementById('move-form');
+  var deleteBtn = document.querySelector('.delete-entry-btn');
+  var deleteForm = document.getElementById('delete-form');
+  var journalForm = document.getElementById('journal-form');
+  var documentEditor = !!(journalForm && journalForm.dataset.mediaEditor);
 
   /* Dirty tracking -- set true when the user edits any journal field. */
   var dirty = false;
+  document.addEventListener('journal:saved', function (event) {
+    var detail = event.detail;
+    if (!detail || !detail.date || detail.date === currentDate) dirty = false;
+    if (detail && detail.date === currentDate && Object.prototype.hasOwnProperty.call(detail, 'entryId')) {
+      var savedId = detail.persisted && typeof detail.entryId === 'string' && detail.entryId;
+      [moveBtn, deleteBtn].forEach(function (button) { if (button) button.hidden = !savedId; });
+      [moveForm, deleteForm].forEach(function (form) {
+        if (!form || !form.dataset.actionTemplate) return;
+        if (savedId) form.setAttribute('action', form.dataset.actionTemplate.replace('__ENTRY_ID__', encodeURIComponent(savedId)));
+        else form.removeAttribute('action');
+      });
+    }
+    if (!detail || !detail.date || typeof detail.hasEntry !== 'boolean') return;
+    if (detail.hasEntry) entryDatesSet.add(detail.date); else entryDatesSet.delete(detail.date);
+    if (detail.persisted) occupiedDatesSet.add(detail.date); else occupiedDatesSet.delete(detail.date);
+    entryDatesEl.textContent = JSON.stringify(Array.from(entryDatesSet));
+    if (occupiedDatesEl) occupiedDatesEl.textContent = JSON.stringify(Array.from(occupiedDatesSet));
+    if (detail.date === currentDate) isSaved = detail.persisted;
+    if (popover) renderPopover();
+  });
 
   var trackSelectors = [
     'input[name="title"]',
@@ -71,7 +97,8 @@
     'input[name^="tag:"]',
     'input[name^="num:"]',
     'input[name^="newtag-name:"]',
-    'select[name^="newtag-kind:"]'
+    'input[name^="newtag-kind:"]',
+    'input[name="mood"]'
   ];
   trackSelectors.forEach(function (sel) {
     document.querySelectorAll(sel).forEach(function (el) {
@@ -88,6 +115,23 @@
   var moveMode = false;   // true when opened by the Move button
   var viewYear, viewMonth;  // month currently shown in the popover
 
+  function positionPopover() {
+    if (!popover || !popover.isConnected) return;
+    var field = calField.getBoundingClientRect();
+    popover.style.position = 'fixed';
+    popover.style.maxHeight = 'calc(100dvh - 32px)';
+    popover.style.overflowY = 'auto';
+    var width = popover.offsetWidth, height = popover.offsetHeight;
+    var left = Math.max(16, Math.min(field.right - width, innerWidth - width - 16));
+    popover.style.left = left + 'px';
+    popover.style.right = 'auto';
+    var top = field.bottom + 6;
+    if (top + height > innerHeight - 16 && field.top - height - 6 >= 16) top = field.top - height - 6;
+    popover.style.top = Math.max(16, Math.min(top, innerHeight - height - 16)) + 'px';
+  }
+  window.addEventListener('resize', positionPopover);
+  document.addEventListener('scroll', positionPopover, true);
+
   /** Open the calendar popover. Pass `inMoveMode=true` for the move flow. */
   function openPopover(inMoveMode) {
     if (popover) closePopover();
@@ -101,28 +145,40 @@
     popover = document.createElement('div');
     popover.className = 'cal-popover';
     popover.setAttribute('role', 'dialog');
-    popover.setAttribute('aria-modal', 'true');
+    popover.setAttribute('aria-label', moveMode ? 'Move entry to date' : 'Journal date');
+    popover.addEventListener('keydown', calendarKey);
+    popover.addEventListener('focusin', function (event) {
+      var day = event.target.closest('.cal-day[data-date]');
+      if (day) popover.querySelectorAll('.cal-day[data-date]').forEach(function (cell) { cell.tabIndex = cell === day ? 0 : -1; });
+    });
 
     renderPopover();
     calField.appendChild(popover);
+    positionPopover();
+    trigger.setAttribute('aria-expanded', String(!moveMode));
+    if (moveBtn) moveBtn.setAttribute('aria-expanded', String(moveMode));
+    var selected = popover.querySelector('.cal-day.is-selected') || popover.querySelector('button.cal-day:not(:disabled)');
+    if (selected) selected.focus();
 
     // Close on outside click
-    setTimeout(function () {
-      document.addEventListener('click', outsideClick);
-      document.addEventListener('keydown', escKey);
-    }, 0);
+    document.addEventListener('click', outsideClick);
+    document.addEventListener('keydown', escKey);
   }
 
-  function closePopover() {
+  function closePopover(restoreFocus) {
     if (popover) {
       popover.parentNode && popover.parentNode.removeChild(popover);
       popover = null;
     }
     document.removeEventListener('click', outsideClick);
     document.removeEventListener('keydown', escKey);
+    trigger.setAttribute('aria-expanded', 'false');
+    if (moveBtn) moveBtn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) (moveMode && moveBtn ? moveBtn : trigger).focus();
   }
 
   function outsideClick(e) {
+    if (e.target.closest('.modal-overlay')) return;
     if (popover && !calField.contains(e.target) &&
         (!moveBtn || !moveBtn.contains(e.target))) {
       closePopover();
@@ -130,12 +186,34 @@
   }
 
   function escKey(e) {
-    if (e.key === 'Escape') closePopover();
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopImmediatePropagation(); closePopover(true);
+    }
+  }
+
+  function calendarKey(e) {
+    var cell = e.target.closest('.cal-day[data-date]');
+    if (!cell) return;
+    var date = new Date(cell.dataset.date + 'T00:00:00');
+    var offsets = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
+    if (e.key in offsets) date.setDate(date.getDate() + offsets[e.key]);
+    else if (e.key === 'Home') date.setDate(date.getDate() - date.getDay());
+    else if (e.key === 'End') date.setDate(date.getDate() + 6 - date.getDay());
+    else return;
+    e.preventDefault();
+    var targetDate = toISO(date.getFullYear(), date.getMonth(), date.getDate());
+    if (moveMode && occupiedDatesSet.has(targetDate)) return;
+    viewYear = date.getFullYear(); viewMonth = date.getMonth();
+    renderPopover();
+    popover.querySelector('[data-date="' + targetDate + '"]').focus();
   }
 
   /** Re-render the popover contents for the current viewYear/viewMonth. */
   function renderPopover() {
     if (!popover) return;
+    var focused = popover.contains(document.activeElement) ? document.activeElement : null;
+    var focusedDate = focused && focused.getAttribute('data-date');
+    var focusedNav = focused && focused.classList.contains('cal-nav') && focused.getAttribute('aria-label');
     popover.innerHTML = '';
 
     var today    = todayISO();
@@ -149,11 +227,13 @@
     prev.type = 'button';
     prev.textContent = '‹';
     prev.className = 'cal-nav';
+    prev.setAttribute('aria-label', 'Previous month');
     prev.addEventListener('click', function (e) {
       e.stopPropagation();
       viewMonth--;
       if (viewMonth < 0) { viewMonth = 11; viewYear--; }
       renderPopover();
+      popover.querySelector('[aria-label="Previous month"]').focus();
     });
 
     var title = document.createElement('span');
@@ -164,11 +244,13 @@
     next.type = 'button';
     next.textContent = '›';
     next.className = 'cal-nav';
+    next.setAttribute('aria-label', 'Next month');
     next.addEventListener('click', function (e) {
       e.stopPropagation();
       viewMonth++;
       if (viewMonth > 11) { viewMonth = 0; viewYear++; }
       renderPopover();
+      popover.querySelector('[aria-label="Next month"]').focus();
     });
 
     head.appendChild(prev);
@@ -200,8 +282,13 @@
     var daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
     for (var day = 1; day <= daysInMonth; day++) {
       var iso = toISO(viewYear, viewMonth, day);
-      var cell = document.createElement('div');
+      var cell = document.createElement('button');
+      cell.type = 'button';
       cell.className = 'cal-day';
+      cell.setAttribute('data-date', iso);
+      cell.setAttribute('aria-label', MONTHS[viewMonth] + ' ' + day + ', ' + viewYear);
+      cell.tabIndex = iso === selDate ? 0 : -1;
+      cell.setAttribute('aria-pressed', String(iso === selDate && !moveMode));
 
       var num = document.createElement('span');
       num.className = 'cal-day-num';
@@ -214,15 +301,13 @@
       // collide with the disabled style in move mode.
       if (iso === selDate && !moveMode) cell.classList.add('is-selected');
 
-      if (entryDatesSet.has(iso)) {
-        if (moveMode) {
-          // In move mode, occupied days are disabled
-          cell.classList.add('is-disabled');
-        } else {
-          var dot = document.createElement('span');
-          dot.className = 'cal-dot';
-          cell.appendChild(dot);
-        }
+      if (moveMode && occupiedDatesSet.has(iso)) {
+        cell.classList.add('is-disabled');
+        cell.disabled = true;
+      } else if (!moveMode && entryDatesSet.has(iso)) {
+        var dot = document.createElement('span');
+        dot.className = 'cal-dot';
+        cell.appendChild(dot);
       }
 
       if (!cell.classList.contains('is-disabled')) {
@@ -237,23 +322,66 @@
       grid.appendChild(cell);
     }
 
+    if (!grid.querySelector('.cal-day[tabindex="0"]:not(:disabled)')) {
+      var firstDay = grid.querySelector('button.cal-day:not(:disabled)');
+      if (firstDay) firstDay.tabIndex = 0;
+    }
     popover.appendChild(grid);
+    positionPopover();
+    if (focused) {
+      var replacement = focusedDate ? popover.querySelector('[data-date="' + focusedDate + '"]:not(:disabled)') :
+        focusedNav ? popover.querySelector('[aria-label="' + focusedNav + '"]') : null;
+      if (replacement) replacement.focus();
+    }
   }
 
   /* ------------------------------------------------------------------ */
   /* Day click logic                                                      */
   /* ------------------------------------------------------------------ */
 
+  function restoreCalendarDate(dateStr) {
+    if (!popover) return;
+    var cell = popover.querySelector('[data-date="' + dateStr + '"]:not(:disabled)');
+    if (cell) cell.focus();
+  }
+
+  var entryActionPending = false;
+  async function submitEntryAction(form, action) {
+    if (entryActionPending) return;
+    entryActionPending = true;
+    document.querySelectorAll('.move-btn, .delete-entry-btn').forEach(function (button) { button.disabled = true; });
+    var submitted = false;
+    try {
+      if (documentEditor) {
+        await window.PupJournalEditorReady;
+        var editor = window.PupJournalEditor;
+        if (!editor || !editor.prepareEntryAction) throw new Error('Entry editor unavailable');
+        if (!await editor.prepareEntryAction(action)) return;
+      }
+      closePopover();
+      form.submit();
+      submitted = true;
+    } catch (error) {
+      var status = document.getElementById('draft-status');
+      if (status) status.textContent = 'Could not prepare entry · try again';
+    } finally {
+      if (!submitted) {
+        entryActionPending = false;
+        document.querySelectorAll('.move-btn, .delete-entry-btn').forEach(function (button) { button.disabled = false; });
+      }
+    }
+  }
+
   function handleDayClick(dateStr) {
     if (moveMode) {
       // Move mode: submit the move form
+      if (entryActionPending) return;
       moveInput.value = dateStr;
-      closePopover();
-      moveForm.submit();
+      void submitEntryAction(moveForm, 'move');
       return;
     }
 
-    if (isSaved) {
+    if (isSaved || documentEditor) {
       // Saved entry: navigate to that day, with dirty-check
       if (dirty) {
         window.confirmModal('You have unsaved changes that will be lost. Continue?')
@@ -261,15 +389,15 @@
             if (confirmed) {
               closePopover();
               window.location = '/journal/' + dateStr;
-            }
+            } else restoreCalendarDate(dateStr);
           });
       } else {
-        closePopover();
+        closePopover(true);
         window.location = '/journal/' + dateStr;
       }
     } else {
       // New (unsaved) entry
-      if (entryDatesSet.has(dateStr)) {
+      if (occupiedDatesSet.has(dateStr)) {
         if (dirty) {
           // Only warn if the user actually typed/selected something to lose.
           confirmModal(
@@ -278,7 +406,7 @@
             if (confirmed) {
               closePopover();
               window.location = '/journal/' + dateStr;
-            }
+            } else restoreCalendarDate(dateStr);
           });
         } else {
           // Nothing entered yet -- just open that day, no warning.
@@ -307,16 +435,21 @@
       openPopover(false);
     }
   });
+  trigger.setAttribute('aria-expanded', 'false');
+  calField.addEventListener('focusout', function () {
+    setTimeout(function () {
+      // Confirmation owns focus while checking an unsaved entry.
+      if (popover && !calField.contains(document.activeElement) && !document.activeElement.closest('.modal-overlay')) closePopover();
+    }, 0);
+  });
 
   // Delete entry: confirm via the dark modal, then submit the delete form.
-  var deleteBtn  = document.querySelector('.delete-entry-btn');
-  var deleteForm = document.getElementById('delete-form');
   if (deleteBtn && deleteForm) {
     deleteBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      confirmModal('Delete this entry? This cannot be undone.', 'Delete')
+      confirmModal('Delete this entry and its local draft? This cannot be undone.', 'Delete')
         .then(function (confirmed) {
-          if (confirmed) deleteForm.submit();
+          if (confirmed) void submitEntryAction(deleteForm, 'delete');
         });
     });
   }

@@ -3,9 +3,7 @@
   <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
        width="56" height="56" alt="pompompurin">
 {% endblock %}
-{% block brand_title %}
-  <span class="site-title">journal</span>
-{% endblock %}
+{% block brand_title %}{% endblock %}
 {% block nav %}
   <a href="{{ url_for('journal_today') }}">New entry</a>
   <a href="{{ url_for('journal_analytics') }}">Analytics</a>
@@ -15,10 +13,10 @@
 {% block content %}
   {% from "_integ_icons.html" import integ_icon %}
   <form id="journal-form" class="journal-form" method="post" action="{{ url_for('journal_save') }}" novalidate
-        data-entry-updated="{{ entry.updated if entry else '' }}" data-entry-date="{{ date }}">
+        data-media-editor="1" data-entry-updated="{{ entry.updated if entry else '' }}" data-entry-edit-revision="{{ entry_edit_revision }}" data-entry-date="{{ date }}">
     <div class="top-line">
       <div class="title-field">
-        <input type="text" name="title" placeholder="entry title" required
+        <input type="text" name="title" placeholder="entry title" aria-label="Entry title" required
                value="{{ entry.title if entry else '' }}">
         <span class="field-error-bubble" id="title-error" hidden>Title is required.</span>
         <div class="title-suggestion" id="title-suggestion" hidden>
@@ -47,7 +45,7 @@
       <div class="mood-picker{{ ' has-selection' if entry and entry.mood else '' }}">
         {% for n in range(1, 8) %}
           <button type="button" class="mood-opt{{ ' selected' if entry and entry.mood == n else '' }}"
-                  data-mood="{{ n }}" aria-label="mood {{ n }}">
+                  data-mood="{{ n }}" aria-label="mood {{ n }}" aria-pressed="{{ 'true' if entry and entry.mood == n else 'false' }}">
             <img src="{{ url_for('static', filename='img/%d-pompom.gif'|format(n)) }}" alt="mood {{ n }}">
           </button>
         {% endfor %}
@@ -63,11 +61,11 @@
         {{ integ_icon('sleep') }}
         <span class="sleep-times">{{ sleep.start }} → {{ sleep.end }}</span>
         <span class="sleep-dur">{{ (sleep.duration_min // 60) }}h {{ (sleep.duration_min % 60) }}m</span>
-        <span class="sleep-qual">Quality {{ sleep.quality }}</span>
+        {% if sleep.quality is defined and sleep.quality is not none %}<span class="sleep-qual">Quality {{ sleep.quality }}</span>{% endif %}
       {% elif google_connected %}
         <span class="muted">No sleep data for this day</span>
       {% else %}
-        <a class="muted" href="{{ url_for('integrations_page') }}">Connect Google Health to auto-fill sleep →</a>
+        <a class="muted" href="{{ url_for('integrations_page') }}">Connect Google Health →</a>
       {% endif %}
     </div>
     <div class="integ-row rt-row" id="rescuetime-panel"
@@ -76,7 +74,7 @@
          data-last-sync="{{ rescuetime_last_sync or '' }}">
       {% if rescuetime %}
         {{ integ_icon('rescuetime') }}
-        <span class="rt-pulse">Pulse {{ rescuetime.pulse }}</span>
+        {% if rescuetime.pulse is defined and rescuetime.pulse is not none %}<span class="rt-pulse">Pulse {{ rescuetime.pulse }}</span>{% endif %}
         <span class="rt-prod">{{ (rescuetime.productive_min // 60) }}h {{ (rescuetime.productive_min % 60) }}m productive</span>
       {% elif rescuetime_connected %}
         <span class="muted">No RescueTime data for this day</span>
@@ -93,6 +91,7 @@
         <span class="music-min">{{ music.minutes }} min</span>
         <span class="music-tracks">{{ music.tracks }} tracks</span>
         {% if music.top_artists %}<span class="music-artist">{{ music.top_artists[0].name }}</span>{% endif %}
+        {% if music.source == 'history_import' %}<span class="muted">Imported history</span>{% endif %}
       {% elif spotify_connected %}
         <span class="muted">No listening data for this day</span>
       {% else %}
@@ -104,7 +103,9 @@
       {% if usage %}
         {{ integ_icon('usage') }}
         <span class="usage-screen">{{ (usage.screen_min // 60) }}h {{ (usage.screen_min % 60) }}m screen</span>
-        {% if usage.unlocks %}<span class="usage-unlocks">{{ usage.unlocks }} unlocks</span>{% endif %}
+        {% if usage.unlocks and usage.get('details_available', true) %}<span class="usage-unlocks">{{ usage.unlocks }} unlocks</span>{% endif %}
+        {% if usage.get('recovered') %}<span class="chart-muted">Recovered Android daily summary</span>{% endif %}
+        {% if usage.get('details_available') == false %}<span class="chart-muted">Unlock and app-open counts unavailable</span>{% endif %}
         {% if usage.top_apps %}<span class="usage-app">{{ usage.top_apps[0].label }}</span>{% endif %}
       {% elif phone_connected %}
         <span class="muted">No phone-usage data for this day</span>
@@ -180,7 +181,7 @@
               {% endfor %}
             </div>
             <div class="newtag">
-              <input type="text" name="newtag-name:{{ s.id }}" placeholder="new tag">
+              <input type="text" name="newtag-name:{{ s.id }}" placeholder="new tag" aria-label="New {{ s.name }} tag">
               <div class="kind-toggle">
                 <label class="kind-opt">
                   <input type="radio" name="newtag-kind:{{ s.id }}" value="permanent" checked>
@@ -205,7 +206,7 @@
           <div class="num-section">
             <h3>{{ s.name }}</h3>
             <div class="num-field">
-              <input type="number" step="any" name="num:{{ s.id }}" value="{{ val }}">
+              <input type="number" step="any" name="num:{{ s.id }}" value="{{ val }}" aria-label="{{ s.name }}{% if s.unit %} ({{ s.unit }}){% endif %}">
               <span class="unit">{{ s.unit or '' }}</span>
             </div>
           </div>
@@ -216,23 +217,25 @@
   </form>
 
   <div class="entry-actions">
-    <button type="submit" form="journal-form" class="save">{{ "Update entry" if entry else "Save entry" }}</button>
+    <button type="submit" form="journal-form" class="save">Save entry</button>
     <span class="draft-status" id="draft-status" role="status" aria-live="polite"></span>
-    {% if entry %}
-      <button type="button" class="move-btn">Move entry to another day…</button>
-      <button type="button" class="delete-entry-btn">Delete entry</button>
+      <button type="button" class="move-btn" aria-label="Move entry to another day" {% if not entry %}hidden{% endif %}>Move</button>
+      <button type="button" class="delete-entry-btn" aria-label="Delete entry" {% if not entry %}hidden{% endif %}>Delete</button>
       <form id="move-form" method="post"
-            action="{{ url_for('journal_entry_move', entry_id=entry.id) }}">
+            data-action-template="{{ url_for('journal_entry_move', entry_id='__ENTRY_ID__') }}"
+            {% if entry %}action="{{ url_for('journal_entry_move', entry_id=entry.id) }}"{% endif %}>
         <input type="hidden" name="date" class="move-input">
       </form>
       <form id="delete-form" method="post"
-            action="{{ url_for('journal_entry_delete', entry_id=entry.id) }}"></form>
-    {% endif %}
+            data-action-template="{{ url_for('journal_entry_delete', entry_id='__ENTRY_ID__') }}"
+            {% if entry %}action="{{ url_for('journal_entry_delete', entry_id=entry.id) }}"{% endif %}></form>
   </div>
 {% endblock %}
 
 {% block scripts %}
+  <script type="application/json" id="journal-document">{{ (entry.document if entry else none) | tojson }}</script>
   <script type="application/json" id="entry-dates-data">{{ entry_dates | tojson }}</script>
+  <script type="application/json" id="occupied-dates-data">{{ occupied_dates | tojson }}</script>
   <script type="application/json" id="mention-index">{{ mention_index | tojson }}</script>
   <script type="application/json" id="tag-voice-catalog">{{ tag_voice_catalog | tojson }}</script>
   <script type="application/json" id="numeric-index">{{ numeric_index | tojson }}</script>
@@ -240,7 +243,13 @@
   <script src="{{ url_for('static', filename='journal.js') }}" defer></script>
   <script src="{{ url_for('static', filename='journal-richtext.js') }}" defer></script>
   <script src="{{ url_for('static', filename='journal-dictation.js', v=3) }}" defer></script>
-  <script src="{{ url_for('static', filename='journal-entry-convenience.js', v=2) }}" defer></script>
+  <script src="{{ url_for('static', filename='journal-entry-convenience.js', v=3) }}" defer></script>
   <script src="{{ url_for('static', filename='journal-mood.js') }}" defer></script>
   <script src="{{ url_for('static', filename='integrations-sync.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='offline-map.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='location-day.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='location-day-view.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-ui.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='photo-edit.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='media-entry.js') }}" defer></script>
 {% endblock %}

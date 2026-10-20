@@ -82,6 +82,12 @@ test("suggested title is deterministic and omits inline grammar", () => {
   assert.equal(suggestEntryTitle("   "), "");
 });
 
+test('suggested titles retain Chinese names while removing inline tag grammar',()=>{
+  assert.equal(suggestEntryTitle('和 @家人_臺灣 @𠀀家 #體重 65'), '和 家人 臺灣 𠀀家 體重 65');
+  assert.equal(suggestEntryTitle('請寄給 a@例子.com 並記錄字#體重 65'), '請寄給 a@例子.com 並記錄字#體重 65');
+  assert.equal(suggestEntryTitle('@'+'𠀀'.repeat(61)), '𠀀'.repeat(60));
+});
+
 test("smart dictation spacing glues punctuation and brackets correctly", () => {
   assert.equal(smartDictationJoin("hello", ".", "").value, "hello.");
   assert.equal(smartDictationJoin("hello", "world", ".").value, "hello world.");

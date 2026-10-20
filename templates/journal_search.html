@@ -3,9 +3,7 @@
   <img class="mascot" src="{{ url_for('static', filename='img/pompompurin.gif') }}"
        width="56" height="56" alt="pompompurin">
 {% endblock %}
-{% block brand_title %}
-  <span class="site-title">journal</span>
-{% endblock %}
+{% block brand_title %}{% endblock %}
 {% block nav %}
   <a href="{{ url_for('journal_today') }}">New entry</a>
   <a href="{{ url_for('journal_analytics') }}">Analytics</a>
@@ -15,14 +13,14 @@
 {% block content %}
   <div class="search-panel">
     <div class="search-controls">
-      <input type="text" id="q" placeholder="search words in entries…" autocomplete="off">
+      <input type="text" id="q" aria-label="Search journal entries" placeholder="search words in entries…" autocomplete="off">
 
       {% if tag_sections %}
         <div class="tag-dropdown">
-          <button type="button" class="tag-dropdown-btn" aria-expanded="false" aria-haspopup="true">
+          <button type="button" class="tag-dropdown-btn" aria-expanded="false" aria-controls="search-tag-filters">
             Tags <span class="cal-caret">▾</span>
           </button>
-          <div class="tag-dropdown-panel" hidden>
+          <div class="tag-dropdown-panel" id="search-tag-filters" role="group" aria-label="Filter by tags" hidden>
             {% for s in tag_sections %}
               {% if s.tags %}
                 <p class="tag-dropdown-group-label">{{ s.name }}</p>
@@ -56,9 +54,9 @@
                 <div class="range-track"></div>
                 <div class="range-fill" data-section="{{ s.id }}"></div>
                 <input type="range" data-section="{{ s.id }}" data-role="min"
-                       min="{{ lo }}" max="{{ hi }}" value="{{ lo }}" step="any">
+                       min="{{ lo }}" max="{{ hi }}" value="{{ lo }}" step="any" aria-label="{{ s.name }} minimum">
                 <input type="range" data-section="{{ s.id }}" data-role="max"
-                       min="{{ lo }}" max="{{ hi }}" value="{{ hi }}" step="any">
+                       min="{{ lo }}" max="{{ hi }}" value="{{ hi }}" step="any" aria-label="{{ s.name }} maximum">
               </div>
               <div class="range-readout" data-section="{{ s.id }}">
                 <input type="number" class="range-num" data-section="{{ s.id }}"
@@ -82,7 +80,7 @@
     {% endif %}
   </div>
 
-  <p class="result-count"></p>
+  <p class="result-count" role="status"></p>
 
   {% if entries %}
     <ul class="entry-list" id="entry-list">
@@ -91,7 +89,7 @@
           <div class="entry-row-main">
             <a class="entry-link" href="{{ url_for('journal_entry', date=e.date) }}">
               <span class="entry-date">{{ e.date }}</span>
-              <span class="entry-title">{{ e.title }}</span>
+              {% if e.title and e.title != e.date %}<span class="entry-title">{{ e.title }}</span>{% endif %}
             </a>
             {% if e.tag_chips %}
               <span class="entry-tags">

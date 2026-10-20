@@ -18,6 +18,7 @@
   var SVGNS = "http://www.w3.org/2000/svg";
   var _pop = null;          // the currently-open popover element
   var _anchor = null;       // the trigger it is anchored to
+  var _requestId = 0;
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -112,19 +113,21 @@
 
     var pop = el("div", "tag-pop");
     pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", payload.name + " tag overview");
 
     // close button
     var close = el("button", "tag-pop-close", "×");
     close.type = "button";
     close.title = "close";
-    close.addEventListener("click", closePopover);
+    close.setAttribute("aria-label", "Close tag overview");
+    close.addEventListener("click", function () { closePopover(true); });
     pop.appendChild(close);
 
     // header: name + origin marks
     var head = el("div", "tag-pop-head");
     head.appendChild(el("span", "tag-pop-name", payload.name));
     var origins = el("span", "tag-pop-origins");
-    var taskUses = task.active + task.completed + task.expired;
+    var taskUses = (task.active || 0) + (task.completed || 0) + (task.expired || 0);
     if (taskUses > 0) {
       var om = el("span", "tag-pop-origin");
       om.appendChild(taskMark());
@@ -155,7 +158,7 @@
       s.appendChild(v);
       stats.appendChild(s);
     }
-    stat("uses", taskUses + journal.entries);
+    stat("uses", taskUses + (journal.entries || 0));
     if (taskUses) stat("tasks", task.active + " active / " + task.completed + " done");
     if (journal.entries) stat("entries", journal.entries);
     if (journal.avg_mood != null) {
@@ -300,13 +303,24 @@
   }
 
   // ----- open / close -------------------------------------------------------
-  function closePopover() {
-    if (_pop) { _pop.remove(); _pop = null; _anchor = null; }
+  function closePopover(restoreFocus) {
+    var anchor = _anchor;
+    _requestId++;
+    if (_pop) { _pop.remove(); _pop = null; }
+    _anchor = null;
+    if (anchor) {
+      anchor.setAttribute("aria-expanded", "false");
+      if (restoreFocus && anchor.isConnected) anchor.focus();
+    }
     document.removeEventListener("keydown", onEsc);
     document.removeEventListener("click", onOutside, true);
   }
 
-  function onEsc(e) { if (e.key === "Escape") closePopover(); }
+  function onEsc(e) {
+    if (e.key === "Escape") {
+      e.preventDefault(); e.stopImmediatePropagation(); closePopover(true);
+    }
+  }
 
   function onOutside(e) {
     if (_pop && !_pop.contains(e.target) &&
@@ -318,29 +332,40 @@
   function openFor(anchor, name) {
     closePopover();
     _anchor = anchor;
+    var requestId = ++_requestId;
+    anchor.setAttribute("aria-expanded", "true");
     // Loading placeholder while we fetch.
     var loading = el("div", "tag-pop");
+    loading.setAttribute("role", "status");
     loading.appendChild(el("p", "tag-pop-empty", "Loading…"));
     _pop = loading;
     position(loading, anchor);
-    setTimeout(function () {
-      document.addEventListener("keydown", onEsc);
-      document.addEventListener("click", onOutside, true);
-    }, 0);
+    document.addEventListener("keydown", onEsc);
+    document.addEventListener("click", onOutside, true);
 
     fetch("/tag/" + encodeURIComponent(name) + "/overview",
           { headers: { "Accept": "application/json" } })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Tag overview unavailable");
+        return r.json();
+      })
       .then(function (payload) {
-        if (!_anchor || _anchor !== anchor) return;  // user moved on
+        if (requestId !== _requestId) return;
         var built = buildPopover(payload);
         if (_pop) _pop.remove();
         _pop = built;
         position(built, anchor);
+        built.querySelector(".tag-pop-close").focus();
       })
       .catch(function (err) {
+        if (requestId !== _requestId) return;
         if (window.console) console.error("tag overview fetch failed", err);
-        closePopover();
+        loading.querySelector("p").textContent = "Could not load this tag.";
+        var retry = el("button", "tag-pop-expand", "Retry");
+        retry.type = "button";
+        retry.addEventListener("click", function () { openFor(anchor, name); });
+        loading.appendChild(retry);
+        retry.focus();
       });
   }
 
@@ -354,6 +379,13 @@
     // Toggle if clicking the same anchor again.
     if (_anchor === trigger && _pop) { closePopover(); return; }
     openFor(trigger, name);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var trigger = e.target.closest("[data-tagpop]");
+    if (!trigger) return;
+    e.preventDefault();
+    trigger.click();
   });
 
   // Reposition an open popover on resize/scroll so it stays anchored.

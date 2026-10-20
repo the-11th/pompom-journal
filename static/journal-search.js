@@ -33,6 +33,13 @@
   var qInput      = document.getElementById('q');
   var entryList   = document.getElementById('entry-list');
   var resultCount = document.querySelector('.result-count');
+  var rowsById = new Map();
+  if (entryList) entryList.querySelectorAll('.entry-row').forEach(function (row) { rowsById.set(row.dataset.id, row); });
+  var searchRecords = ENTRIES.map(function (entry) {
+    return { entry: entry, row: rowsById.get(String(entry.id)),
+      text: ((entry.title || '') + ' ' + (entry.body || '')).normalize('NFC'),
+      lines: (entry.body || '').normalize('NFC').split(/\r?\n/) };
+  });
 
   /* ------------------------------------------------------------------ */
   /* Helpers                                                              */
@@ -48,16 +55,36 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  /** The first line of the entry's body containing any of the query words
-   * (whole-word, case-insensitive), trimmed. '' if none match. */
-  function matchingBodyLine(entry, words) {
-    if (!words.length) return '';
-    var lines = (entry.body || '').split(/\r?\n/);
+  function wordPattern(words, global) {
+    var terms = words.slice().sort(function (a, b) { return b.length - a.length; }).map(escapeRegExp).join('|');
+    return new RegExp('(^|[^\\p{L}\\p{M}\\p{N}_])(' + terms + ')(?=$|[^\\p{L}\\p{M}\\p{N}_])', global ? 'giu' : 'iu');
+  }
+
+  /** Concise context from the first body line containing a query word
+   * (whole-word, case-insensitive). '' if none match. */
+  function matchingBodyLine(record, matchers) {
+    if (!matchers.length) return '';
+    var lines = record.lines;
     for (var i = 0; i < lines.length; i++) {
-      var lower = lines[i].toLowerCase();
-      for (var j = 0; j < words.length; j++) {
-        var re = new RegExp('\\b' + escapeRegExp(words[j].toLowerCase()) + '\\b');
-        if (re.test(lower)) return lines[i].trim();
+      var first = null;
+      for (var j = 0; j < matchers.length; j++) {
+        var match = matchers[j].exec(lines[i]);
+        if (match && (!first || match.index + match[1].length < first.start)) first = {start: match.index + match[1].length, length: match[2].length};
+      }
+      if (first) {
+        var line = lines[i], start = Math.max(0, first.start - 60), end = Math.min(line.length, Math.max(first.start + first.length, start + 240));
+        if (start > 0 && /\S/.test(line[start - 1]) && /\S/.test(line[start])) {
+          var leadingSpace = line.slice(start, first.start).search(/\s/);
+          if (leadingSpace !== -1) start += leadingSpace + 1;
+        }
+        if (end < line.length && /\S/.test(line[end - 1]) && /\S/.test(line[end])) {
+          var trailingWord = /\s+\S*$/.exec(line.slice(first.start + first.length, end));
+          if (trailingWord) end = first.start + first.length + trailingWord.index;
+        }
+        // Do not split a surrogate pair at either preview boundary.
+        if (start > 0 && /[\uDC00-\uDFFF]/.test(line[start])) start++;
+        if (end < line.length && /[\uDC00-\uDFFF]/.test(line[end])) end--;
+        return (start ? '… ' : '') + line.slice(start, end).trim() + (end < line.length ? ' …' : '');
       }
     }
     return '';
@@ -65,13 +92,14 @@
 
   /** Renders `line` as HTML with every query word wrapped in a highlight span
    * (whole-word, case-insensitive; text otherwise HTML-escaped). */
-  function highlightWords(line, words) {
-    if (!words.length) return escapeHtml(line);
-    var re = new RegExp('\\b(' + words.map(escapeRegExp).join('|') + ')\\b', 'gi');
+  function highlightWords(line, re) {
+    line = line.normalize('NFC');
+    if (!re) return escapeHtml(line);
+    re.lastIndex = 0;
     var html = '', last = 0, m;
     while ((m = re.exec(line)) !== null) {
-      html += escapeHtml(line.slice(last, m.index));
-      html += '<span class="suggest-hl">' + escapeHtml(m[0]) + '</span>';
+      html += escapeHtml(line.slice(last, m.index + m[1].length));
+      html += '<span class="suggest-hl">' + escapeHtml(m[2]) + '</span>';
       last = re.lastIndex;
     }
     html += escapeHtml(line.slice(last));
@@ -84,21 +112,23 @@
 
   function applyFilters() {
     var q       = qInput ? qInput.value : '';
-    var words   = q.trim().split(/\s+/).filter(Boolean);
+    var words   = q.normalize('NFC').trim().split(/\s+/).filter(Boolean);
+    var matchers = words.map(function (word) { return wordPattern([word], false); });
+    var highlights = words.length ? wordPattern(words, true) : null;
     var selTags = getSelectedTags();
     var ranges  = getActiveRanges();
 
     var count = 0;
 
-    ENTRIES.forEach(function (entry) {
+    searchRecords.forEach(function (record) {
+      var entry = record.entry;
       var visible = true;
 
       /* ---- Text filter: AND over whole-word matches in title + body ---- */
       if (words.length > 0) {
-        var haystack = ((entry.title || '') + ' ' + (entry.body || '')).toLowerCase();
+        var haystack = record.text;
         for (var i = 0; i < words.length; i++) {
-          var re = new RegExp('\\b' + escapeRegExp(words[i].toLowerCase()) + '\\b');
-          if (!re.test(haystack)) {
+          if (!matchers[i].test(haystack)) {
             visible = false;
             break;
           }
@@ -135,16 +165,16 @@
       }
 
       /* ---- Show / hide row ---- */
-      var row = document.querySelector('.entry-row[data-id="' + entry.id + '"]');
+      var row = record.row;
       if (row) {
         row.style.display = visible ? '' : 'none';
 
         /* ---- Body-line snippet for the active text search ---- */
         var snippetEl = row.querySelector('.entry-snippet');
         if (snippetEl) {
-          var line = words.length ? matchingBodyLine(entry, words) : '';
+          var line = words.length ? matchingBodyLine(record, matchers) : '';
           if (line) {
-            snippetEl.innerHTML = highlightWords(line, words);
+            snippetEl.innerHTML = highlightWords(line, highlights);
             snippetEl.hidden = false;
           } else {
             snippetEl.innerHTML = '';
@@ -168,6 +198,20 @@
   var dropdownBtn   = document.querySelector('.tag-dropdown-btn');
   var dropdownPanel = document.querySelector('.tag-dropdown-panel');
 
+  function positionDropdown() {
+    if (!dropdownBtn || !dropdownPanel || dropdownPanel.hidden) return;
+    var box = dropdownBtn.getBoundingClientRect(), gutter = 16;
+    dropdownPanel.style.position = 'fixed';
+    dropdownPanel.style.minWidth = Math.min(200, innerWidth - 2 * gutter) + 'px';
+    dropdownPanel.style.maxWidth = Math.min(340, innerWidth - 2 * gutter) + 'px';
+    dropdownPanel.style.maxHeight = Math.min(360, innerHeight - 2 * gutter) + 'px';
+    var width = dropdownPanel.offsetWidth, height = dropdownPanel.offsetHeight;
+    var top = box.bottom + 6;
+    if (top + height > innerHeight - gutter && box.top - height - 6 >= gutter) top = box.top - height - 6;
+    dropdownPanel.style.left = Math.max(gutter, Math.min(box.left, innerWidth - width - gutter)) + 'px';
+    dropdownPanel.style.top = Math.max(gutter, Math.min(top, innerHeight - height - gutter)) + 'px';
+  }
+
   function getSelectedTags() {
     var sel = new Set();
     if (!dropdownPanel) return sel;
@@ -181,10 +225,11 @@
     if (!dropdownPanel) return;
     dropdownPanel.hidden = false;
     if (dropdownBtn) dropdownBtn.setAttribute('aria-expanded', 'true');
-    setTimeout(function () {
-      document.addEventListener('click', outsideDropdownClick);
-      document.addEventListener('keydown', dropdownEsc);
-    }, 0);
+    positionDropdown();
+    var first = dropdownPanel.querySelector('input[type="checkbox"]');
+    if (first) first.focus();
+    document.addEventListener('click', outsideDropdownClick);
+    document.addEventListener('keydown', dropdownEsc);
   }
 
   function closeDropdown() {
@@ -203,7 +248,10 @@
   }
 
   function dropdownEsc(e) {
-    if (e.key === 'Escape') closeDropdown();
+    if (e.key === 'Escape') {
+      e.preventDefault(); e.stopImmediatePropagation(); closeDropdown();
+      if (dropdownBtn) dropdownBtn.focus();
+    }
   }
 
   if (dropdownBtn) {
@@ -218,8 +266,15 @@
   }
 
   if (dropdownPanel) {
+    window.addEventListener('resize', positionDropdown);
+    document.addEventListener('scroll', positionDropdown, true);
     dropdownPanel.addEventListener('change', function () {
       applyFilters();
+    });
+    dropdownPanel.parentElement.addEventListener('focusout', function () {
+      setTimeout(function () {
+        if (!dropdownPanel.parentElement.contains(document.activeElement)) closeDropdown();
+      }, 0);
     });
   }
 

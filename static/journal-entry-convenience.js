@@ -2,8 +2,27 @@
 (function () {
   "use strict";
 
+  function hasUntitledSaveContent(form) {
+    if ((form.getAttribute("data-entry-updated") || "").trim()) return true;
+
+    return Array.prototype.some.call(form.querySelectorAll("[name]"), function (el) {
+      var name = el.name || "";
+      if (name.indexOf("tag:") === 0) return el.checked;
+      if (name.indexOf("newtag-name:") === 0 || name.indexOf("num:") === 0 || name === "mood") {
+        return String(el.value || "").trim() !== "";
+      }
+      return false;
+    });
+  }
+
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { hasUntitledSaveContent: hasUntitledSaveContent };
+  }
+  if (typeof document === "undefined") return;
+
   var form = document.getElementById("journal-form");
   if (!form) return;
+  if (form.dataset.mediaEditor) return; // The document editor owns durable autosaves.
   var date = form.getAttribute("data-entry-date") || "";
   var baseUpdated = form.getAttribute("data-entry-updated") || "";
   var key = "todopup:journal-draft:" + date;
@@ -12,9 +31,15 @@
   var body = form.querySelector('textarea[name="body"]');
   var suggestion = document.getElementById("title-suggestion");
   var timer = null;
+  var statusTimer = null;
 
-  function setStatus(message) {
-    if (status) status.textContent = message;
+  function setStatus(message, hideAfter) {
+    if (!status) return;
+    clearTimeout(statusTimer);
+    status.textContent = message;
+    if (hideAfter) {
+      statusTimer = setTimeout(function () { status.textContent = ""; }, hideAfter);
+    }
   }
 
   function values() {
@@ -91,7 +116,7 @@
     params.delete("saved");
     var clean = window.location.pathname + (params.toString() ? "?" + params : "") + window.location.hash;
     history.replaceState(null, "", clean);
-    setStatus("Entry saved");
+    setStatus("Entry saved", 1800);
   } else {
     try {
       var saved = JSON.parse(localStorage.getItem(key) || "null");
@@ -108,9 +133,12 @@
   form.addEventListener("input", queueDraft);
   form.addEventListener("change", queueDraft);
   form.addEventListener("submit", function (event) {
-    if (title && !title.value.trim()) {
+    if (title && !title.value.trim() && !hasUntitledSaveContent(form)) {
       updateTitleSuggestion();
       event.preventDefault();
+      title.classList.add("input-invalid");
+      var titleError = document.getElementById("title-error");
+      if (titleError) titleError.hidden = false;
       if (suggestion && !suggestion.hidden) suggestion.querySelector("button").focus();
       else title.focus();
       setStatus("Choose or write a title before finishing");
@@ -119,6 +147,15 @@
     clearTimeout(timer);
     saveDraft();
   });
+
+  if (title) {
+    title.addEventListener("input", function () {
+      if (!title.value.trim()) return;
+      title.classList.remove("input-invalid");
+      var titleError = document.getElementById("title-error");
+      if (titleError) titleError.hidden = true;
+    });
+  }
 
   document.addEventListener("keydown", function (event) {
     if (!event.metaKey || event.ctrlKey || event.altKey) return;

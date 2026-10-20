@@ -15,20 +15,22 @@
             <span class="tag-chip tag-preview title-highlight"
                   style="--tag-bg: {{ color }};">{{ name }}</span>
             <input type="color" name="color" class="tag-color-input"
-                   value="{{ color }}">
-            <button type="submit">Save</button>
+                   value="{{ color }}" aria-label="Color for {{ name }}">
+            <button type="submit" aria-label="Save color for {{ name }}">Save</button>
           </form>
           {# Delete lives in its OWN little form so clicking it doesn't submit
              the color-edit form above (mirrors the task delete-button pattern). #}
           <button form="delete-tag-{{ loop.index }}" type="submit"
-                  class="delete">x</button>
+                  class="delete" aria-label="Delete tag {{ name }}"
+                  data-confirm="Delete “{{ name }}” from all tasks?"
+                  data-confirm-label="Delete">x</button>
           <form id="delete-tag-{{ loop.index }}" method="post"
                 action="{{ url_for('tag_delete', name=name) }}"></form>
         </li>
       {% endfor %}
     </ul>
   {% else %}
-    <p class="empty">No tags yet. Add tags when you create or edit a task.</p>
+    <p class="empty">No tags yet.</p>
   {% endif %}
 
   <p><a class="back-link" href="{{ url_for('index') }}">&larr; Back to active</a></p>

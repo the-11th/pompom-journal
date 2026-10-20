@@ -131,13 +131,15 @@ function suggestEntryTitle(body, limit) {
     .replace(/\s+>(?:today|tomorrow|[a-z]+|\+\d+[dwm]|\d{4}-\d{2}-\d{2})\b/gi, "")
     .replace(/\[task:[0-9a-f]+\]\s*/gi, "")
     .replace(/\*\*|__|~~|\*/g, "")
-    .replace(/@([A-Za-z0-9_.-]+)/g, function (m, n) { return n.replace(/_/g, " "); })
-    .replace(/#([A-Za-z0-9_-]+)\s+(-?\d+(?:\.\d+)?)/g,
-      function (m, n, v) { return n.replace(/_/g, " ") + " " + v; })
+    .replace(/(^|[^\p{L}\p{N}_])@([\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)*)/gu,
+      function (m, boundary, n) { return boundary + n.replace(/_/g, " "); })
+    .replace(/(^|[^\p{L}\p{N}_])#([\p{L}\p{N}_-]+)\s+(-?\d+(?:\.\d+)?)/gu,
+      function (m, boundary, n, v) { return boundary + n.replace(/_/g, " ") + " " + v; })
     .replace(/\s+/g, " ").replace(/^[\s.,:;!?\-–—]+|[\s.,:;!?\-–—]+$/g, "");
-  if (first.length > limit) {
-    var cut = first.slice(0, limit + 1);
-    first = cut.indexOf(" ") >= 0 ? cut.slice(0, cut.lastIndexOf(" ")) : cut.slice(0, limit);
+  var characters = Array.from(first);
+  if (characters.length > limit) {
+    var cut = characters.slice(0, limit + 1);
+    first = (cut.indexOf(" ") >= 0 ? cut.slice(0, cut.lastIndexOf(" ")) : cut.slice(0, limit)).join("");
   }
   return first ? first.charAt(0).toUpperCase() + first.slice(1) : "";
 }
@@ -211,13 +213,15 @@ if (typeof window !== "undefined") {
 
   if (typeof window === "undefined" || typeof document === "undefined") return;
 
+  function mount(field, options) {
+  options = options || {};
+  var disposed = false;
   var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  var field = document.querySelector(".body-field");
   if (!field) return;
   var input = field.querySelector(".body-input");
   var backdrop = field.querySelector(".dictation-backdrop");
   var micBtn = field.querySelector(".dictation-mic");
-  var confirmBtn = field.querySelector(".dictation-confirm");
+  var confirmBtn = options.confirmButton || field.querySelector(".dictation-confirm");
   if (!input || !backdrop || !micBtn || !confirmBtn) return;
   var catalogEl = document.getElementById("tag-voice-catalog");
   var TAG_CATALOG = [];
@@ -333,12 +337,14 @@ if (typeof window !== "undefined") {
       row.appendChild(restore);
       reviewEl.appendChild(row);
     });
-    var cancel = document.createElement("button");
-    cancel.type = "button";
-    cancel.className = "voice-review-cancel";
-    cancel.textContent = "Cancel dictation";
-    cancel.addEventListener("click", cancelDictation);
-    reviewEl.appendChild(cancel);
+    if (!options.externalCancel) {
+      var cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "voice-review-cancel";
+      cancel.textContent = "Cancel dictation";
+      cancel.addEventListener("click", cancelDictation);
+      reviewEl.appendChild(cancel);
+    }
     confirmBtn.disabled = unresolved;
     confirmBtn.title = unresolved ? "Choose a section for each voice tag" : "Confirm dictation";
   }
@@ -450,7 +456,9 @@ if (typeof window !== "undefined") {
       clearTimeout(recognitionRestartTimer);
       recognitionRestartTimer = null;
     }
-    if (window.journalBodyEdit) window.journalBodyEdit();  // ensure raw textarea shown
+    if (disposed) return;
+    if (options.showInput) options.showInput();
+    else if (window.journalBodyEdit) window.journalBodyEdit();
     if (!pending) sessionOriginalValue = input.value;
     input.dataset.dictating = "1";
     field.classList.add("dictating");
@@ -473,6 +481,7 @@ if (typeof window !== "undefined") {
   }
 
   function startRecognition() {
+    if (disposed) return;
     recog = new SR();
     recog.continuous = true;
     recog.interimResults = true;
@@ -483,6 +492,7 @@ if (typeof window !== "undefined") {
     recog.onaudiostart = function () { console.log("[dictation] audiostart"); };
     recog.onspeechstart = function () { console.log("[dictation] speechstart"); };
     recog.onresult = function (e) {
+      if (disposed) return;
       var interim = "";
       for (var i = e.resultIndex; i < e.results.length; i++) {
         var r = e.results[i];
@@ -494,6 +504,7 @@ if (typeof window !== "undefined") {
       paint();
     };
     recog.onerror = function (e) {
+      if (disposed) return;
       console.warn("[dictation] error:", e.error, e.message || "");
       // Fatal errors: don't auto-restart (would busy-loop).
       if (e.error === "not-allowed" || e.error === "service-not-allowed" ||
@@ -503,6 +514,7 @@ if (typeof window !== "undefined") {
       if (e.error !== "aborted") showStatus(errorMessage(e.error));
     };
     recog.onend = function () {
+      if (disposed) return;
       console.log("[dictation] onend (wantRecording=" + wantRecording + ")");
       // Chrome ends recognition after a silence; if the user is still recording,
       // transparently restart so dictation keeps going.
@@ -558,6 +570,9 @@ if (typeof window !== "undefined") {
   }
 
   function confirmDictation() {
+    if (disposed) return;
+    var rejection = options.beforeConfirm && options.beforeConfirm();
+    if (rejection) { showStatus(rejection); return; }
     // Detach recognition callbacks FIRST: recog.stop() fires onend
     // asynchronously in real Chrome, and a late onend would paint() over the
     // just-reset state and wipe the textarea.
@@ -607,7 +622,8 @@ if (typeof window !== "undefined") {
     reviewEl.hidden = true;
     clearPendingTagMarks();
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.focus();
+    if (options.onConfirm) options.onConfirm({text:input.value,start:input.selectionStart,end:input.selectionEnd});
+    else input.focus();
   }
 
   function cancelDictation() {
@@ -719,8 +735,17 @@ if (typeof window !== "undefined") {
     restartRecognitionAtCursor();
   });
 
-  // Expose a tiny hook for tests / manual verification.
-  window.journalDictation = {
+  // Session controls for the paragraph dialog and legacy body field.
+  return {
+    start: startSession,
+    confirm: confirmDictation,
+    destroy: function () {
+      disposed = true; pending = false; wantRecording = false; recording = false;
+      if (recognitionRestartTimer) clearTimeout(recognitionRestartTimer);
+      recognitionRestartTimer = null;
+      if (recog) { recog.onresult = recog.onend = recog.onerror = recog.onstart = null; try { recog.abort(); } catch (e) {} }
+      clearPendingTagMarks();
+    },
     isRecording: function () { return recording; },
     isPending: function () { return pending; },
     transform: applyVoiceCommands,
@@ -728,6 +753,10 @@ if (typeof window !== "undefined") {
     smartJoin: smartDictationJoin,
     adjustRanges: adjustHighlightedRanges,
   };
+  }
+  window.mountJournalDictation = mount;
+  // The media editor supplies its own paragraph-targeted recording surface.
+  if (!document.getElementById("journal-document")) window.journalDictation = mount(document.querySelector(".body-field"));
 })();
 
 if (typeof module !== "undefined" && module.exports) {

@@ -18,43 +18,30 @@
   if (!input) return;
   var opts = picker.querySelectorAll('.mood-opt');
 
-  function select(opt) {
+  function reconcile() {
+    var current = (input.value || '').trim();
+    var selected = false;
     for (var i = 0; i < opts.length; i++) {
-      opts[i].classList.toggle('selected', opts[i] === opt);
+      var on = opts[i].getAttribute('data-mood') === current;
+      opts[i].classList.toggle('selected', on);
+      opts[i].setAttribute('aria-pressed', String(on));
+      selected = selected || on;
     }
-    picker.classList.add('has-selection');
-    input.value = opt.getAttribute('data-mood') || '';
-  }
-
-  function deselect() {
-    for (var i = 0; i < opts.length; i++) {
-      opts[i].classList.remove('selected');
-    }
-    picker.classList.remove('has-selection');
-    input.value = '';
+    picker.classList.toggle('has-selection', selected);
+    if (!selected) input.value = '';
   }
 
   for (var i = 0; i < opts.length; i++) {
     opts[i].addEventListener('click', function () {
-      if (this.classList.contains('selected')) {
-        deselect();
-      } else {
-        select(this);
-      }
+      var value = this.getAttribute('data-mood') || '';
+      input.value = input.value === value ? '' : value;
+      reconcile();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
 
   // Reconcile from the hidden input on load (defensive; the template already
   // pre-renders the classes).
-  var current = (input.value || '').trim();
-  if (current === '') {
-    deselect();
-  } else {
-    for (var j = 0; j < opts.length; j++) {
-      if (opts[j].getAttribute('data-mood') === current) {
-        select(opts[j]);
-        break;
-      }
-    }
-  }
+  input.addEventListener('change', reconcile);
+  reconcile();
 })();
