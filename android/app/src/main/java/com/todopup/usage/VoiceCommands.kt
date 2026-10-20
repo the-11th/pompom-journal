@@ -7,6 +7,7 @@ data class VoiceTagCommand(
     val sectionIds: List<String> = emptyList(),
     var status: String = "new",
     var keepAsText: Boolean = false,
+    val source: String = "explicit",
 )
 
 data class VoiceCapture(val text: String, val commands: MutableList<VoiceTagCommand>)
@@ -18,9 +19,28 @@ data class InlineMention(
     val start: Int,
     val end: Int,
 )
+data class TagSuggestion(
+    val name: String,
+    val sectionId: String,
+    val color: String,
+    val replaceStart: Int,
+    val replaceEnd: Int,
+)
 
 object VoiceCommands {
     private fun norm(value: String) = value.trim().lowercase().replace(Regex("\\s+"), " ")
+    private val spokenWord = Regex("[\\p{L}\\p{N}]+(?:'[\\p{L}]+)?")
+    private val mentionToken = Regex("@([\\p{L}\\p{N}_-]+(?:\\.[\\p{L}\\p{N}_-]+)*)")
+    private val suggestionToken = Regex("[\\p{L}\\p{N}_.-]+")
+    private val wordCodePoint = Regex("[\\p{L}\\p{N}_]")
+    private fun atBoundary(value: String, index: Int): Boolean = index == 0 ||
+        !wordCodePoint.matches(String(Character.toChars(Character.codePointBefore(value, index))))
+
+    fun inlineNumber(value: String, name: String): Double? {
+        val pattern = Regex("#" + Regex.escape(name.replace(' ', '_')) + "\\s+(-?\\d+(?:\\.\\d+)?)", RegexOption.IGNORE_CASE)
+        return pattern.findAll(value).filter { atBoundary(value, it.range.first) }.lastOrNull()
+            ?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it.isFinite() }
+    }
 
     fun punctuation(value: String): String {
         var text = value
@@ -72,17 +92,149 @@ object VoiceCommands {
             .replace(Regex("[,;]\\s*([.!?])"), "$1")
             .replace(Regex("(^|\\n)\\s*[,;]\\s*"), "$1")
             .replace(Regex("[ \\t]{2,}"), " ").trim()
+        val existing = commands.map { it.name }.toMutableSet()
+        autoTagMatches(cleaned, sections).groupBy { it.name }.forEach { (name, matches) ->
+            if (!existing.add(name)) return@forEach
+            val sectionIds = matches.map { it.sectionId }.distinct()
+            commands += VoiceTagCommand(
+                original = matches.first().spoken,
+                name = name,
+                sectionId = sectionIds.singleOrNull(),
+                sectionIds = sectionIds,
+                status = if (sectionIds.size == 1) "suggested" else "ambiguous",
+                source = "detected",
+            )
+        }
         return VoiceCapture(cleaned, commands)
+    }
+
+    data class AutoTagMatch(
+        val name: String,
+        val sectionId: String,
+        val spoken: String,
+        val start: Int,
+        val end: Int,
+    )
+
+    /** Find the first inflected/fuzzy occurrence of each known tag phrase. */
+    fun autoTagMatches(value: String, sections: List<JournalSection>): List<AutoTagMatch> {
+        val words = spokenWord.findAll(value).toList()
+        val tags = sections.filter { it.type == "tag" }.flatMap { section ->
+            (section.tags + section.mentionTags).map(::norm).filter(String::isNotBlank).distinct()
+                .map { name -> section to name }
+        }.sortedByDescending { (_, name) -> name.split(' ').size * 1000 + name.length }
+        val seen = mutableSetOf<Pair<String, String>>()
+        val matches = mutableListOf<AutoTagMatch>()
+        tags.forEach { (section, name) ->
+            if (!seen.add(section.id to name)) return@forEach
+            val tagWords = name.split(' ')
+            if (tagWords.isEmpty() || words.size < tagWords.size) return@forEach
+            for (index in 0..words.size - tagWords.size) {
+                val window = words.subList(index, index + tagWords.size)
+                if (window.indices.all { similarWord(window[it].value.lowercase(), tagWords[it]) }) {
+                    val start = window.first().range.first
+                    val end = window.last().range.last + 1
+                    matches += AutoTagMatch(name, section.id, value.substring(start, end), start, end)
+                    break
+                }
+            }
+        }
+        return matches.sortedBy { it.start }
+    }
+
+    private fun similarWord(spoken: String, tag: String): Boolean {
+        if (spoken == tag) return true
+        if (!spoken.matches(Regex("[a-z]+")) || !tag.matches(Regex("[a-z]+"))) return false
+        if (spoken in inflections(tag)) return true
+        if (spoken.length < 5 || tag.length < 5 || spoken.firstOrNull() != tag.firstOrNull()) return false
+        return kotlin.math.abs(spoken.length - tag.length) <= 1 && editDistanceAtMostOne(spoken, tag)
+    }
+
+    private fun inflections(word: String): Set<String> = buildSet {
+        add(word)
+        add(word + "s")
+        add(word + "es")
+        add(word + "ed")
+        add(word + "ing")
+        when {
+            word.endsWith("e") && word.length > 2 -> {
+                add(word + "d")
+                add(word.dropLast(1) + "ing")
+            }
+            word.endsWith("y") && word.length > 2 -> {
+                add(word.dropLast(1) + "ied")
+                add(word.dropLast(1) + "ies")
+            }
+        }
+        if (word.length >= 3 && word.last() !in "aeiouwxy" && word[word.lastIndex - 1] in "aeiou" &&
+            word[word.lastIndex - 2] !in "aeiou") {
+            add(word + word.last() + "ed")
+            add(word + word.last() + "ing")
+        }
+    }
+
+    private fun editDistanceAtMostOne(left: String, right: String): Boolean {
+        if (left == right) return true
+        if (kotlin.math.abs(left.length - right.length) > 1) return false
+        var leftIndex = 0
+        var rightIndex = 0
+        var edits = 0
+        while (leftIndex < left.length && rightIndex < right.length) {
+            if (left[leftIndex] == right[rightIndex]) {
+                leftIndex++
+                rightIndex++
+            } else {
+                if (++edits > 1) return false
+                when {
+                    left.length > right.length -> leftIndex++
+                    right.length > left.length -> rightIndex++
+                    else -> { leftIndex++; rightIndex++ }
+                }
+            }
+        }
+        if (leftIndex < left.length || rightIndex < right.length) edits++
+        return edits <= 1
+    }
+
+    fun tagSuggestions(
+        value: String,
+        cursor: Int,
+        sections: List<JournalSection>,
+        limit: Int = 6,
+    ): List<TagSuggestion> {
+        if (cursor !in 0..value.length) return emptyList()
+        val before = value.substring(0, cursor)
+        val at = before.lastIndexOf('@')
+        if (at < 0 || !atBoundary(before, at)) return emptyList()
+        val typed = before.substring(at + 1)
+        if (typed.isNotEmpty() && !suggestionToken.matches(typed)) return emptyList()
+        val query = norm(typed.replace('_', ' '))
+        return sections.filter { it.type == "tag" }.flatMap { section ->
+            (section.mentionTags + section.tags + section.archivedTags).map(::norm).filter(String::isNotBlank).distinct()
+                .map { name -> TagSuggestion(name, section.id, section.color, at, cursor) }
+        }.distinctBy { it.name to it.sectionId }
+            .filter { query.isBlank() || it.name.startsWith(query) }
+            .sortedWith(compareBy<TagSuggestion>({ it.name != query }, { it.name.length }, { it.name }))
+            .take(limit)
+    }
+
+    fun completeTag(value: String, cursor: Int, suggestion: TagSuggestion): VoiceJoin {
+        if (cursor != suggestion.replaceEnd || suggestion.replaceStart !in 0..cursor || cursor > value.length)
+            return VoiceJoin(value, cursor.coerceIn(0, value.length))
+        val mention = "@" + suggestion.name.replace(' ', '_')
+        return VoiceJoin(
+            value.substring(0, suggestion.replaceStart) + mention + value.substring(cursor),
+            suggestion.replaceStart + mention.length,
+        )
     }
 
     /** Mirror journal.extract_mentions for immediate Android highlighting/tags. */
     fun inlineMentions(value: String, sections: List<JournalSection>): List<InlineMention> {
         val known = mutableMapOf<String, JournalSection>()
         sections.filter { it.type == "tag" }.forEach { section ->
-            (section.mentionTags.ifEmpty { section.tags }).forEach { known[norm(it)] = section }
+            (section.mentionTags + section.tags + section.archivedTags).distinct().forEach { known[norm(it)] = section }
         }
-        val mention = Regex("(?:^|(?<=\\W))@([A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*)")
-        return mention.findAll(value).mapNotNull { match ->
+        return mentionToken.findAll(value).filter { atBoundary(value, it.range.first) }.mapNotNull { match ->
             val token = match.groupValues[1]
             val direct = norm(token)
             val spaced = norm(token.replace('_', ' '))
@@ -126,9 +278,14 @@ object VoiceCommands {
             .replace(Regex("\\s+>(?:today|tomorrow|[a-z]+|\\+\\d+[dwm]|\\d{4}-\\d{2}-\\d{2})\\b", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\[task:[0-9a-f]+]\\s*", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\*\\*|__|~~|\\*"), "")
-            .replace(Regex("@([A-Za-z0-9_.-]+)")) { it.groupValues[1].replace('_', ' ') }
-            .replace(Regex("\\s+"), " ").trim(' ', '.', ',', ':', ';', '!', '?', '-', '–', '—')
-        if (first.length > limit) first = first.take(limit + 1).substringBeforeLast(' ', first.take(limit))
+        first = mentionToken.replace(first) { if (atBoundary(first, it.range.first)) it.groupValues[1].replace('_', ' ') else it.value }
+        first = Regex("#([\\p{L}\\p{N}_-]+)\\s+(-?\\d+(?:\\.\\d+)?)").replace(first) {
+            if (atBoundary(first, it.range.first)) it.groupValues[1].replace('_', ' ') + " " + it.groupValues[2] else it.value
+        }.replace(Regex("\\s+"), " ").trim(' ', '.', ',', ':', ';', '!', '?', '-', '–', '—')
+        if (first.codePointCount(0, first.length) > limit) {
+            val clipped = first.substring(0, first.offsetByCodePoints(0, limit + 1))
+            first = clipped.substringBeforeLast(' ', first.substring(0, first.offsetByCodePoints(0, limit)))
+        }
         return first.replaceFirstChar { it.uppercase() }
     }
 }
